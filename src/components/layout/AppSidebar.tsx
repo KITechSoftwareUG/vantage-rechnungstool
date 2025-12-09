@@ -1,5 +1,6 @@
 import { Upload, FileText, CreditCard, Building2, LayoutDashboard } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -13,11 +14,14 @@ export function AppSidebar() {
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
-      <div className="flex h-16 items-center gap-3 border-b border-sidebar-border px-6">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-primary">
-          <FileText className="h-5 w-5 text-primary-foreground" />
+      <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-6">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-blue-500">
+            <FileText className="h-5 w-5 text-primary-foreground" />
+          </div>
+          <span className="font-heading text-lg font-semibold text-sidebar-foreground">DocVault</span>
         </div>
-        <span className="font-heading text-lg font-semibold text-foreground">DocVault</span>
+        <ThemeToggle />
       </div>
 
       {/* Navigation */}
@@ -42,7 +46,7 @@ export function AppSidebar() {
 
       {/* Footer */}
       <div className="border-t border-sidebar-border p-4">
-        <div className="glass-card p-4">
+        <div className="rounded-lg bg-sidebar-accent/50 p-4">
           <p className="text-xs text-muted-foreground">
             Dokumente sicher verwalten mit KI-gestützter OCR-Erkennung
           </p>
