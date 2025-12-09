@@ -76,12 +76,12 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
           </div>
         </div>
         
-        {!isEditing && document.status !== "processing" && (
+        {!isEditing && document.status !== "processing" && document.status !== "saved" && (
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setIsEditing(true)}
-            className="h-8 w-8 opacity-0 transition-opacity group-hover:opacity-100"
+            className="h-8 w-8"
           >
             <Edit2 className="h-4 w-4" />
           </Button>
@@ -146,8 +146,8 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
         </div>
       </div>
 
-      {/* Edit Actions */}
-      {isEditing && (
+      {/* Actions */}
+      {isEditing ? (
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={handleCancel}>
             <X className="mr-1 h-4 w-4" />
@@ -156,6 +156,13 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
           <Button variant="gradient" size="sm" onClick={handleSave}>
             <Check className="mr-1 h-4 w-4" />
             Speichern
+          </Button>
+        </div>
+      ) : document.status === "ready" && (
+        <div className="mt-4">
+          <Button variant="gradient" size="sm" className="w-full" onClick={handleSave}>
+            <Check className="mr-1 h-4 w-4" />
+            Bestätigen
           </Button>
         </div>
       )}
