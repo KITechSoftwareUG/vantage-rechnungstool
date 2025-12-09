@@ -3,20 +3,34 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UploadZone } from "@/components/upload/UploadZone";
 import { DocumentCard } from "@/components/documents/DocumentCard";
 import { StatementCard } from "@/components/documents/StatementCard";
-import { FileText, Building, Loader2, Sparkles } from "lucide-react";
+import { FileText, Building, Loader2, Sparkles, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { InvoiceData, StatementData } from "@/types/documents";
+import { InvoiceData, StatementData, ExtractedTransaction } from "@/types/documents";
 import { useAuth } from "@/hooks/useAuth";
-import { useCreateInvoice, useCreateBankStatement, uploadDocument, processDocumentOCR } from "@/hooks/useDocuments";
-import { supabase } from "@/integrations/supabase/client";
+import { 
+  useCreateInvoice, 
+  useCreateBankStatement, 
+  uploadDocument, 
+  processDocumentOCR,
+  checkDuplicateTransactions,
+  createBankTransactions 
+} from "@/hooks/useDocuments";
+import { useQueryClient } from "@tanstack/react-query";
+
+interface ProcessedStatement extends StatementData {
+  file: File;
+  transactions: ExtractedTransaction[];
+  duplicateCount?: number;
+}
 
 export default function UploadPage() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("invoices");
   const [isProcessing, setIsProcessing] = useState(false);
   const [processedInvoices, setProcessedInvoices] = useState<(InvoiceData & { file: File })[]>([]);
-  const [processedStatements, setProcessedStatements] = useState<(StatementData & { file: File })[]>([]);
+  const [processedStatements, setProcessedStatements] = useState<ProcessedStatement[]>([]);
 
   const createInvoice = useCreateInvoice();
   const createBankStatement = useCreateBankStatement();
@@ -48,7 +62,6 @@ export default function UploadPage() {
           });
         } catch (error) {
           console.error("OCR error for file:", file.name, error);
-          // Add with default values on error
           const date = new Date();
           newInvoices.push({
             id: `temp-${Date.now()}-${Math.random()}`,
@@ -87,26 +100,52 @@ export default function UploadPage() {
     setIsProcessing(true);
     
     try {
-      const newStatements: (StatementData & { file: File })[] = [];
+      const newStatements: ProcessedStatement[] = [];
 
       for (const file of files) {
         try {
           const result = await processDocumentOCR(file, "statement");
           
-          const date = new Date(result.data.date || new Date());
+          // Handle new format with summary and transactions
+          const summary = result.data.summary || result.data;
+          const transactions: ExtractedTransaction[] = result.data.transactions || [];
+          
+          const date = new Date(summary.date || new Date());
+          
+          // Check for duplicates
+          let duplicateCount = 0;
+          let newTransactions = transactions;
+          
+          if (transactions.length > 0) {
+            const duplicateCheck = await checkDuplicateTransactions(user.id, transactions);
+            duplicateCount = duplicateCheck.duplicates.length;
+            newTransactions = duplicateCheck.newTransactions;
+          }
+          
+          // Determine bankType from bank name
+          let bankType: "volksbank" | "amex" = "volksbank";
+          const bankName = (summary.bank || "").toLowerCase();
+          if (bankName.includes("amex") || bankName.includes("american express")) {
+            bankType = "amex";
+          } else if (summary.bankType) {
+            bankType = summary.bankType;
+          }
           
           newStatements.push({
             id: `temp-${Date.now()}-${Math.random()}`,
             fileName: file.name,
-            bank: result.data.bank || "Unbekannt",
-            accountNumber: result.data.accountNumber || "Unbekannt",
-            date: result.data.date || date.toISOString().split("T")[0],
-            openingBalance: result.data.openingBalance || 0,
-            closingBalance: result.data.closingBalance || 0,
+            bank: summary.bank || "Unbekannt",
+            bankType,
+            accountNumber: summary.accountNumber || "Unbekannt",
+            date: summary.date || date.toISOString().split("T")[0],
+            openingBalance: summary.openingBalance || 0,
+            closingBalance: summary.closingBalance || 0,
             status: "ready",
             year: date.getFullYear(),
             month: date.getMonth() + 1,
             file,
+            transactions: newTransactions,
+            duplicateCount,
           });
         } catch (error) {
           console.error("OCR error for file:", file.name, error);
@@ -115,6 +154,7 @@ export default function UploadPage() {
             id: `temp-${Date.now()}-${Math.random()}`,
             fileName: file.name,
             bank: "Unbekannt - Bitte manuell eingeben",
+            bankType: "volksbank",
             accountNumber: "Unbekannt",
             date: date.toISOString().split("T")[0],
             openingBalance: 0,
@@ -123,15 +163,28 @@ export default function UploadPage() {
             year: date.getFullYear(),
             month: date.getMonth() + 1,
             file,
+            transactions: [],
+            duplicateCount: 0,
           });
         }
       }
 
       setProcessedStatements(prev => [...prev, ...newStatements]);
       
+      const totalTransactions = newStatements.reduce((sum, s) => sum + (s.transactions?.length || 0), 0);
+      const totalDuplicates = newStatements.reduce((sum, s) => sum + (s.duplicateCount || 0), 0);
+      
+      let description = `${files.length} Kontoauszug/-auszüge analysiert`;
+      if (totalTransactions > 0) {
+        description += `, ${totalTransactions} neue Transaktionen erkannt`;
+      }
+      if (totalDuplicates > 0) {
+        description += `, ${totalDuplicates} Duplikate übersprungen`;
+      }
+      
       toast({
         title: "OCR-Verarbeitung abgeschlossen",
-        description: `${files.length} Kontoauszug/-auszüge analysiert`,
+        description,
       });
     } catch (error: any) {
       toast({
@@ -150,7 +203,6 @@ export default function UploadPage() {
     try {
       let fileUrl: string | undefined;
       
-      // Upload file if exists
       if (data.file) {
         fileUrl = await uploadDocument(data.file, user.id, "invoices");
       }
@@ -167,7 +219,6 @@ export default function UploadPage() {
         status: "saved",
       });
 
-      // Remove from processed list
       setProcessedInvoices(prev => prev.filter(inv => inv.id !== data.id));
     } catch (error: any) {
       toast({
@@ -178,21 +229,22 @@ export default function UploadPage() {
     }
   };
 
-  const handleStatementSave = async (data: StatementData & { file?: File }) => {
+  const handleStatementSave = async (data: StatementData & { file?: File; transactions?: ExtractedTransaction[] }) => {
     if (!user) return;
     
     try {
       let fileUrl: string | undefined;
       
-      // Upload file if exists
       if (data.file) {
         fileUrl = await uploadDocument(data.file, user.id, "statements");
       }
 
-      await createBankStatement.mutateAsync({
+      // Create bank statement first
+      const statement = await createBankStatement.mutateAsync({
         fileName: data.fileName,
         fileUrl,
         bank: data.bank,
+        bankType: data.bankType,
         accountNumber: data.accountNumber,
         date: data.date,
         year: data.year,
@@ -202,7 +254,21 @@ export default function UploadPage() {
         status: "saved",
       });
 
-      // Remove from processed list
+      // Then create associated transactions
+      const transactions = (data as ProcessedStatement).transactions || [];
+      if (transactions.length > 0 && statement) {
+        const savedCount = await createBankTransactions(user.id, statement.id, transactions);
+        toast({
+          title: "Kontoauszug gespeichert",
+          description: `${savedCount} Transaktionen hinzugefügt`,
+        });
+      } else {
+        toast({ title: "Kontoauszug gespeichert" });
+      }
+
+      // Invalidate transactions query
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
+
       setProcessedStatements(prev => prev.filter(stmt => stmt.id !== data.id));
     } catch (error: any) {
       toast({
@@ -271,7 +337,7 @@ export default function UploadPage() {
                 Erkannte Rechnungen ({processedInvoices.length})
               </h3>
               <p className="text-sm text-muted-foreground">
-                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Speichern" um sie in der Datenbank zu sichern.
+                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Bestätigen" um sie zu speichern.
               </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {processedInvoices.map((invoice, index) => (
@@ -295,6 +361,9 @@ export default function UploadPage() {
                 KI-gestützte Kontoauszugerkennung
               </h2>
             </div>
+            <p className="mb-4 text-sm text-muted-foreground">
+              Transaktionen werden automatisch zeilenweise extrahiert und auf Duplikate geprüft.
+            </p>
             <UploadZone 
               onFilesSelected={handleStatementUpload}
               acceptedTypes=".pdf,.png,.jpg,.jpeg"
@@ -304,7 +373,7 @@ export default function UploadPage() {
           {isProcessing && (
             <div className="glass-card flex items-center justify-center gap-3 p-8">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span className="text-foreground">Kontoauszüge werden analysiert...</span>
+              <span className="text-foreground">Kontoauszüge werden analysiert und Duplikate geprüft...</span>
             </div>
           )}
 
@@ -314,16 +383,32 @@ export default function UploadPage() {
                 Erkannte Kontoauszüge ({processedStatements.length})
               </h3>
               <p className="text-sm text-muted-foreground">
-                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Speichern" um sie in der Datenbank zu sichern.
+                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Bestätigen" um sie zu speichern.
               </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {processedStatements.map((statement, index) => (
-                  <StatementCard
-                    key={statement.id}
-                    statement={statement}
-                    onSave={handleStatementSave}
-                    index={index}
-                  />
+                  <div key={statement.id} className="space-y-2">
+                    <StatementCard
+                      statement={statement}
+                      onSave={handleStatementSave}
+                      index={index}
+                    />
+                    {/* Transaction info */}
+                    <div className="glass-card p-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Transaktionen:</span>
+                        <span className="font-medium text-foreground">
+                          {statement.transactions?.length || 0} neu
+                        </span>
+                      </div>
+                      {(statement.duplicateCount || 0) > 0 && (
+                        <div className="mt-1 flex items-center gap-1 text-amber-500">
+                          <AlertTriangle className="h-3 w-3" />
+                          <span className="text-xs">{statement.duplicateCount} Duplikate übersprungen</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>

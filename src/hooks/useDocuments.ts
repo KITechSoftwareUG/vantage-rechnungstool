@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { InvoiceData, StatementData } from "@/types/documents";
+import { InvoiceData, StatementData, ExtractedTransaction } from "@/types/documents";
 import { useToast } from "@/hooks/use-toast";
 
 // Invoices hooks
@@ -164,6 +164,7 @@ export function useBankStatements() {
         fileName: stmt.file_name,
         fileUrl: stmt.file_url || undefined,
         bank: stmt.bank,
+        bankType: stmt.bank_type as "volksbank" | "amex",
         accountNumber: stmt.account_number,
         date: stmt.date,
         year: stmt.year,
@@ -194,6 +195,7 @@ export function useCreateBankStatement() {
           file_name: statement.fileName,
           file_url: statement.fileUrl,
           bank: statement.bank,
+          bank_type: statement.bankType,
           account_number: statement.accountNumber,
           date: statement.date,
           year: statement.year,
@@ -210,7 +212,6 @@ export function useCreateBankStatement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bank_statements"] });
-      toast({ title: "Kontoauszug gespeichert" });
     },
     onError: (error) => {
       toast({
@@ -233,6 +234,7 @@ export function useUpdateBankStatement() {
         .update({
           file_name: statement.fileName,
           bank: statement.bank,
+          bank_type: statement.bankType,
           account_number: statement.accountNumber,
           date: statement.date,
           year: statement.year,
@@ -260,6 +262,70 @@ export function useUpdateBankStatement() {
       });
     },
   });
+}
+
+// Check for duplicate transactions
+export async function checkDuplicateTransactions(
+  userId: string,
+  transactions: ExtractedTransaction[],
+  bankStatementId?: string
+): Promise<{ duplicates: ExtractedTransaction[]; newTransactions: ExtractedTransaction[] }> {
+  // Get existing transactions for this user
+  const { data: existingTransactions, error } = await supabase
+    .from("bank_transactions")
+    .select("date, description, amount, transaction_type")
+    .eq("user_id", userId);
+
+  if (error) throw error;
+
+  const duplicates: ExtractedTransaction[] = [];
+  const newTransactions: ExtractedTransaction[] = [];
+
+  for (const tx of transactions) {
+    // Check if transaction already exists (same date, description, amount, type)
+    const isDuplicate = (existingTransactions || []).some(
+      (existing) =>
+        existing.date === tx.date &&
+        existing.description === tx.description &&
+        Math.abs(Number(existing.amount) - tx.amount) < 0.01 &&
+        existing.transaction_type === tx.type
+    );
+
+    if (isDuplicate) {
+      duplicates.push(tx);
+    } else {
+      newTransactions.push(tx);
+    }
+  }
+
+  return { duplicates, newTransactions };
+}
+
+// Create bank transactions
+export async function createBankTransactions(
+  userId: string,
+  bankStatementId: string,
+  transactions: ExtractedTransaction[]
+): Promise<number> {
+  if (transactions.length === 0) return 0;
+
+  const transactionsToInsert = transactions.map((tx) => ({
+    user_id: userId,
+    bank_statement_id: bankStatementId,
+    date: tx.date,
+    description: tx.description,
+    amount: tx.amount,
+    transaction_type: tx.type,
+    match_status: "unmatched",
+  }));
+
+  const { error } = await supabase
+    .from("bank_transactions")
+    .insert(transactionsToInsert);
+
+  if (error) throw error;
+
+  return transactions.length;
 }
 
 // Upload file to storage

@@ -12,10 +12,18 @@ export interface InvoiceData {
   createdAt?: string;
 }
 
+export interface ExtractedTransaction {
+  date: string;
+  description: string;
+  amount: number;
+  type: "credit" | "debit";
+}
+
 export interface StatementData {
   id: string;
   fileName: string;
   bank: string;
+  bankType: "volksbank" | "amex";
   accountNumber: string;
   date: string;
   openingBalance: number;
@@ -25,6 +33,7 @@ export interface StatementData {
   month: number;
   fileUrl?: string;
   createdAt?: string;
+  transactions?: ExtractedTransaction[];
 }
 
 export interface YearGroup<T> {
