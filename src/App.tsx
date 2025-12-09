@@ -11,7 +11,6 @@ import Index from "./pages/Index";
 import UploadPage from "./pages/UploadPage";
 import InvoicesPage from "./pages/InvoicesPage";
 import StatementsPage from "./pages/StatementsPage";
-import TransactionsPage from "./pages/TransactionsPage";
 import MatchingPage from "./pages/MatchingPage";
 import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
@@ -64,16 +63,6 @@ const App = () => (
                   <ProtectedRoute>
                     <MainLayout>
                       <StatementsPage />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/transactions"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <TransactionsPage />
                     </MainLayout>
                   </ProtectedRoute>
                 }
