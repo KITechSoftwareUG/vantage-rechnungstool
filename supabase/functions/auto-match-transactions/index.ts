@@ -60,11 +60,9 @@ serve(async (req) => {
 
     // Process transactions in batches for AI matching
     for (const transaction of transactions) {
-      // Find potential matches based on amount similarity
+      // Find exact amount matches only
       const potentialMatches = invoices.filter((inv: any) => {
-        const amountDiff = Math.abs(Math.abs(transaction.amount) - inv.amount);
-        const percentDiff = amountDiff / Math.max(Math.abs(transaction.amount), inv.amount);
-        return percentDiff < 0.1; // Within 10% of amount
+        return Math.abs(Math.abs(transaction.amount) - inv.amount) < 0.01; // Exact match (within 1 cent)
       });
 
       if (potentialMatches.length === 0) continue;
@@ -141,25 +139,20 @@ serve(async (req) => {
         }
       }
 
-      // Fallback: Simple amount-based matching
+      // Fallback: If only one exact match, use it with 100% confidence
       if (potentialMatches.length === 1) {
         const match = potentialMatches[0];
-        const amountDiff = Math.abs(Math.abs(transaction.amount) - match.amount);
-        const percentDiff = amountDiff / Math.max(Math.abs(transaction.amount), match.amount);
-        const confidence = Math.round((1 - percentDiff) * 100);
 
-        if (confidence >= 95) {
-          await supabaseClient
-            .from("bank_transactions")
-            .update({
-              matched_invoice_id: match.id,
-              match_status: "matched",
-              match_confidence: confidence,
-            })
-            .eq("id", transaction.id);
+        await supabaseClient
+          .from("bank_transactions")
+          .update({
+            matched_invoice_id: match.id,
+            match_status: "matched",
+            match_confidence: 100,
+          })
+          .eq("id", transaction.id);
 
-          matchedCount++;
-        }
+        matchedCount++;
       }
     }
 
