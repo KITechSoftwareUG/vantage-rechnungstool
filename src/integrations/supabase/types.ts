@@ -18,6 +18,7 @@ export type Database = {
         Row: {
           account_number: string
           bank: string
+          bank_type: string
           closing_balance: number
           created_at: string
           date: string
@@ -34,6 +35,7 @@ export type Database = {
         Insert: {
           account_number: string
           bank: string
+          bank_type?: string
           closing_balance: number
           created_at?: string
           date: string
@@ -50,6 +52,7 @@ export type Database = {
         Update: {
           account_number?: string
           bank?: string
+          bank_type?: string
           closing_balance?: number
           created_at?: string
           date?: string
@@ -64,6 +67,66 @@ export type Database = {
           year?: number
         }
         Relationships: []
+      }
+      bank_transactions: {
+        Row: {
+          amount: number
+          bank_statement_id: string | null
+          created_at: string
+          date: string
+          description: string
+          id: string
+          match_confidence: number | null
+          match_status: string
+          matched_invoice_id: string | null
+          transaction_type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          bank_statement_id?: string | null
+          created_at?: string
+          date: string
+          description: string
+          id?: string
+          match_confidence?: number | null
+          match_status?: string
+          matched_invoice_id?: string | null
+          transaction_type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          bank_statement_id?: string | null
+          created_at?: string
+          date?: string
+          description?: string
+          id?: string
+          match_confidence?: number | null
+          match_status?: string
+          matched_invoice_id?: string | null
+          transaction_type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bank_transactions_bank_statement_id_fkey"
+            columns: ["bank_statement_id"]
+            isOneToOne: false
+            referencedRelation: "bank_statements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bank_transactions_matched_invoice_id_fkey"
+            columns: ["matched_invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       invoices: {
         Row: {
