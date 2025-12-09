@@ -113,25 +113,26 @@ serve(async (req) => {
       2. Einzelne Transaktionen (transactions) - WICHTIG: Extrahiere ALLE Transaktionszeilen:
       - date: Buchungsdatum im Format YYYY-MM-DD
       - description: Beschreibung/Verwendungszweck der Transaktion
-      - amount: Betrag als positive Zahl (ohne Vorzeichen)
+      - amount: Betrag als positive Zahl in EUR (ohne Vorzeichen) - der finale abgerechnete Betrag
       - type: "credit" für Gutschriften/Einzahlungen, "debit" für Abbuchungen/Ausgaben
+      - originalCurrency: WICHTIG bei American Express - wenn eine Währungsumrechnung stattfand (z.B. USD, GBP, CHF), gib die Original-Währung an. Wenn keine Umrechnung (also EUR), dann null. Achte auf Spalten wie "Fremdwährung" oder "Originalbetrag".
 
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
       
       Beispiel:
       {
         "summary": {
-          "bank": "VR Bank",
-          "bankType": "volksbank",
-          "accountNumber": "DE89 3704 0044 0532 0130 00",
+          "bank": "American Express",
+          "bankType": "amex",
+          "accountNumber": "XXXX-123456",
           "date": "2024-01-31",
-          "openingBalance": 12500.00,
-          "closingBalance": 14250.00
+          "openingBalance": 0,
+          "closingBalance": 1450.00
         },
         "transactions": [
-          {"date": "2024-01-05", "description": "REWE Einkauf", "amount": 45.50, "type": "debit"},
-          {"date": "2024-01-10", "description": "Gehalt Januar", "amount": 3500.00, "type": "credit"},
-          {"date": "2024-01-15", "description": "Miete", "amount": 1200.00, "type": "debit"}
+          {"date": "2024-01-05", "description": "AMAZON.COM", "amount": 45.50, "type": "debit", "originalCurrency": "USD"},
+          {"date": "2024-01-10", "description": "Hotel London", "amount": 350.00, "type": "debit", "originalCurrency": "GBP"},
+          {"date": "2024-01-15", "description": "Restaurant München", "amount": 85.00, "type": "debit", "originalCurrency": null}
         ]
       }`;
     }
