@@ -58,20 +58,47 @@ serve(async (req) => {
 
     let matchedCount = 0;
 
-    // Helper function to extract Foreign Spend Amount from original_currency field
-    // Pattern: "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"
-    const extractForeignSpendAmount = (originalCurrency: string | null): number | null => {
+    // Helper function to extract original amount from original_currency field
+    // Supports multiple formats:
+    // - "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"
+    // - "5.95 USD"
+    // - "350.00 GBP"
+    const extractOriginalAmount = (originalCurrency: string | null): number | null => {
       if (!originalCurrency) return null;
       
-      const match = originalCurrency.match(/Foreign Spend Amount:\s*([\d,.]+)/i);
-      if (match) {
-        // Handle both . and , as decimal separators
-        const amountStr = match[1].replace(',', '.');
+      // Try "Foreign Spend Amount: X.XX" format first
+      const foreignSpendMatch = originalCurrency.match(/Foreign Spend Amount:\s*([\d,.]+)/i);
+      if (foreignSpendMatch) {
+        const amountStr = foreignSpendMatch[1].replace(',', '.');
         const amount = parseFloat(amountStr);
         if (!isNaN(amount)) {
+          console.log(`Extracted Foreign Spend Amount: ${amount}`);
           return amount;
         }
       }
+      
+      // Try simple "X.XX CURRENCY" format (e.g., "5.95 USD", "350.00 GBP")
+      const simpleMatch = originalCurrency.match(/^([\d,.]+)\s*[A-Z]{3}/i);
+      if (simpleMatch) {
+        const amountStr = simpleMatch[1].replace(',', '.');
+        const amount = parseFloat(amountStr);
+        if (!isNaN(amount)) {
+          console.log(`Extracted simple amount: ${amount}`);
+          return amount;
+        }
+      }
+      
+      // Try to find any number followed by currency code
+      const anyMatch = originalCurrency.match(/([\d,.]+)\s*(?:US Dollars|USD|EUR|GBP|CHF|JPY)/i);
+      if (anyMatch) {
+        const amountStr = anyMatch[1].replace(',', '.');
+        const amount = parseFloat(amountStr);
+        if (!isNaN(amount)) {
+          console.log(`Extracted amount from text: ${amount}`);
+          return amount;
+        }
+      }
+      
       return null;
     };
 
@@ -87,7 +114,7 @@ serve(async (req) => {
       
       if (isAmexWithCurrencyConversion) {
         // For Amex with currency conversion: Extract Foreign Spend Amount and match exactly
-        const foreignAmount = extractForeignSpendAmount(transaction.original_currency);
+        const foreignAmount = extractOriginalAmount(transaction.original_currency);
         
         if (foreignAmount !== null) {
           matchAmount = foreignAmount;

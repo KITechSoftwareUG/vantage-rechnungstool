@@ -113,9 +113,14 @@ serve(async (req) => {
       2. Einzelne Transaktionen (transactions) - WICHTIG: Extrahiere ALLE Transaktionszeilen:
       - date: Buchungsdatum im Format YYYY-MM-DD
       - description: Beschreibung/Verwendungszweck der Transaktion
-      - amount: Betrag als positive Zahl in EUR (ohne Vorzeichen) - der finale abgerechnete Betrag
+      - amount: Betrag als positive Zahl in EUR (der finale abgerechnete Betrag in Euro)
       - type: "credit" für Gutschriften/Einzahlungen, "debit" für Abbuchungen/Ausgaben
-      - originalCurrency: WICHTIG bei American Express - wenn eine Währungsumrechnung stattfand (z.B. USD, GBP, CHF), gib die Original-Währung an. Wenn keine Umrechnung (also EUR), dann null. Achte auf Spalten wie "Fremdwährung" oder "Originalbetrag".
+      - originalCurrency: SEHR WICHTIG für Währungsumrechnungen (besonders bei American Express):
+        Wenn die Transaktion ursprünglich in einer Fremdwährung war (USD, GBP, CHF etc.) und dann in EUR umgerechnet wurde:
+        Gib den KOMPLETTEN Original-Text der Umrechnung an, z.B. "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"
+        oder wenn nur der Originalbetrag verfügbar ist: "5.95 USD"
+        Wenn keine Umrechnung stattfand (also originär EUR), dann null.
+        Suche nach Spalten wie "Fremdwährung", "Originalbetrag", "Foreign Spend Amount", etc.
 
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
       
@@ -130,8 +135,8 @@ serve(async (req) => {
           "closingBalance": 1450.00
         },
         "transactions": [
-          {"date": "2024-01-05", "description": "AMAZON.COM", "amount": 45.50, "type": "debit", "originalCurrency": "USD"},
-          {"date": "2024-01-10", "description": "Hotel London", "amount": 350.00, "type": "debit", "originalCurrency": "GBP"},
+          {"date": "2024-01-05", "description": "OPENAI SAN FRANCISCO", "amount": 5.26, "type": "debit", "originalCurrency": "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"},
+          {"date": "2024-01-10", "description": "Hotel London", "amount": 410.00, "type": "debit", "originalCurrency": "350.00 GBP"},
           {"date": "2024-01-15", "description": "Restaurant München", "amount": 85.00, "type": "debit", "originalCurrency": null}
         ]
       }`;
