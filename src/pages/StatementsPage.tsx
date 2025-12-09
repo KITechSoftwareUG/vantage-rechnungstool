@@ -4,18 +4,47 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatementCard } from "@/components/documents/StatementCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
-import { groupByYearAndMonth } from "@/types/documents";
-import { useBankStatements, useUpdateBankStatement } from "@/hooks/useDocuments";
+import { groupByYearAndMonth, StatementData } from "@/types/documents";
+import { useBankStatements, useUpdateBankStatement, createBankTransactions, checkDuplicateTransactions } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 
 type ViewMode = "grid" | "timeline";
 
 export default function StatementsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [searchQuery, setSearchQuery] = useState("");
+  const [reprocessingId, setReprocessingId] = useState<string | null>(null);
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   const { data: statements = [], isLoading } = useBankStatements();
   const updateStatement = useUpdateBankStatement();
+
+  // Fetch transaction counts for each statement
+  const { data: transactionCounts = {} } = useQuery({
+    queryKey: ["transaction_counts", user?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("bank_transactions")
+        .select("bank_statement_id");
+      
+      if (error) throw error;
+      
+      const counts: Record<string, number> = {};
+      (data || []).forEach((t) => {
+        if (t.bank_statement_id) {
+          counts[t.bank_statement_id] = (counts[t.bank_statement_id] || 0) + 1;
+        }
+      });
+      return counts;
+    },
+    enabled: !!user,
+  });
 
   const filteredStatements = statements.filter(stmt =>
     stmt.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -27,6 +56,79 @@ export default function StatementsPage() {
 
   const handleSave = (data: typeof statements[0]) => {
     updateStatement.mutate(data);
+  };
+
+  const handleReprocess = async (statement: StatementData) => {
+    if (!user || !statement.fileUrl) return;
+    
+    setReprocessingId(statement.id);
+    
+    try {
+      // Fetch the file from storage
+      const response = await fetch(statement.fileUrl);
+      const blob = await response.blob();
+      const file = new File([blob], statement.fileName, { type: blob.type });
+      
+      // Process with OCR
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("type", "statement");
+
+      const { data, error } = await supabase.functions.invoke("process-document", {
+        body: formData,
+      });
+
+      if (error) throw error;
+
+      // Extract transactions
+      const transactions = data.data?.transactions || [];
+      
+      if (transactions.length === 0) {
+        toast({
+          title: "Keine Transaktionen gefunden",
+          description: "Die OCR-Erkennung konnte keine Transaktionen im Dokument finden.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Check for duplicates
+      const { newTransactions, duplicates } = await checkDuplicateTransactions(user.id, transactions);
+      
+      if (newTransactions.length === 0) {
+        toast({
+          title: "Alle Transaktionen existieren bereits",
+          description: `${duplicates.length} Duplikate übersprungen`,
+        });
+        return;
+      }
+
+      // Save new transactions
+      const savedCount = await createBankTransactions(user.id, statement.id, newTransactions);
+      
+      // Invalidate queries
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["transaction_counts"] });
+      
+      let description = `${savedCount} Transaktionen extrahiert und gespeichert`;
+      if (duplicates.length > 0) {
+        description += `, ${duplicates.length} Duplikate übersprungen`;
+      }
+      
+      toast({
+        title: "Transaktionen extrahiert",
+        description,
+      });
+    } catch (error: any) {
+      console.error("Reprocess error:", error);
+      toast({
+        title: "Fehler beim Verarbeiten",
+        description: error.message || "Unbekannter Fehler",
+        variant: "destructive",
+      });
+    } finally {
+      setReprocessingId(null);
+    }
   };
 
   // Calculate totals
@@ -124,6 +226,9 @@ export default function StatementsPage() {
               key={statement.id}
               statement={statement}
               onSave={handleSave}
+              onReprocess={handleReprocess}
+              isReprocessing={reprocessingId === statement.id}
+              transactionCount={transactionCounts[statement.id] || 0}
               index={index}
             />
           )}
@@ -136,6 +241,9 @@ export default function StatementsPage() {
               key={statement.id}
               statement={statement}
               onSave={handleSave}
+              onReprocess={handleReprocess}
+              isReprocessing={reprocessingId === statement.id}
+              transactionCount={transactionCounts[statement.id] || 0}
               index={index}
             />
           ))}

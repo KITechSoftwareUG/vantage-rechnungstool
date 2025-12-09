@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Building, Calendar, CreditCard, Edit2, Check, X } from "lucide-react";
+import { Building, Calendar, CreditCard, Edit2, Check, X, RefreshCw, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -10,10 +10,20 @@ import { StatementData } from "@/types/documents";
 interface StatementCardProps {
   statement: StatementData;
   onSave: (data: StatementData) => void;
+  onReprocess?: (data: StatementData) => void;
+  isReprocessing?: boolean;
+  transactionCount?: number;
   index?: number;
 }
 
-export function StatementCard({ statement, onSave, index = 0 }: StatementCardProps) {
+export function StatementCard({ 
+  statement, 
+  onSave, 
+  onReprocess,
+  isReprocessing = false,
+  transactionCount,
+  index = 0 
+}: StatementCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(statement);
 
@@ -69,13 +79,18 @@ export function StatementCard({ statement, onSave, index = 0 }: StatementCardPro
             <p className="text-sm font-medium text-foreground line-clamp-1">
               {statement.fileName}
             </p>
-            <div className="mt-1 flex gap-1">
+            <div className="mt-1 flex flex-wrap gap-1">
               <Badge variant="outline" className={cn(statusColors[statement.status])}>
                 {statusLabels[statement.status]}
               </Badge>
               <Badge variant="outline" className="bg-secondary/50">
                 {bankTypeLabels[statement.bankType || "volksbank"]}
               </Badge>
+              {transactionCount !== undefined && (
+                <Badge variant="outline" className="bg-muted">
+                  {transactionCount} Trans.
+                </Badge>
+              )}
             </div>
           </div>
         </div>
@@ -221,14 +236,36 @@ export function StatementCard({ statement, onSave, index = 0 }: StatementCardPro
             Speichern
           </Button>
         </div>
-      ) : statement.status === "ready" && (
+      ) : statement.status === "ready" ? (
         <div className="mt-4">
           <Button variant="gradient" size="sm" className="w-full" onClick={handleSave}>
             <Check className="mr-1 h-4 w-4" />
             Bestätigen
           </Button>
         </div>
-      )}
+      ) : statement.status === "saved" && onReprocess && transactionCount === 0 && statement.fileUrl ? (
+        <div className="mt-4">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            className="w-full" 
+            onClick={() => onReprocess(statement)}
+            disabled={isReprocessing}
+          >
+            {isReprocessing ? (
+              <>
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                Verarbeite...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="mr-1 h-4 w-4" />
+                Transaktionen extrahieren
+              </>
+            )}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
