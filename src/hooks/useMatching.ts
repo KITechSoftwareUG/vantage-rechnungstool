@@ -74,6 +74,7 @@ export function useUpdateTransactionMatch() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["unmatched_invoices"] });
     },
   });
 }
