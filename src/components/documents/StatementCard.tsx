@@ -3,6 +3,7 @@ import { Building, Calendar, CreditCard, Edit2, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { StatementData } from "@/types/documents";
 
@@ -43,6 +44,11 @@ export function StatementCard({ statement, onSave, index = 0 }: StatementCardPro
     saved: "Gespeichert",
   };
 
+  const bankTypeLabels = {
+    volksbank: "Volksbank/Raiffeisen",
+    amex: "American Express",
+  };
+
   const balanceDiff = statement.closingBalance - statement.openingBalance;
 
   return (
@@ -63,9 +69,14 @@ export function StatementCard({ statement, onSave, index = 0 }: StatementCardPro
             <p className="text-sm font-medium text-foreground line-clamp-1">
               {statement.fileName}
             </p>
-            <Badge variant="outline" className={cn("mt-1", statusColors[statement.status])}>
-              {statusLabels[statement.status]}
-            </Badge>
+            <div className="mt-1 flex gap-1">
+              <Badge variant="outline" className={cn(statusColors[statement.status])}>
+                {statusLabels[statement.status]}
+              </Badge>
+              <Badge variant="outline" className="bg-secondary/50">
+                {bankTypeLabels[statement.bankType || "volksbank"]}
+              </Badge>
+            </div>
           </div>
         </div>
         
@@ -83,6 +94,25 @@ export function StatementCard({ statement, onSave, index = 0 }: StatementCardPro
 
       {/* Content */}
       <div className="space-y-3">
+        {/* Bank Type (only in edit mode) */}
+        {isEditing && (
+          <div className="flex items-center gap-3">
+            <Building className="h-4 w-4 text-muted-foreground" />
+            <Select
+              value={editData.bankType}
+              onValueChange={(value: "volksbank" | "amex") => setEditData({ ...editData, bankType: value })}
+            >
+              <SelectTrigger className="h-8">
+                <SelectValue placeholder="Banktyp wählen" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="volksbank">Volksbank/Raiffeisen</SelectItem>
+                <SelectItem value="amex">American Express</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {/* Bank */}
         <div className="flex items-center gap-3">
           <Building className="h-4 w-4 text-muted-foreground" />

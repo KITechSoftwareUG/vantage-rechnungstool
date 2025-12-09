@@ -57,15 +57,41 @@ serve(async (req) => {
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
       Beispiel: {"date": "2024-01-15", "issuer": "Firma GmbH", "amount": 1250.50, "type": "incoming"}`;
     } else {
+      // Bank statement - extract BOTH summary AND individual transactions
       prompt = `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
-      - bank: Name der Bank
+
+      1. Zusammenfassung (summary):
+      - bank: Name der Bank (z.B. "Volksbank", "American Express", "Raiffeisenbank")
+      - bankType: "volksbank" wenn Volksbank/Raiffeisenbank, "amex" wenn American Express
       - accountNumber: Kontonummer oder IBAN
       - date: Datum des Auszugs im Format YYYY-MM-DD
-      - openingBalance: Anfangssaldo als Zahl
-      - closingBalance: Endsaldo als Zahl
-      
+      - openingBalance: Anfangssaldo als Zahl (kann 0 sein wenn nicht vorhanden)
+      - closingBalance: Endsaldo als Zahl (kann 0 sein wenn nicht vorhanden)
+
+      2. Einzelne Transaktionen (transactions) - WICHTIG: Extrahiere ALLE Transaktionszeilen:
+      - date: Buchungsdatum im Format YYYY-MM-DD
+      - description: Beschreibung/Verwendungszweck der Transaktion
+      - amount: Betrag als positive Zahl (ohne Vorzeichen)
+      - type: "credit" für Gutschriften/Einzahlungen, "debit" für Abbuchungen/Ausgaben
+
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-      Beispiel: {"bank": "Deutsche Bank", "accountNumber": "DE89 3704 0044 0532 0130 00", "date": "2024-01-31", "openingBalance": 12500.00, "closingBalance": 14250.00}`;
+      
+      Beispiel:
+      {
+        "summary": {
+          "bank": "Volksbank",
+          "bankType": "volksbank",
+          "accountNumber": "DE89 3704 0044 0532 0130 00",
+          "date": "2024-01-31",
+          "openingBalance": 12500.00,
+          "closingBalance": 14250.00
+        },
+        "transactions": [
+          {"date": "2024-01-05", "description": "REWE Einkauf", "amount": 45.50, "type": "debit"},
+          {"date": "2024-01-10", "description": "Gehalt Januar", "amount": 3500.00, "type": "credit"},
+          {"date": "2024-01-15", "description": "Miete", "amount": 1200.00, "type": "debit"}
+        ]
+      }`;
     }
 
     console.log(`Processing ${documentType} OCR for file: ${file.name}, size: ${arrayBuffer.byteLength} bytes`);
@@ -142,13 +168,32 @@ serve(async (req) => {
         };
       } else {
         extractedData = {
-          bank: "Unbekannt",
-          accountNumber: "Unbekannt",
-          date: new Date().toISOString().split("T")[0],
-          openingBalance: 0,
-          closingBalance: 0,
+          summary: {
+            bank: "Unbekannt",
+            bankType: "volksbank",
+            accountNumber: "Unbekannt",
+            date: new Date().toISOString().split("T")[0],
+            openingBalance: 0,
+            closingBalance: 0,
+          },
+          transactions: [],
         };
       }
+    }
+
+    // For backward compatibility with old statement format
+    if (documentType === "statement" && !extractedData.summary) {
+      extractedData = {
+        summary: {
+          bank: extractedData.bank || "Unbekannt",
+          bankType: extractedData.bankType || "volksbank",
+          accountNumber: extractedData.accountNumber || "Unbekannt",
+          date: extractedData.date || new Date().toISOString().split("T")[0],
+          openingBalance: extractedData.openingBalance || 0,
+          closingBalance: extractedData.closingBalance || 0,
+        },
+        transactions: extractedData.transactions || [],
+      };
     }
 
     return new Response(
