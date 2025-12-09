@@ -1,20 +1,10 @@
 import { useState } from "react";
-import { Building, Calendar, CreditCard, Euro, Edit2, Check, X } from "lucide-react";
+import { Building, Calendar, CreditCard, Edit2, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-
-export interface StatementData {
-  id: string;
-  fileName: string;
-  bank: string;
-  accountNumber: string;
-  date: string;
-  openingBalance: number;
-  closingBalance: number;
-  status: "processing" | "ready" | "saved";
-}
+import { StatementData } from "@/types/documents";
 
 interface StatementCardProps {
   statement: StatementData;
@@ -27,7 +17,12 @@ export function StatementCard({ statement, onSave, index = 0 }: StatementCardPro
   const [editData, setEditData] = useState(statement);
 
   const handleSave = () => {
-    onSave(editData);
+    const date = new Date(editData.date);
+    onSave({
+      ...editData,
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+    });
     setIsEditing(false);
   };
 

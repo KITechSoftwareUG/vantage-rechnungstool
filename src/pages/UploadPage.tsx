@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UploadZone } from "@/components/upload/UploadZone";
-import { DocumentCard, InvoiceData } from "@/components/documents/DocumentCard";
-import { StatementCard, StatementData } from "@/components/documents/StatementCard";
+import { DocumentCard } from "@/components/documents/DocumentCard";
+import { StatementCard } from "@/components/documents/StatementCard";
 import { Button } from "@/components/ui/button";
 import { FileText, Building, Loader2, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { InvoiceData, StatementData } from "@/types/documents";
 
 export default function UploadPage() {
   const { toast } = useToast();
@@ -20,15 +21,22 @@ export default function UploadPage() {
     // Simulate OCR processing
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    const newInvoices: InvoiceData[] = files.map((file, index) => ({
-      id: `inv-${Date.now()}-${index}`,
-      fileName: file.name,
-      date: new Date().toISOString().split("T")[0],
-      issuer: "Erkannter Aussteller GmbH",
-      amount: Math.round(Math.random() * 5000 * 100) / 100,
-      type: Math.random() > 0.5 ? "incoming" : "outgoing",
-      status: "ready" as const,
-    }));
+    const newInvoices: InvoiceData[] = files.map((file, index) => {
+      const randomDate = new Date();
+      randomDate.setDate(randomDate.getDate() - Math.floor(Math.random() * 90));
+      
+      return {
+        id: `inv-${Date.now()}-${index}`,
+        fileName: file.name,
+        date: randomDate.toISOString().split("T")[0],
+        issuer: "Erkannter Aussteller GmbH",
+        amount: Math.round(Math.random() * 5000 * 100) / 100,
+        type: Math.random() > 0.5 ? "incoming" : "outgoing",
+        status: "ready" as const,
+        year: randomDate.getFullYear(),
+        month: randomDate.getMonth() + 1,
+      };
+    });
 
     setProcessedInvoices(prev => [...prev, ...newInvoices]);
     setIsProcessing(false);
@@ -45,16 +53,23 @@ export default function UploadPage() {
     // Simulate OCR processing
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    const newStatements: StatementData[] = files.map((file, index) => ({
-      id: `stmt-${Date.now()}-${index}`,
-      fileName: file.name,
-      bank: "Deutsche Bank",
-      accountNumber: "DE89 3704 0044 0532 0130 00",
-      date: new Date().toISOString().split("T")[0],
-      openingBalance: Math.round(Math.random() * 10000 * 100) / 100,
-      closingBalance: Math.round(Math.random() * 15000 * 100) / 100,
-      status: "ready" as const,
-    }));
+    const newStatements: StatementData[] = files.map((file, index) => {
+      const randomDate = new Date();
+      randomDate.setDate(randomDate.getDate() - Math.floor(Math.random() * 90));
+      
+      return {
+        id: `stmt-${Date.now()}-${index}`,
+        fileName: file.name,
+        bank: "Deutsche Bank",
+        accountNumber: "DE89 3704 0044 0532 0130 00",
+        date: randomDate.toISOString().split("T")[0],
+        openingBalance: Math.round(Math.random() * 10000 * 100) / 100,
+        closingBalance: Math.round(Math.random() * 15000 * 100) / 100,
+        status: "ready" as const,
+        year: randomDate.getFullYear(),
+        month: randomDate.getMonth() + 1,
+      };
+    });
 
     setProcessedStatements(prev => [...prev, ...newStatements]);
     setIsProcessing(false);

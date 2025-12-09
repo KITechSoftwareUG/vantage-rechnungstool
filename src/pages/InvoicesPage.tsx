@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { Grid3X3, List, Search, Filter, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DocumentCard, InvoiceData } from "@/components/documents/DocumentCard";
+import { DocumentCard } from "@/components/documents/DocumentCard";
 import { DocumentsTable } from "@/components/documents/DocumentsTable";
+import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
+import { InvoiceData, groupByYearAndMonth } from "@/types/documents";
 import { cn } from "@/lib/utils";
 
-// Mock data
+// Mock data with year/month
 const mockInvoices: InvoiceData[] = [
   {
     id: "1",
@@ -16,6 +18,8 @@ const mockInvoices: InvoiceData[] = [
     amount: 1250.00,
     type: "incoming",
     status: "saved",
+    year: 2024,
+    month: 1,
   },
   {
     id: "2",
@@ -25,47 +29,81 @@ const mockInvoices: InvoiceData[] = [
     amount: 189.50,
     type: "outgoing",
     status: "saved",
+    year: 2024,
+    month: 1,
   },
   {
     id: "3",
     fileName: "Kundenrechnung_XYZ.pdf",
-    date: "2024-01-12",
+    date: "2024-02-12",
     issuer: "XYZ Industries",
     amount: 3400.00,
     type: "incoming",
     status: "saved",
+    year: 2024,
+    month: 2,
   },
   {
     id: "4",
     fileName: "Büromaterial.pdf",
-    date: "2024-01-10",
+    date: "2024-02-10",
     issuer: "Office Depot",
     amount: 245.80,
     type: "outgoing",
     status: "saved",
+    year: 2024,
+    month: 2,
   },
   {
     id: "5",
     fileName: "Beratungshonorar.pdf",
-    date: "2024-01-08",
+    date: "2024-03-08",
     issuer: "Consulting Pro AG",
     amount: 5600.00,
     type: "incoming",
     status: "saved",
+    year: 2024,
+    month: 3,
   },
   {
     id: "6",
     fileName: "Telefonrechnung.pdf",
-    date: "2024-01-05",
+    date: "2023-12-05",
     issuer: "Telekom",
     amount: 89.99,
     type: "outgoing",
     status: "saved",
+    year: 2023,
+    month: 12,
+  },
+  {
+    id: "7",
+    fileName: "Jahresabschluss_Kunde.pdf",
+    date: "2023-12-20",
+    issuer: "Mustermann GmbH",
+    amount: 8500.00,
+    type: "incoming",
+    status: "saved",
+    year: 2023,
+    month: 12,
+  },
+  {
+    id: "8",
+    fileName: "Versicherung_Q4.pdf",
+    date: "2023-11-15",
+    issuer: "Allianz",
+    amount: 450.00,
+    type: "outgoing",
+    status: "saved",
+    year: 2023,
+    month: 11,
   },
 ];
 
+type ViewMode = "grid" | "table" | "timeline";
+
 export default function InvoicesPage() {
-  const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
+  const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "incoming" | "outgoing">("all");
   const [invoices, setInvoices] = useState(mockInvoices);
@@ -76,6 +114,8 @@ export default function InvoicesPage() {
     const matchesType = filterType === "all" || inv.type === filterType;
     return matchesSearch && matchesType;
   });
+
+  const groupedInvoices = groupByYearAndMonth(filteredInvoices);
 
   const handleSave = (data: InvoiceData) => {
     setInvoices(prev => prev.map(inv => inv.id === data.id ? data : inv));
@@ -109,18 +149,20 @@ export default function InvoicesPage() {
         {/* View Toggle */}
         <div className="flex items-center gap-2">
           <Button
+            variant={viewMode === "timeline" ? "default" : "ghost"}
+            size="icon"
+            onClick={() => setViewMode("timeline")}
+            title="Nach Jahr/Monat"
+          >
+            <FolderTree className="h-4 w-4" />
+          </Button>
+          <Button
             variant={viewMode === "grid" ? "default" : "ghost"}
             size="icon"
             onClick={() => setViewMode("grid")}
+            title="Karten-Ansicht"
           >
             <Grid3X3 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant={viewMode === "table" ? "default" : "ghost"}
-            size="icon"
-            onClick={() => setViewMode("table")}
-          >
-            <List className="h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -194,7 +236,20 @@ export default function InvoicesPage() {
       </div>
 
       {/* Content */}
-      {viewMode === "grid" ? (
+      {viewMode === "timeline" ? (
+        <YearMonthAccordion
+          data={groupedInvoices}
+          renderDocument={(invoice, index) => (
+            <DocumentCard
+              key={invoice.id}
+              document={invoice}
+              onSave={handleSave}
+              index={index}
+            />
+          )}
+          emptyMessage="Keine Rechnungen gefunden"
+        />
+      ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredInvoices.map((invoice, index) => (
             <DocumentCard
@@ -204,23 +259,6 @@ export default function InvoicesPage() {
               index={index}
             />
           ))}
-        </div>
-      ) : (
-        <DocumentsTable
-          documents={filteredInvoices}
-          onDelete={handleDelete}
-        />
-      )}
-
-      {filteredInvoices.length === 0 && (
-        <div className="glass-card flex flex-col items-center justify-center p-12 text-center">
-          <Filter className="h-12 w-12 text-muted-foreground/50" />
-          <h3 className="mt-4 font-heading text-lg font-semibold text-foreground">
-            Keine Rechnungen gefunden
-          </h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Passen Sie Ihre Suchkriterien an oder laden Sie neue Dokumente hoch
-          </p>
         </div>
       )}
     </div>
