@@ -119,11 +119,11 @@ export function useUnmatchedInvoices() {
   return useQuery({
     queryKey: ["unmatched_invoices", user?.id],
     queryFn: async () => {
-      // Get all invoices that are not currently matched to any confirmed transaction
+      // Get all invoices that are already matched or confirmed to any transaction
       const { data: matchedIds } = await supabase
         .from("bank_transactions")
         .select("matched_invoice_id")
-        .eq("match_status", "confirmed")
+        .in("match_status", ["confirmed", "matched"])
         .not("matched_invoice_id", "is", null);
 
       const matchedInvoiceIds = matchedIds?.map((t) => t.matched_invoice_id).filter(Boolean) || [];
