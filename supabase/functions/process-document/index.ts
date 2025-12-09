@@ -32,9 +32,8 @@ async function fetchWithRetry(
     try {
       const response = await fetch(url, options);
       
-      // Retry on 502, 503, 504 errors
+      // Retry on 502, 503, 504 errors - DON'T consume the body, just check status
       if (response.status === 502 || response.status === 503 || response.status === 504) {
-        const errorText = await response.text();
         console.log(`Attempt ${attempt + 1}: Got ${response.status}, retrying...`);
         lastError = new Error(`AI Gateway error: ${response.status}`);
         
@@ -43,6 +42,8 @@ async function fetchWithRetry(
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
+        // Last attempt failed with gateway error - throw error instead of returning consumed response
+        throw lastError;
       }
       
       return response;
