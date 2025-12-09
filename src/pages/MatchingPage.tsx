@@ -1,21 +1,17 @@
 import { useState } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CreditCard, Building, Loader2, CheckCircle, AlertCircle, Sparkles } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useBankTransactions } from "@/hooks/useMatching";
-import { useBankStatements } from "@/hooks/useDocuments";
 import { TransactionRow } from "@/components/matching/TransactionRow";
-import { BankType, BANK_TYPE_LABELS } from "@/types/matching";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
 export default function MatchingPage() {
   const { toast } = useToast();
-  const [activeBank, setActiveBank] = useState<BankType>("volksbank");
   const [isAutoMatching, setIsAutoMatching] = useState(false);
 
-  const { data: transactions = [], isLoading, refetch } = useBankTransactions(activeBank);
-  const { data: statements = [] } = useBankStatements();
+  // Alle Transaktionen ohne Filter laden
+  const { data: transactions = [], isLoading, refetch } = useBankTransactions();
 
   const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
   const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
@@ -24,9 +20,7 @@ export default function MatchingPage() {
   const handleAutoMatch = async () => {
     setIsAutoMatching(true);
     try {
-      const { data, error } = await supabase.functions.invoke("auto-match-transactions", {
-        body: { bankType: activeBank },
-      });
+      const { data, error } = await supabase.functions.invoke("auto-match-transactions");
 
       if (error) throw error;
 
@@ -47,12 +41,6 @@ export default function MatchingPage() {
     }
   };
 
-  const filteredStatements = statements.filter((s: any) => 
-    activeBank === "amex" 
-      ? s.bank.toLowerCase().includes("american") || s.bank.toLowerCase().includes("amex")
-      : s.bank.toLowerCase().includes("volksbank") || s.bank.toLowerCase().includes("raiffeisen")
-  );
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -63,43 +51,10 @@ export default function MatchingPage() {
         </p>
       </div>
 
-      {/* Bank Tabs */}
-      <Tabs value={activeBank} onValueChange={(v) => setActiveBank(v as BankType)} className="animate-fade-in">
-        <div className="flex items-center justify-between">
-          <TabsList className="glass-card h-auto p-1">
-            <TabsTrigger
-              value="volksbank"
-              className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-            >
-              <Building className="h-4 w-4" />
-              Volksbank Raiffeisen
-            </TabsTrigger>
-            <TabsTrigger
-              value="amex"
-              className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-            >
-              <CreditCard className="h-4 w-4" />
-              American Express
-            </TabsTrigger>
-          </TabsList>
-
-          <Button
-            variant="gradient"
-            onClick={handleAutoMatch}
-            disabled={isAutoMatching || unmatchedCount === 0}
-            className="gap-2"
-          >
-            {isAutoMatching ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
-            )}
-            KI Auto-Matching
-          </Button>
-        </div>
-
+      {/* Controls */}
+      <div className="flex items-center justify-between animate-fade-in">
         {/* Stats */}
-        <div className="mt-4 flex gap-4">
+        <div className="flex gap-4">
           <div className="glass-card flex items-center gap-3 px-4 py-3">
             <AlertCircle className="h-5 w-5 text-warning" />
             <div>
@@ -123,65 +78,69 @@ export default function MatchingPage() {
           </div>
         </div>
 
-        <TabsContent value="volksbank" className="mt-6">
-          <TransactionList transactions={transactions} isLoading={isLoading} bankName="Volksbank Raiffeisen" />
-        </TabsContent>
-
-        <TabsContent value="amex" className="mt-6">
-          <TransactionList transactions={transactions} isLoading={isLoading} bankName="American Express" />
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-}
-
-function TransactionList({
-  transactions,
-  isLoading,
-  bankName,
-}: {
-  transactions: any[];
-  isLoading: boolean;
-  bankName: string;
-}) {
-  if (isLoading) {
-    return (
-      <div className="glass-card flex items-center justify-center p-12">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (transactions.length === 0) {
-    return (
-      <div className="glass-card flex flex-col items-center justify-center p-12 text-center">
-        <Building className="h-12 w-12 text-muted-foreground/50" />
-        <h3 className="mt-4 font-heading text-lg font-semibold text-foreground">
-          Keine Transaktionen für {bankName}
-        </h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Laden Sie Kontoauszüge hoch, um Transaktionen zu sehen
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      {/* Header */}
-      <div className="flex items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground">
-        <div className="w-24">Datum</div>
-        <div className="flex-1">Beschreibung</div>
-        <div className="w-28 text-right">Betrag</div>
-        <div className="w-28 text-center">Status</div>
-        <div className="w-32 text-right">Aktionen</div>
+        <Button
+          variant="gradient"
+          onClick={handleAutoMatch}
+          disabled={isAutoMatching || unmatchedCount === 0}
+          className="gap-2"
+        >
+          {isAutoMatching ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Sparkles className="h-4 w-4" />
+          )}
+          KI Auto-Matching
+        </Button>
       </div>
 
-      {/* Transactions */}
-      <div className="space-y-2">
-        {transactions.map((transaction: any) => (
-          <TransactionRow key={transaction.id} transaction={transaction} />
-        ))}
+      {/* Legende */}
+      <div className="flex gap-4 text-sm text-muted-foreground animate-fade-in">
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-blue-500" />
+          <span>Volksbank</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-emerald-500" />
+          <span>American Express</span>
+        </div>
+      </div>
+
+      {/* Transaction List */}
+      <div className="animate-fade-in">
+        {isLoading ? (
+          <div className="glass-card flex items-center justify-center p-12">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : transactions.length === 0 ? (
+          <div className="glass-card flex flex-col items-center justify-center p-12 text-center">
+            <Building className="h-12 w-12 text-muted-foreground/50" />
+            <h3 className="mt-4 font-heading text-lg font-semibold text-foreground">
+              Keine Transaktionen vorhanden
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Laden Sie Kontoauszüge hoch, um Transaktionen zu sehen
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {/* Header */}
+            <div className="flex items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground">
+              <div className="w-6"></div>
+              <div className="w-24">Datum</div>
+              <div className="flex-1">Beschreibung</div>
+              <div className="w-28 text-right">Betrag</div>
+              <div className="w-28 text-center">Status</div>
+              <div className="w-32 text-right">Aktionen</div>
+            </div>
+
+            {/* Transactions */}
+            <div className="space-y-2">
+              {transactions.map((transaction: any) => (
+                <TransactionRow key={transaction.id} transaction={transaction} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -3,27 +3,22 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { BankTransaction, BankType } from "@/types/matching";
 
-// Fetch bank transactions with optional filtering
-export function useBankTransactions(bankType?: BankType) {
+// Fetch all bank transactions (no filtering)
+export function useBankTransactions() {
   const { user } = useAuth();
 
   return useQuery({
-    queryKey: ["bank_transactions", bankType, user?.id],
+    queryKey: ["bank_transactions", user?.id],
     queryFn: async () => {
-      let query = supabase
+      const { data, error } = await supabase
         .from("bank_transactions")
         .select(`
           *,
-          bank_statements!inner(bank, bank_type),
+          bank_statements(bank, bank_type),
           invoices(id, issuer, amount, date, file_name)
         `)
         .order("date", { ascending: false });
 
-      if (bankType) {
-        query = query.eq("bank_statements.bank_type", bankType);
-      }
-
-      const { data, error } = await query;
       if (error) throw error;
 
       return data.map((t: any) => ({
