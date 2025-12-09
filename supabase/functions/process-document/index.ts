@@ -5,6 +5,20 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Convert ArrayBuffer to base64 in chunks to avoid stack overflow
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000; // 32KB chunks
+  
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode.apply(null, Array.from(chunk));
+  }
+  
+  return btoa(binary);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -27,9 +41,9 @@ serve(async (req) => {
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    // Convert file to base64
+    // Convert file to base64 using chunked approach
     const arrayBuffer = await file.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    const base64 = arrayBufferToBase64(arrayBuffer);
     const mimeType = file.type || "application/pdf";
 
     let prompt = "";
@@ -54,7 +68,7 @@ serve(async (req) => {
       Beispiel: {"bank": "Deutsche Bank", "accountNumber": "DE89 3704 0044 0532 0130 00", "date": "2024-01-31", "openingBalance": 12500.00, "closingBalance": 14250.00}`;
     }
 
-    console.log(`Processing ${documentType} OCR for file: ${file.name}`);
+    console.log(`Processing ${documentType} OCR for file: ${file.name}, size: ${arrayBuffer.byteLength} bytes`);
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
