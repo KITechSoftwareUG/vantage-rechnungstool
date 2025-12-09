@@ -1,20 +1,13 @@
 import { useState } from "react";
-import { Grid3X3, List, Search, Building, TrendingUp, TrendingDown } from "lucide-react";
+import { Grid3X3, FolderTree, Search, TrendingUp, TrendingDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { StatementCard, StatementData } from "@/components/documents/StatementCard";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { StatementCard } from "@/components/documents/StatementCard";
+import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
+import { StatementData, groupByYearAndMonth } from "@/types/documents";
 import { cn } from "@/lib/utils";
 
-// Mock data
+// Mock data with year/month
 const mockStatements: StatementData[] = [
   {
     id: "1",
@@ -25,19 +18,35 @@ const mockStatements: StatementData[] = [
     openingBalance: 12500.00,
     closingBalance: 14250.00,
     status: "saved",
+    year: 2024,
+    month: 1,
   },
   {
     id: "2",
-    fileName: "Kontoauszug_Dez_2023.pdf",
+    fileName: "Kontoauszug_Feb_2024.pdf",
     bank: "Deutsche Bank",
     accountNumber: "DE89 3704 0044 0532 0130 00",
-    date: "2023-12-31",
-    openingBalance: 11200.00,
-    closingBalance: 12500.00,
+    date: "2024-02-29",
+    openingBalance: 14250.00,
+    closingBalance: 15800.00,
     status: "saved",
+    year: 2024,
+    month: 2,
   },
   {
     id: "3",
+    fileName: "Kontoauszug_Mär_2024.pdf",
+    bank: "Deutsche Bank",
+    accountNumber: "DE89 3704 0044 0532 0130 00",
+    date: "2024-03-31",
+    openingBalance: 15800.00,
+    closingBalance: 18200.00,
+    status: "saved",
+    year: 2024,
+    month: 3,
+  },
+  {
+    id: "4",
     fileName: "Sparkasse_Jan_2024.pdf",
     bank: "Sparkasse München",
     accountNumber: "DE45 7015 0000 0012 3456 78",
@@ -45,21 +54,39 @@ const mockStatements: StatementData[] = [
     openingBalance: 8500.00,
     closingBalance: 7200.00,
     status: "saved",
+    year: 2024,
+    month: 1,
   },
   {
-    id: "4",
-    fileName: "Geschäftskonto_Q4.pdf",
-    bank: "Commerzbank",
-    accountNumber: "DE12 3704 0044 0987 6543 21",
-    date: "2024-01-15",
-    openingBalance: 25000.00,
-    closingBalance: 28750.00,
+    id: "5",
+    fileName: "Kontoauszug_Dez_2023.pdf",
+    bank: "Deutsche Bank",
+    accountNumber: "DE89 3704 0044 0532 0130 00",
+    date: "2023-12-31",
+    openingBalance: 11200.00,
+    closingBalance: 12500.00,
     status: "saved",
+    year: 2023,
+    month: 12,
+  },
+  {
+    id: "6",
+    fileName: "Kontoauszug_Nov_2023.pdf",
+    bank: "Deutsche Bank",
+    accountNumber: "DE89 3704 0044 0532 0130 00",
+    date: "2023-11-30",
+    openingBalance: 9800.00,
+    closingBalance: 11200.00,
+    status: "saved",
+    year: 2023,
+    month: 11,
   },
 ];
 
+type ViewMode = "grid" | "timeline";
+
 export default function StatementsPage() {
-  const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
+  const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [searchQuery, setSearchQuery] = useState("");
   const [statements, setStatements] = useState(mockStatements);
 
@@ -68,6 +95,8 @@ export default function StatementsPage() {
     stmt.bank.toLowerCase().includes(searchQuery.toLowerCase()) ||
     stmt.accountNumber.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const groupedStatements = groupByYearAndMonth(filteredStatements);
 
   const handleSave = (data: StatementData) => {
     setStatements(prev => prev.map(stmt => stmt.id === data.id ? data : stmt));
@@ -93,18 +122,20 @@ export default function StatementsPage() {
         {/* View Toggle */}
         <div className="flex items-center gap-2">
           <Button
+            variant={viewMode === "timeline" ? "default" : "ghost"}
+            size="icon"
+            onClick={() => setViewMode("timeline")}
+            title="Nach Jahr/Monat"
+          >
+            <FolderTree className="h-4 w-4" />
+          </Button>
+          <Button
             variant={viewMode === "grid" ? "default" : "ghost"}
             size="icon"
             onClick={() => setViewMode("grid")}
+            title="Karten-Ansicht"
           >
             <Grid3X3 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant={viewMode === "table" ? "default" : "ghost"}
-            size="icon"
-            onClick={() => setViewMode("table")}
-          >
-            <List className="h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -150,7 +181,20 @@ export default function StatementsPage() {
       </div>
 
       {/* Content */}
-      {viewMode === "grid" ? (
+      {viewMode === "timeline" ? (
+        <YearMonthAccordion
+          data={groupedStatements}
+          renderDocument={(statement, index) => (
+            <StatementCard
+              key={statement.id}
+              statement={statement}
+              onSave={handleSave}
+              index={index}
+            />
+          )}
+          emptyMessage="Keine Kontoauszüge gefunden"
+        />
+      ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredStatements.map((statement, index) => (
             <StatementCard
@@ -160,80 +204,6 @@ export default function StatementsPage() {
               index={index}
             />
           ))}
-        </div>
-      ) : (
-        <div className="glass-card overflow-hidden animate-fade-in">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-border/50 hover:bg-transparent">
-                <TableHead className="text-muted-foreground">Dokument</TableHead>
-                <TableHead className="text-muted-foreground">Bank</TableHead>
-                <TableHead className="text-muted-foreground">Kontonummer</TableHead>
-                <TableHead className="text-muted-foreground">Datum</TableHead>
-                <TableHead className="text-right text-muted-foreground">Anfangssaldo</TableHead>
-                <TableHead className="text-right text-muted-foreground">Endsaldo</TableHead>
-                <TableHead className="text-right text-muted-foreground">Differenz</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredStatements.map((stmt) => {
-                const diff = stmt.closingBalance - stmt.openingBalance;
-                return (
-                  <TableRow 
-                    key={stmt.id} 
-                    className="border-border/30 transition-colors hover:bg-muted/30"
-                  >
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                          <Building className="h-4 w-4 text-primary" />
-                        </div>
-                        <span className="font-medium text-foreground">{stmt.fileName}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-foreground">{stmt.bank}</TableCell>
-                    <TableCell className="font-mono text-sm text-foreground">
-                      {stmt.accountNumber}
-                    </TableCell>
-                    <TableCell className="text-foreground">
-                      {new Date(stmt.date).toLocaleDateString("de-DE")}
-                    </TableCell>
-                    <TableCell className="text-right text-foreground">
-                      {stmt.openingBalance.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
-                    </TableCell>
-                    <TableCell className="text-right font-semibold text-foreground">
-                      {stmt.closingBalance.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Badge 
-                        variant="outline" 
-                        className={cn(
-                          diff >= 0 
-                            ? "bg-success/10 text-success border-success/20" 
-                            : "bg-destructive/10 text-destructive border-destructive/20"
-                        )}
-                      >
-                        {diff >= 0 ? "+" : ""}
-                        {diff.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {filteredStatements.length === 0 && (
-        <div className="glass-card flex flex-col items-center justify-center p-12 text-center">
-          <Building className="h-12 w-12 text-muted-foreground/50" />
-          <h3 className="mt-4 font-heading text-lg font-semibold text-foreground">
-            Keine Kontoauszüge gefunden
-          </h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Passen Sie Ihre Suchkriterien an oder laden Sie neue Dokumente hoch
-          </p>
         </div>
       )}
     </div>

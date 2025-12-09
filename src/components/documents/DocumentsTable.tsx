@@ -15,7 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { InvoiceData } from "./DocumentCard";
+import { InvoiceData } from "@/types/documents";
 import { cn } from "@/lib/utils";
 
 interface DocumentsTableProps {

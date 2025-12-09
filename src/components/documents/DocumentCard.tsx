@@ -1,19 +1,10 @@
 import { useState } from "react";
-import { FileText, Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-
-export interface InvoiceData {
-  id: string;
-  fileName: string;
-  date: string;
-  issuer: string;
-  amount: number;
-  type: "incoming" | "outgoing";
-  status: "processing" | "ready" | "saved";
-}
+import { InvoiceData } from "@/types/documents";
 
 interface DocumentCardProps {
   document: InvoiceData;
@@ -26,7 +17,12 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
   const [editData, setEditData] = useState(document);
 
   const handleSave = () => {
-    onSave(editData);
+    const date = new Date(editData.date);
+    onSave({
+      ...editData,
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+    });
     setIsEditing(false);
   };
 
