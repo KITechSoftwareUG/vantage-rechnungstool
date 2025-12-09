@@ -112,35 +112,32 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
   const status = statusConfig[transaction.matchStatus as keyof typeof statusConfig] || statusConfig.unmatched;
 
   return (
-    <div className="flex items-center gap-4 rounded-lg border border-border/50 bg-card p-4 transition-colors hover:bg-muted/20">
+    <div className="flex items-center gap-2 rounded border border-border/40 bg-card px-3 py-2 text-xs transition-colors hover:bg-muted/20">
       {/* Bank Indicator */}
       <div 
         className={cn(
-          "h-3 w-3 rounded-full flex-shrink-0",
+          "h-2 w-2 rounded-full flex-shrink-0",
           isAmex ? "bg-emerald-500" : "bg-blue-500"
         )}
         title={isAmex ? "American Express" : "Volksbank"}
       />
 
       {/* Date */}
-      <div className="w-24 flex-shrink-0 text-sm text-muted-foreground">
+      <div className="w-20 flex-shrink-0 text-muted-foreground">
         {new Date(transaction.date).toLocaleDateString("de-DE")}
       </div>
 
       {/* Description */}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{transaction.description}</p>
+        <p className="truncate font-medium text-foreground">{transaction.description}</p>
         {transaction.matchedInvoice && (
-          <div className="mt-1 flex items-center gap-2">
-            <Link className="h-3 w-3 text-primary" />
-            <span className="text-xs text-primary">
+          <div className="flex items-center gap-1 text-primary">
+            <Link className="h-2.5 w-2.5" />
+            <span className="truncate">
               {transaction.matchedInvoice.issuer} - {transaction.matchedInvoice.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
             </span>
             {transaction.matchConfidence && transaction.matchStatus === "matched" && (
-              <Badge variant="outline" className="ml-1 text-xs">
-                <Sparkles className="mr-1 h-3 w-3" />
-                {transaction.matchConfidence}%
-              </Badge>
+              <span className="text-muted-foreground">({transaction.matchConfidence}%)</span>
             )}
           </div>
         )}
@@ -149,7 +146,7 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
       {/* Amount */}
       <div
         className={cn(
-          "w-28 flex-shrink-0 text-right font-semibold",
+          "w-24 flex-shrink-0 text-right font-semibold",
           transaction.transactionType === "credit" ? "text-success" : "text-foreground"
         )}
       >
@@ -158,57 +155,56 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
       </div>
 
       {/* Status */}
-      <Badge variant="outline" className={cn("w-28 justify-center", status.color)}>
+      <Badge variant="outline" className={cn("h-5 w-20 justify-center text-[10px]", status.color)}>
         {status.label}
       </Badge>
 
       {/* Actions */}
-      <div className="flex w-32 flex-shrink-0 justify-end gap-1">
+      <div className="flex w-24 flex-shrink-0 justify-end gap-0.5">
         {transaction.matchStatus === "matched" && transaction.matchedInvoiceId && (
           <>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-success" onClick={handleConfirmMatch}>
-              <Check className="h-4 w-4" />
+            <Button variant="ghost" size="icon" className="h-6 w-6 text-success" onClick={handleConfirmMatch}>
+              <Check className="h-3 w-3" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={handleUnmatch}>
-              <X className="h-4 w-4" />
+            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={handleUnmatch}>
+              <X className="h-3 w-3" />
             </Button>
           </>
         )}
 
         {transaction.matchStatus === "confirmed" && (
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleUnmatch}>
-            <Unlink className="h-4 w-4" />
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleUnmatch}>
+            <Unlink className="h-3 w-3" />
           </Button>
         )}
 
         {(transaction.matchStatus === "unmatched" || transaction.matchStatus === "no_match") && (
           <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8">
-                <Link className="mr-1 h-4 w-4" />
+              <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]">
+                <Link className="mr-1 h-3 w-3" />
                 Zuordnen
-                <ChevronDown className="ml-1 h-3 w-3" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="max-h-64 w-80 overflow-y-auto">
+            <DropdownMenuContent align="end" className="max-h-64 w-72 overflow-y-auto">
               {invoices.length === 0 ? (
-                <div className="p-2 text-center text-sm text-muted-foreground">Keine Rechnungen verfügbar</div>
+                <div className="p-2 text-center text-xs text-muted-foreground">Keine Rechnungen</div>
               ) : (
                 invoices.map((invoice: any) => (
                   <DropdownMenuItem
                     key={invoice.id}
                     onClick={() => handleManualMatch(invoice.id)}
-                    className="flex flex-col items-start gap-1"
+                    className="flex flex-col items-start gap-0.5 text-xs"
                   >
                     <span className="font-medium">{invoice.issuer}</span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-muted-foreground">
                       {new Date(invoice.date).toLocaleDateString("de-DE")} · {invoice.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
                     </span>
                   </DropdownMenuItem>
                 ))
               )}
-              <DropdownMenuItem onClick={handleNoMatch} className="text-muted-foreground">
-                Keine Rechnung vorhanden
+              <DropdownMenuItem onClick={handleNoMatch} className="text-xs text-muted-foreground">
+                Keine Rechnung
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
