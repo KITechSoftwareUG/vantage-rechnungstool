@@ -19,6 +19,47 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+// Retry fetch with exponential backoff
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3,
+  baseDelay = 1000
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      
+      // Retry on 502, 503, 504 errors
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        const errorText = await response.text();
+        console.log(`Attempt ${attempt + 1}: Got ${response.status}, retrying...`);
+        lastError = new Error(`AI Gateway error: ${response.status}`);
+        
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, attempt);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+      }
+      
+      return response;
+    } catch (error) {
+      console.log(`Attempt ${attempt + 1}: Network error, retrying...`, error);
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw lastError || new Error("Max retries exceeded");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -61,8 +102,8 @@ serve(async (req) => {
       prompt = `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
 
       1. Zusammenfassung (summary):
-      - bank: Name der Bank (z.B. "Volksbank", "American Express", "Raiffeisenbank")
-      - bankType: "volksbank" wenn Volksbank/Raiffeisenbank, "amex" wenn American Express
+      - bank: Name der Bank (z.B. "Volksbank", "American Express", "Raiffeisenbank", "VR Bank")
+      - bankType: "volksbank" wenn Volksbank/Raiffeisenbank/VR Bank, "amex" wenn American Express
       - accountNumber: Kontonummer oder IBAN
       - date: Datum des Auszugs im Format YYYY-MM-DD
       - openingBalance: Anfangssaldo als Zahl (kann 0 sein wenn nicht vorhanden)
@@ -79,7 +120,7 @@ serve(async (req) => {
       Beispiel:
       {
         "summary": {
-          "bank": "Volksbank",
+          "bank": "VR Bank",
           "bankType": "volksbank",
           "accountNumber": "DE89 3704 0044 0532 0130 00",
           "date": "2024-01-31",
@@ -96,30 +137,35 @@ serve(async (req) => {
 
     console.log(`Processing ${documentType} OCR for file: ${file.name}, size: ${arrayBuffer.byteLength} bytes`);
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:${mimeType};base64,${base64}`,
+    const response = await fetchWithRetry(
+      "https://ai.gateway.lovable.dev/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${mimeType};base64,${base64}`,
+                  },
                 },
-              },
-            ],
-          },
-        ],
-      }),
-    });
+              ],
+            },
+          ],
+        }),
+      },
+      3, // max retries
+      2000 // base delay 2 seconds
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
