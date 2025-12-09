@@ -60,9 +60,17 @@ serve(async (req) => {
 
     // Process transactions in batches for AI matching
     for (const transaction of transactions) {
-      // Find exact amount matches only
+      const transactionAmount = Math.abs(transaction.amount);
+      const isAmexWithCurrencyConversion = 
+        transaction.bank_statements?.bank_type === "amex" && 
+        transaction.original_currency !== null;
+      
+      // Tolerance: 5% for Amex with currency conversion, exact (1 cent) otherwise
+      const tolerance = isAmexWithCurrencyConversion ? transactionAmount * 0.05 : 0.01;
+      
+      // Find amount matches within tolerance
       const potentialMatches = invoices.filter((inv: any) => {
-        return Math.abs(Math.abs(transaction.amount) - inv.amount) < 0.01; // Exact match (within 1 cent)
+        return Math.abs(transactionAmount - inv.amount) <= tolerance;
       });
 
       if (potentialMatches.length === 0) continue;

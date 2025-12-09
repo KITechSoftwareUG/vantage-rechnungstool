@@ -79,6 +79,7 @@ export type Database = {
           match_confidence: number | null
           match_status: string
           matched_invoice_id: string | null
+          original_currency: string | null
           transaction_type: string
           updated_at: string
           user_id: string
@@ -93,6 +94,7 @@ export type Database = {
           match_confidence?: number | null
           match_status?: string
           matched_invoice_id?: string | null
+          original_currency?: string | null
           transaction_type?: string
           updated_at?: string
           user_id: string
@@ -107,6 +109,7 @@ export type Database = {
           match_confidence?: number | null
           match_status?: string
           matched_invoice_id?: string | null
+          original_currency?: string | null
           transaction_type?: string
           updated_at?: string
           user_id?: string

@@ -17,6 +17,7 @@ export interface ExtractedTransaction {
   description: string;
   amount: number;
   type: "credit" | "debit";
+  originalCurrency?: string | null;
 }
 
 export interface StatementData {

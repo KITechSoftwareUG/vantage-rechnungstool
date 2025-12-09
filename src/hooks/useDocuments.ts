@@ -317,6 +317,7 @@ export async function createBankTransactions(
     amount: tx.amount,
     transaction_type: tx.type,
     match_status: "unmatched",
+    original_currency: tx.originalCurrency || null,
   }));
 
   const { error } = await supabase
