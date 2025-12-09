@@ -48,6 +48,7 @@ export function UploadZone({
 
   const getFileIcon = (file: File) => {
     if (file.type.startsWith("image/")) return Image;
+    if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv")) return FileText;
     return FileText;
   };
 
@@ -86,7 +87,7 @@ export function UploadZone({
           Ziehen Sie Dateien hierher oder klicken Sie zum Auswählen
         </p>
         <p className="mt-2 text-xs text-muted-foreground/70">
-          PDF, PNG, JPG bis 10MB
+          PDF, PNG, JPG, XLSX, CSV bis 20MB
         </p>
       </div>
 
