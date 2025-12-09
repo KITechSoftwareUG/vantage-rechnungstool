@@ -12,6 +12,7 @@ import UploadPage from "./pages/UploadPage";
 import InvoicesPage from "./pages/InvoicesPage";
 import StatementsPage from "./pages/StatementsPage";
 import MatchingPage from "./pages/MatchingPage";
+import ExportPage from "./pages/ExportPage";
 import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
 
@@ -73,6 +74,16 @@ const App = () => (
                   <ProtectedRoute>
                     <MainLayout>
                       <MatchingPage />
+                    </MainLayout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/export"
+                element={
+                  <ProtectedRoute>
+                    <MainLayout>
+                      <ExportPage />
                     </MainLayout>
                   </ProtectedRoute>
                 }

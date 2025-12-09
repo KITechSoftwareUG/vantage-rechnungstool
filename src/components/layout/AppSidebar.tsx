@@ -1,4 +1,4 @@
-import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2 } from "lucide-react";
+import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2, FileDown } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,10 @@ const navItems = [{
   title: "Zuordnung",
   url: "/matching",
   icon: Link2
+}, {
+  title: "Steuerberater Export",
+  url: "/export",
+  icon: FileDown
 }];
 export function AppSidebar() {
   const {
