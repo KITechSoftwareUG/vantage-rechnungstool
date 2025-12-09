@@ -1,4 +1,4 @@
-import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2 } from "lucide-react";
+import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2, List } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ const navItems = [
   { title: "Upload", url: "/upload", icon: Upload },
   { title: "Rechnungen", url: "/invoices", icon: FileText },
   { title: "Kontoauszüge", url: "/statements", icon: Building2 },
+  { title: "Transaktionen", url: "/transactions", icon: List },
   { title: "Zuordnung", url: "/matching", icon: Link2 },
 ];
 
