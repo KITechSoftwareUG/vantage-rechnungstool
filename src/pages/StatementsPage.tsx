@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Grid3X3, FolderTree, Search, TrendingUp, TrendingDown, Loader2 } from "lucide-react";
+import { Grid3X3, FolderTree, Search, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatementCard } from "@/components/documents/StatementCard";
@@ -131,9 +131,6 @@ export default function StatementsPage() {
     }
   };
 
-  // Calculate totals
-  const totalClosingBalance = filteredStatements.reduce((sum, stmt) => sum + stmt.closingBalance, 0);
-  const totalChange = filteredStatements.reduce((sum, stmt) => sum + (stmt.closingBalance - stmt.openingBalance), 0);
 
   if (isLoading) {
     return (
@@ -177,32 +174,6 @@ export default function StatementsPage() {
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 animate-fade-in" style={{ animationDelay: "0.1s" }}>
-        <div className="glass-card p-4">
-          <p className="text-sm text-muted-foreground">Gesamtsaldo aller Konten</p>
-          <p className="mt-1 text-2xl font-bold text-foreground">
-            {totalClosingBalance.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
-          </p>
-        </div>
-        <div className="glass-card p-4">
-          <div className="flex items-center gap-2">
-            <p className="text-sm text-muted-foreground">Gesamtveränderung</p>
-            {totalChange >= 0 ? (
-              <TrendingUp className="h-4 w-4 text-success" />
-            ) : (
-              <TrendingDown className="h-4 w-4 text-destructive" />
-            )}
-          </div>
-          <p className={cn(
-            "mt-1 text-2xl font-bold",
-            totalChange >= 0 ? "text-success" : "text-destructive"
-          )}>
-            {totalChange >= 0 ? "+" : ""}
-            {totalChange.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
-          </p>
-        </div>
-      </div>
 
       {/* Search */}
       <div className="glass-card p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
