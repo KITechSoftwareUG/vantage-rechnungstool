@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, X, Link, Unlink, ChevronDown, Sparkles } from "lucide-react";
+import { Check, X, Link, Unlink, ChevronDown, Sparkles, Building, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -22,6 +22,8 @@ interface TransactionRowProps {
     matchedInvoiceId: string | null;
     matchConfidence: number | null;
     matchStatus: string;
+    bankType?: string;
+    bankName?: string;
     matchedInvoice?: {
       id: string;
       issuer: string;
@@ -37,6 +39,12 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
   const [isOpen, setIsOpen] = useState(false);
   const updateMatch = useUpdateTransactionMatch();
   const { data: invoices = [] } = useUnmatchedInvoices();
+
+  // Bestimme Bank-Typ basierend auf bankType oder bankName
+  const isAmex = 
+    transaction.bankType === "amex" || 
+    transaction.bankName?.toLowerCase().includes("american") || 
+    transaction.bankName?.toLowerCase().includes("amex");
 
   const handleConfirmMatch = async () => {
     if (!transaction.matchedInvoiceId) return;
@@ -105,6 +113,15 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
 
   return (
     <div className="flex items-center gap-4 rounded-lg border border-border/50 bg-card p-4 transition-colors hover:bg-muted/20">
+      {/* Bank Indicator */}
+      <div 
+        className={cn(
+          "h-3 w-3 rounded-full flex-shrink-0",
+          isAmex ? "bg-emerald-500" : "bg-blue-500"
+        )}
+        title={isAmex ? "American Express" : "Volksbank"}
+      />
+
       {/* Date */}
       <div className="w-24 flex-shrink-0 text-sm text-muted-foreground">
         {new Date(transaction.date).toLocaleDateString("de-DE")}
