@@ -58,26 +58,21 @@ serve(async (req) => {
 
     let matchedCount = 0;
 
-    // Helper function to normalize text for comparison
-    const normalizeText = (text: string): string => {
-      return text
-        .toLowerCase()
-        .replace(/[^a-z0-9äöüß]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    };
-
-    // Helper function to check if description contains issuer name
-    const descriptionMatchesIssuer = (description: string, issuer: string): boolean => {
-      const normDesc = normalizeText(description);
-      const normIssuer = normalizeText(issuer);
+    // Helper function to extract Foreign Spend Amount from original_currency field
+    // Pattern: "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"
+    const extractForeignSpendAmount = (originalCurrency: string | null): number | null => {
+      if (!originalCurrency) return null;
       
-      // Check if issuer words appear in description
-      const issuerWords = normIssuer.split(" ").filter(w => w.length > 2);
-      const matchingWords = issuerWords.filter(word => normDesc.includes(word));
-      
-      // At least 50% of issuer words should match
-      return issuerWords.length > 0 && matchingWords.length >= Math.ceil(issuerWords.length * 0.5);
+      const match = originalCurrency.match(/Foreign Spend Amount:\s*([\d,.]+)/i);
+      if (match) {
+        // Handle both . and , as decimal separators
+        const amountStr = match[1].replace(',', '.');
+        const amount = parseFloat(amountStr);
+        if (!isNaN(amount)) {
+          return amount;
+        }
+      }
+      return null;
     };
 
     // Process transactions
@@ -88,30 +83,28 @@ serve(async (req) => {
         transaction.original_currency !== null;
       
       let potentialMatches: any[] = [];
+      let matchAmount = transactionAmount;
       
       if (isAmexWithCurrencyConversion) {
-        // For Amex with currency conversion: Match by description/issuer name
-        potentialMatches = invoices.filter((inv: any) => {
-          return descriptionMatchesIssuer(transaction.description, inv.issuer);
-        });
+        // For Amex with currency conversion: Extract Foreign Spend Amount and match exactly
+        const foreignAmount = extractForeignSpendAmount(transaction.original_currency);
         
-        console.log(`Amex currency conversion - Transaction: "${transaction.description}", found ${potentialMatches.length} matches by name`);
-      } else {
-        // For all other transactions: Exact amount match (within 1 cent)
-        potentialMatches = invoices.filter((inv: any) => {
-          return Math.abs(transactionAmount - inv.amount) < 0.01;
-        });
+        if (foreignAmount !== null) {
+          matchAmount = foreignAmount;
+          console.log(`Amex currency conversion - Using Foreign Spend Amount: ${foreignAmount} for matching`);
+        }
       }
+      
+      // Always match by exact amount (within 1 cent tolerance)
+      potentialMatches = invoices.filter((inv: any) => {
+        return Math.abs(matchAmount - inv.amount) < 0.01;
+      });
 
       if (potentialMatches.length === 0) continue;
 
       if (LOVABLE_API_KEY && potentialMatches.length > 1) {
         // Use AI to find the best match when multiple candidates
         try {
-          const matchingContext = isAmexWithCurrencyConversion 
-            ? "This is an American Express transaction with currency conversion. The amounts may differ due to exchange rates. Focus on matching by company name and description."
-            : "Match by amount and description similarity.";
-            
           const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -123,10 +116,8 @@ serve(async (req) => {
               messages: [
                 {
                   role: "system",
-                  content: `You are a financial matching assistant. ${matchingContext}
-                  
-                  Match bank transactions to invoices based on:
-                  - Company name matching (most important for currency-converted transactions)
+                  content: `You are a financial matching assistant. Match bank transactions to invoices based on:
+                  - Amount matching (already pre-filtered)
                   - Date proximity (invoice date should be close to or before transaction date)
                   - Description matching (company names, reference numbers)
                   
@@ -139,7 +130,7 @@ serve(async (req) => {
                   Transaction:
                   - Date: ${transaction.date}
                   - Description: ${transaction.description}
-                  - Amount: ${transactionAmount} EUR ${isAmexWithCurrencyConversion ? `(converted from ${transaction.original_currency})` : ""}
+                  - Amount: ${matchAmount} EUR
                   
                   Possible invoices:
                   ${potentialMatches.map((inv: any) => `- ID: ${inv.id}, Issuer: ${inv.issuer}, Amount: ${inv.amount} EUR, Date: ${inv.date}`).join("\n")}`,
@@ -182,17 +173,16 @@ serve(async (req) => {
         }
       }
 
-      // Fallback: If only one match, use it
+      // Fallback: If only one match, use it with 100% confidence (exact amount match)
       if (potentialMatches.length === 1) {
         const match = potentialMatches[0];
-        const confidence = isAmexWithCurrencyConversion ? 85 : 100; // Lower confidence for name-based matching
 
         await supabaseClient
           .from("bank_transactions")
           .update({
-            matched_invoice_id: match.id,
-            match_status: "matched",
-            match_confidence: confidence,
+          matched_invoice_id: match.id,
+          match_status: "matched",
+          match_confidence: 100,
           })
           .eq("id", transaction.id);
 
