@@ -31,14 +31,11 @@ serve(async (req) => {
       throw new Error("Not authenticated");
     }
 
-    const { bankType } = await req.json();
-
-    // Get unmatched transactions
+    // Get all unmatched transactions (no bank type filter needed)
     const { data: transactions, error: transError } = await supabaseClient
       .from("bank_transactions")
-      .select("*, bank_statements!inner(bank_type)")
-      .eq("match_status", "unmatched")
-      .eq("bank_statements.bank_type", bankType);
+      .select("*, bank_statements(bank_type)")
+      .eq("match_status", "unmatched");
 
     if (transError) throw transError;
 
