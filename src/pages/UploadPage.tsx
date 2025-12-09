@@ -366,7 +366,7 @@ export default function UploadPage() {
             </p>
             <UploadZone 
               onFilesSelected={handleStatementUpload}
-              acceptedTypes=".pdf,.png,.jpg,.jpeg"
+              acceptedTypes=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv"
             />
           </div>
 
