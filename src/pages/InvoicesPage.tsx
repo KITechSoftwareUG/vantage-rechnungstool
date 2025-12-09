@@ -1,112 +1,22 @@
 import { useState } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DocumentCard } from "@/components/documents/DocumentCard";
-import { DocumentsTable } from "@/components/documents/DocumentsTable";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
-import { InvoiceData, groupByYearAndMonth } from "@/types/documents";
+import { groupByYearAndMonth } from "@/types/documents";
+import { useInvoices, useUpdateInvoice, useDeleteInvoice } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
 
-// Mock data with year/month
-const mockInvoices: InvoiceData[] = [
-  {
-    id: "1",
-    fileName: "Rechnung_2024_001.pdf",
-    date: "2024-01-15",
-    issuer: "ABC Software GmbH",
-    amount: 1250.00,
-    type: "incoming",
-    status: "saved",
-    year: 2024,
-    month: 1,
-  },
-  {
-    id: "2",
-    fileName: "Stromrechnung_Jan.pdf",
-    date: "2024-01-14",
-    issuer: "Stadtwerke München",
-    amount: 189.50,
-    type: "outgoing",
-    status: "saved",
-    year: 2024,
-    month: 1,
-  },
-  {
-    id: "3",
-    fileName: "Kundenrechnung_XYZ.pdf",
-    date: "2024-02-12",
-    issuer: "XYZ Industries",
-    amount: 3400.00,
-    type: "incoming",
-    status: "saved",
-    year: 2024,
-    month: 2,
-  },
-  {
-    id: "4",
-    fileName: "Büromaterial.pdf",
-    date: "2024-02-10",
-    issuer: "Office Depot",
-    amount: 245.80,
-    type: "outgoing",
-    status: "saved",
-    year: 2024,
-    month: 2,
-  },
-  {
-    id: "5",
-    fileName: "Beratungshonorar.pdf",
-    date: "2024-03-08",
-    issuer: "Consulting Pro AG",
-    amount: 5600.00,
-    type: "incoming",
-    status: "saved",
-    year: 2024,
-    month: 3,
-  },
-  {
-    id: "6",
-    fileName: "Telefonrechnung.pdf",
-    date: "2023-12-05",
-    issuer: "Telekom",
-    amount: 89.99,
-    type: "outgoing",
-    status: "saved",
-    year: 2023,
-    month: 12,
-  },
-  {
-    id: "7",
-    fileName: "Jahresabschluss_Kunde.pdf",
-    date: "2023-12-20",
-    issuer: "Mustermann GmbH",
-    amount: 8500.00,
-    type: "incoming",
-    status: "saved",
-    year: 2023,
-    month: 12,
-  },
-  {
-    id: "8",
-    fileName: "Versicherung_Q4.pdf",
-    date: "2023-11-15",
-    issuer: "Allianz",
-    amount: 450.00,
-    type: "outgoing",
-    status: "saved",
-    year: 2023,
-    month: 11,
-  },
-];
-
-type ViewMode = "grid" | "table" | "timeline";
+type ViewMode = "grid" | "timeline";
 
 export default function InvoicesPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "incoming" | "outgoing">("all");
-  const [invoices, setInvoices] = useState(mockInvoices);
+
+  const { data: invoices = [], isLoading } = useInvoices();
+  const updateInvoice = useUpdateInvoice();
 
   const filteredInvoices = invoices.filter(inv => {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -117,12 +27,8 @@ export default function InvoicesPage() {
 
   const groupedInvoices = groupByYearAndMonth(filteredInvoices);
 
-  const handleSave = (data: InvoiceData) => {
-    setInvoices(prev => prev.map(inv => inv.id === data.id ? data : inv));
-  };
-
-  const handleDelete = (id: string) => {
-    setInvoices(prev => prev.filter(inv => inv.id !== id));
+  const handleSave = (data: typeof invoices[0]) => {
+    updateInvoice.mutate(data);
   };
 
   // Calculate totals
@@ -132,6 +38,14 @@ export default function InvoicesPage() {
   const totalOutgoing = filteredInvoices
     .filter(inv => inv.type === "outgoing")
     .reduce((sum, inv) => sum + inv.amount, 0);
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -247,7 +161,7 @@ export default function InvoicesPage() {
               index={index}
             />
           )}
-          emptyMessage="Keine Rechnungen gefunden"
+          emptyMessage="Keine Rechnungen gefunden. Laden Sie Dokumente unter 'Upload' hoch."
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

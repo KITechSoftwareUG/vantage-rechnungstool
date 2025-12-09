@@ -1,94 +1,21 @@
 import { useState } from "react";
-import { Grid3X3, FolderTree, Search, TrendingUp, TrendingDown } from "lucide-react";
+import { Grid3X3, FolderTree, Search, TrendingUp, TrendingDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatementCard } from "@/components/documents/StatementCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
-import { StatementData, groupByYearAndMonth } from "@/types/documents";
+import { groupByYearAndMonth } from "@/types/documents";
+import { useBankStatements, useUpdateBankStatement } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
-
-// Mock data with year/month
-const mockStatements: StatementData[] = [
-  {
-    id: "1",
-    fileName: "Kontoauszug_Jan_2024.pdf",
-    bank: "Deutsche Bank",
-    accountNumber: "DE89 3704 0044 0532 0130 00",
-    date: "2024-01-31",
-    openingBalance: 12500.00,
-    closingBalance: 14250.00,
-    status: "saved",
-    year: 2024,
-    month: 1,
-  },
-  {
-    id: "2",
-    fileName: "Kontoauszug_Feb_2024.pdf",
-    bank: "Deutsche Bank",
-    accountNumber: "DE89 3704 0044 0532 0130 00",
-    date: "2024-02-29",
-    openingBalance: 14250.00,
-    closingBalance: 15800.00,
-    status: "saved",
-    year: 2024,
-    month: 2,
-  },
-  {
-    id: "3",
-    fileName: "Kontoauszug_Mär_2024.pdf",
-    bank: "Deutsche Bank",
-    accountNumber: "DE89 3704 0044 0532 0130 00",
-    date: "2024-03-31",
-    openingBalance: 15800.00,
-    closingBalance: 18200.00,
-    status: "saved",
-    year: 2024,
-    month: 3,
-  },
-  {
-    id: "4",
-    fileName: "Sparkasse_Jan_2024.pdf",
-    bank: "Sparkasse München",
-    accountNumber: "DE45 7015 0000 0012 3456 78",
-    date: "2024-01-31",
-    openingBalance: 8500.00,
-    closingBalance: 7200.00,
-    status: "saved",
-    year: 2024,
-    month: 1,
-  },
-  {
-    id: "5",
-    fileName: "Kontoauszug_Dez_2023.pdf",
-    bank: "Deutsche Bank",
-    accountNumber: "DE89 3704 0044 0532 0130 00",
-    date: "2023-12-31",
-    openingBalance: 11200.00,
-    closingBalance: 12500.00,
-    status: "saved",
-    year: 2023,
-    month: 12,
-  },
-  {
-    id: "6",
-    fileName: "Kontoauszug_Nov_2023.pdf",
-    bank: "Deutsche Bank",
-    accountNumber: "DE89 3704 0044 0532 0130 00",
-    date: "2023-11-30",
-    openingBalance: 9800.00,
-    closingBalance: 11200.00,
-    status: "saved",
-    year: 2023,
-    month: 11,
-  },
-];
 
 type ViewMode = "grid" | "timeline";
 
 export default function StatementsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [searchQuery, setSearchQuery] = useState("");
-  const [statements, setStatements] = useState(mockStatements);
+
+  const { data: statements = [], isLoading } = useBankStatements();
+  const updateStatement = useUpdateBankStatement();
 
   const filteredStatements = statements.filter(stmt =>
     stmt.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -98,13 +25,21 @@ export default function StatementsPage() {
 
   const groupedStatements = groupByYearAndMonth(filteredStatements);
 
-  const handleSave = (data: StatementData) => {
-    setStatements(prev => prev.map(stmt => stmt.id === data.id ? data : stmt));
+  const handleSave = (data: typeof statements[0]) => {
+    updateStatement.mutate(data);
   };
 
   // Calculate totals
   const totalClosingBalance = filteredStatements.reduce((sum, stmt) => sum + stmt.closingBalance, 0);
   const totalChange = filteredStatements.reduce((sum, stmt) => sum + (stmt.closingBalance - stmt.openingBalance), 0);
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -192,7 +127,7 @@ export default function StatementsPage() {
               index={index}
             />
           )}
-          emptyMessage="Keine Kontoauszüge gefunden"
+          emptyMessage="Keine Kontoauszüge gefunden. Laden Sie Dokumente unter 'Upload' hoch."
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

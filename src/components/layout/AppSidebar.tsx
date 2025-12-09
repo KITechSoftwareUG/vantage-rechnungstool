@@ -1,6 +1,8 @@
-import { Upload, FileText, CreditCard, Building2, LayoutDashboard } from "lucide-react";
+import { Upload, FileText, Building2, LayoutDashboard, LogOut } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -11,6 +13,8 @@ const navItems = [
 ];
 
 export function AppSidebar() {
+  const { user, signOut } = useAuth();
+
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
@@ -44,13 +48,23 @@ export function AppSidebar() {
         ))}
       </nav>
 
-      {/* Footer */}
+      {/* User Info & Logout */}
       <div className="border-t border-sidebar-border p-4">
-        <div className="rounded-lg bg-sidebar-accent/50 p-4">
-          <p className="text-xs text-muted-foreground">
-            Dokumente sicher verwalten mit KI-gestützter OCR-Erkennung
-          </p>
-        </div>
+        {user && (
+          <div className="mb-3 rounded-lg bg-sidebar-accent/50 p-3">
+            <p className="truncate text-xs text-muted-foreground">
+              {user.email}
+            </p>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-2 text-muted-foreground hover:text-destructive"
+          onClick={signOut}
+        >
+          <LogOut className="h-4 w-4" />
+          Abmelden
+        </Button>
       </div>
     </aside>
   );

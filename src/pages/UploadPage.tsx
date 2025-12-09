@@ -3,101 +3,214 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UploadZone } from "@/components/upload/UploadZone";
 import { DocumentCard } from "@/components/documents/DocumentCard";
 import { StatementCard } from "@/components/documents/StatementCard";
-import { Button } from "@/components/ui/button";
 import { FileText, Building, Loader2, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { InvoiceData, StatementData } from "@/types/documents";
+import { useAuth } from "@/hooks/useAuth";
+import { useCreateInvoice, useCreateBankStatement, uploadDocument, processDocumentOCR } from "@/hooks/useDocuments";
+import { supabase } from "@/integrations/supabase/client";
 
 export default function UploadPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("invoices");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [processedInvoices, setProcessedInvoices] = useState<InvoiceData[]>([]);
-  const [processedStatements, setProcessedStatements] = useState<StatementData[]>([]);
+  const [processedInvoices, setProcessedInvoices] = useState<(InvoiceData & { file: File })[]>([]);
+  const [processedStatements, setProcessedStatements] = useState<(StatementData & { file: File })[]>([]);
+
+  const createInvoice = useCreateInvoice();
+  const createBankStatement = useCreateBankStatement();
 
   const handleInvoiceUpload = async (files: File[]) => {
+    if (!user) return;
     setIsProcessing(true);
     
-    // Simulate OCR processing
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    const newInvoices: InvoiceData[] = files.map((file, index) => {
-      const randomDate = new Date();
-      randomDate.setDate(randomDate.getDate() - Math.floor(Math.random() * 90));
-      
-      return {
-        id: `inv-${Date.now()}-${index}`,
-        fileName: file.name,
-        date: randomDate.toISOString().split("T")[0],
-        issuer: "Erkannter Aussteller GmbH",
-        amount: Math.round(Math.random() * 5000 * 100) / 100,
-        type: Math.random() > 0.5 ? "incoming" : "outgoing",
-        status: "ready" as const,
-        year: randomDate.getFullYear(),
-        month: randomDate.getMonth() + 1,
-      };
-    });
+    try {
+      const newInvoices: (InvoiceData & { file: File })[] = [];
 
-    setProcessedInvoices(prev => [...prev, ...newInvoices]);
-    setIsProcessing(false);
-    
-    toast({
-      title: "OCR-Verarbeitung abgeschlossen",
-      description: `${files.length} Dokument(e) erfolgreich analysiert`,
-    });
+      for (const file of files) {
+        try {
+          const result = await processDocumentOCR(file, "invoice");
+          
+          const date = new Date(result.data.date || new Date());
+          
+          newInvoices.push({
+            id: `temp-${Date.now()}-${Math.random()}`,
+            fileName: file.name,
+            date: result.data.date || date.toISOString().split("T")[0],
+            issuer: result.data.issuer || "Unbekannt",
+            amount: result.data.amount || 0,
+            type: result.data.type || "outgoing",
+            status: "ready",
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            file,
+          });
+        } catch (error) {
+          console.error("OCR error for file:", file.name, error);
+          // Add with default values on error
+          const date = new Date();
+          newInvoices.push({
+            id: `temp-${Date.now()}-${Math.random()}`,
+            fileName: file.name,
+            date: date.toISOString().split("T")[0],
+            issuer: "Unbekannt - Bitte manuell eingeben",
+            amount: 0,
+            type: "outgoing",
+            status: "ready",
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            file,
+          });
+        }
+      }
+
+      setProcessedInvoices(prev => [...prev, ...newInvoices]);
+      
+      toast({
+        title: "OCR-Verarbeitung abgeschlossen",
+        description: `${files.length} Dokument(e) analysiert`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Fehler bei der Verarbeitung",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleStatementUpload = async (files: File[]) => {
+    if (!user) return;
     setIsProcessing(true);
     
-    // Simulate OCR processing
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    const newStatements: StatementData[] = files.map((file, index) => {
-      const randomDate = new Date();
-      randomDate.setDate(randomDate.getDate() - Math.floor(Math.random() * 90));
+    try {
+      const newStatements: (StatementData & { file: File })[] = [];
+
+      for (const file of files) {
+        try {
+          const result = await processDocumentOCR(file, "statement");
+          
+          const date = new Date(result.data.date || new Date());
+          
+          newStatements.push({
+            id: `temp-${Date.now()}-${Math.random()}`,
+            fileName: file.name,
+            bank: result.data.bank || "Unbekannt",
+            accountNumber: result.data.accountNumber || "Unbekannt",
+            date: result.data.date || date.toISOString().split("T")[0],
+            openingBalance: result.data.openingBalance || 0,
+            closingBalance: result.data.closingBalance || 0,
+            status: "ready",
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            file,
+          });
+        } catch (error) {
+          console.error("OCR error for file:", file.name, error);
+          const date = new Date();
+          newStatements.push({
+            id: `temp-${Date.now()}-${Math.random()}`,
+            fileName: file.name,
+            bank: "Unbekannt - Bitte manuell eingeben",
+            accountNumber: "Unbekannt",
+            date: date.toISOString().split("T")[0],
+            openingBalance: 0,
+            closingBalance: 0,
+            status: "ready",
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            file,
+          });
+        }
+      }
+
+      setProcessedStatements(prev => [...prev, ...newStatements]);
       
-      return {
-        id: `stmt-${Date.now()}-${index}`,
-        fileName: file.name,
-        bank: "Deutsche Bank",
-        accountNumber: "DE89 3704 0044 0532 0130 00",
-        date: randomDate.toISOString().split("T")[0],
-        openingBalance: Math.round(Math.random() * 10000 * 100) / 100,
-        closingBalance: Math.round(Math.random() * 15000 * 100) / 100,
-        status: "ready" as const,
-        year: randomDate.getFullYear(),
-        month: randomDate.getMonth() + 1,
-      };
-    });
+      toast({
+        title: "OCR-Verarbeitung abgeschlossen",
+        description: `${files.length} Kontoauszug/-auszüge analysiert`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Fehler bei der Verarbeitung",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
-    setProcessedStatements(prev => [...prev, ...newStatements]);
-    setIsProcessing(false);
+  const handleInvoiceSave = async (data: InvoiceData & { file?: File }) => {
+    if (!user) return;
     
-    toast({
-      title: "OCR-Verarbeitung abgeschlossen",
-      description: `${files.length} Kontoauszug/-auszüge erfolgreich analysiert`,
-    });
+    try {
+      let fileUrl: string | undefined;
+      
+      // Upload file if exists
+      if (data.file) {
+        fileUrl = await uploadDocument(data.file, user.id, "invoices");
+      }
+
+      await createInvoice.mutateAsync({
+        fileName: data.fileName,
+        fileUrl,
+        date: data.date,
+        year: data.year,
+        month: data.month,
+        issuer: data.issuer,
+        amount: data.amount,
+        type: data.type,
+        status: "saved",
+      });
+
+      // Remove from processed list
+      setProcessedInvoices(prev => prev.filter(inv => inv.id !== data.id));
+    } catch (error: any) {
+      toast({
+        title: "Fehler beim Speichern",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
   };
 
-  const handleInvoiceSave = (data: InvoiceData) => {
-    setProcessedInvoices(prev => 
-      prev.map(inv => inv.id === data.id ? { ...data, status: "saved" as const } : inv)
-    );
-    toast({
-      title: "Rechnung gespeichert",
-      description: `${data.fileName} wurde erfolgreich gespeichert`,
-    });
-  };
+  const handleStatementSave = async (data: StatementData & { file?: File }) => {
+    if (!user) return;
+    
+    try {
+      let fileUrl: string | undefined;
+      
+      // Upload file if exists
+      if (data.file) {
+        fileUrl = await uploadDocument(data.file, user.id, "statements");
+      }
 
-  const handleStatementSave = (data: StatementData) => {
-    setProcessedStatements(prev => 
-      prev.map(stmt => stmt.id === data.id ? { ...data, status: "saved" as const } : stmt)
-    );
-    toast({
-      title: "Kontoauszug gespeichert",
-      description: `${data.fileName} wurde erfolgreich gespeichert`,
-    });
+      await createBankStatement.mutateAsync({
+        fileName: data.fileName,
+        fileUrl,
+        bank: data.bank,
+        accountNumber: data.accountNumber,
+        date: data.date,
+        year: data.year,
+        month: data.month,
+        openingBalance: data.openingBalance,
+        closingBalance: data.closingBalance,
+        status: "saved",
+      });
+
+      // Remove from processed list
+      setProcessedStatements(prev => prev.filter(stmt => stmt.id !== data.id));
+    } catch (error: any) {
+      toast({
+        title: "Fehler beim Speichern",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -157,6 +270,9 @@ export default function UploadPage() {
               <h3 className="font-heading text-lg font-semibold text-foreground">
                 Erkannte Rechnungen ({processedInvoices.length})
               </h3>
+              <p className="text-sm text-muted-foreground">
+                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Speichern" um sie in der Datenbank zu sichern.
+              </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {processedInvoices.map((invoice, index) => (
                   <DocumentCard
@@ -197,6 +313,9 @@ export default function UploadPage() {
               <h3 className="font-heading text-lg font-semibold text-foreground">
                 Erkannte Kontoauszüge ({processedStatements.length})
               </h3>
+              <p className="text-sm text-muted-foreground">
+                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Speichern" um sie in der Datenbank zu sichern.
+              </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {processedStatements.map((statement, index) => (
                   <StatementCard

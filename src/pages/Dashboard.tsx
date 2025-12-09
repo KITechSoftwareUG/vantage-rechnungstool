@@ -1,49 +1,71 @@
-import { FileText, ArrowDownLeft, ArrowUpRight, TrendingUp, Building } from "lucide-react";
+import { FileText, ArrowDownLeft, ArrowUpRight, TrendingUp, Building, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-
-const stats = [
-  {
-    title: "Rechnungen",
-    value: "24",
-    change: "+3 diese Woche",
-    icon: FileText,
-    color: "text-primary",
-    bgColor: "bg-primary/10",
-  },
-  {
-    title: "Einnahmen",
-    value: "12.450,00 €",
-    change: "+8,2%",
-    icon: ArrowDownLeft,
-    color: "text-success",
-    bgColor: "bg-success/10",
-  },
-  {
-    title: "Ausgaben",
-    value: "8.320,00 €",
-    change: "-2,4%",
-    icon: ArrowUpRight,
-    color: "text-destructive",
-    bgColor: "bg-destructive/10",
-  },
-  {
-    title: "Kontoauszüge",
-    value: "6",
-    change: "Aktuell",
-    icon: Building,
-    color: "text-primary",
-    bgColor: "bg-primary/10",
-  },
-];
-
-const recentDocuments = [
-  { name: "Rechnung_2024_001.pdf", type: "incoming" as const, amount: 1250.00, date: "2024-01-15" },
-  { name: "Stromrechnung_Jan.pdf", type: "outgoing" as const, amount: 189.50, date: "2024-01-14" },
-  { name: "Kundenrechnung_XYZ.pdf", type: "incoming" as const, amount: 3400.00, date: "2024-01-12" },
-];
+import { useInvoices, useBankStatements } from "@/hooks/useDocuments";
 
 export default function Dashboard() {
+  const { data: invoices = [], isLoading: invoicesLoading } = useInvoices();
+  const { data: statements = [], isLoading: statementsLoading } = useBankStatements();
+
+  const isLoading = invoicesLoading || statementsLoading;
+
+  const totalIncoming = invoices
+    .filter(inv => inv.type === "incoming")
+    .reduce((sum, inv) => sum + inv.amount, 0);
+  
+  const totalOutgoing = invoices
+    .filter(inv => inv.type === "outgoing")
+    .reduce((sum, inv) => sum + inv.amount, 0);
+
+  const stats = [
+    {
+      title: "Rechnungen",
+      value: invoices.length.toString(),
+      change: `${invoices.filter(i => {
+        const d = new Date(i.date);
+        const now = new Date();
+        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      }).length} diesen Monat`,
+      icon: FileText,
+      color: "text-primary",
+      bgColor: "bg-primary/10",
+    },
+    {
+      title: "Einnahmen",
+      value: `${totalIncoming.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €`,
+      change: "Gesamt",
+      icon: ArrowDownLeft,
+      color: "text-success",
+      bgColor: "bg-success/10",
+    },
+    {
+      title: "Ausgaben",
+      value: `${totalOutgoing.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €`,
+      change: "Gesamt",
+      icon: ArrowUpRight,
+      color: "text-destructive",
+      bgColor: "bg-destructive/10",
+    },
+    {
+      title: "Kontoauszüge",
+      value: statements.length.toString(),
+      change: "Gesamt",
+      icon: Building,
+      color: "text-primary",
+      bgColor: "bg-primary/10",
+    },
+  ];
+
+  const recentInvoices = invoices.slice(0, 5);
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -110,44 +132,50 @@ export default function Dashboard() {
       <div className="glass-card p-6 animate-fade-in" style={{ animationDelay: "0.5s" }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-heading text-lg font-semibold text-foreground">
-            Letzte Dokumente
+            Letzte Rechnungen
           </h2>
           <Button variant="ghost" size="sm" asChild>
             <Link to="/invoices">Alle anzeigen</Link>
           </Button>
         </div>
-        <div className="space-y-3">
-          {recentDocuments.map((doc, index) => (
-            <div
-              key={doc.name}
-              className="flex items-center justify-between rounded-lg bg-muted/30 p-4 transition-colors hover:bg-muted/50"
-            >
-              <div className="flex items-center gap-3">
-                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
-                  doc.type === "incoming" ? "bg-success/10" : "bg-muted"
+        {recentInvoices.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-8 text-center">
+            Noch keine Rechnungen vorhanden. Laden Sie Dokumente unter "Upload" hoch.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {recentInvoices.map((doc) => (
+              <div
+                key={doc.id}
+                className="flex items-center justify-between rounded-lg bg-muted/30 p-4 transition-colors hover:bg-muted/50"
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
+                    doc.type === "incoming" ? "bg-success/10" : "bg-muted"
+                  }`}>
+                    {doc.type === "incoming" ? (
+                      <ArrowDownLeft className="h-4 w-4 text-success" />
+                    ) : (
+                      <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{doc.fileName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(doc.date).toLocaleDateString("de-DE")} · {doc.issuer}
+                    </p>
+                  </div>
+                </div>
+                <span className={`font-semibold ${
+                  doc.type === "incoming" ? "text-success" : "text-foreground"
                 }`}>
-                  {doc.type === "incoming" ? (
-                    <ArrowDownLeft className="h-4 w-4 text-success" />
-                  ) : (
-                    <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-foreground">{doc.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {new Date(doc.date).toLocaleDateString("de-DE")}
-                  </p>
-                </div>
+                  {doc.type === "incoming" ? "+" : "-"}
+                  {doc.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+                </span>
               </div>
-              <span className={`font-semibold ${
-                doc.type === "incoming" ? "text-success" : "text-foreground"
-              }`}>
-                {doc.type === "incoming" ? "+" : "-"}
-                {doc.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
-              </span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
