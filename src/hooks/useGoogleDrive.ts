@@ -24,23 +24,30 @@ export function useGoogleDrive() {
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
+      if (!session) {
+        setState({ isConnected: false, isLoading: false, accessToken: null });
+        return;
+      }
 
       const response = await supabase.functions.invoke("google-drive-auth", {
         body: { action: "get-access-token" },
       });
 
       if (response.error) {
-        throw response.error;
+        // Silently handle auth errors - user just isn't connected
+        console.log("Google Drive not connected:", response.error.message);
+        setState({ isConnected: false, isLoading: false, accessToken: null });
+        return;
       }
 
       setState({
-        isConnected: response.data.connected,
+        isConnected: response.data?.connected ?? false,
         isLoading: false,
-        accessToken: response.data.accessToken || null,
+        accessToken: response.data?.accessToken || null,
       });
     } catch (error) {
-      console.error("Error checking Google Drive connection:", error);
+      // Silently handle errors - treat as not connected
+      console.log("Google Drive check failed:", error);
       setState({ isConnected: false, isLoading: false, accessToken: null });
     }
   }, [user]);
