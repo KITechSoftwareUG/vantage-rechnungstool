@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
-import { FileText, Download, ExternalLink, ArrowDownRight, ArrowUpRight } from "lucide-react";
-import { useExportTransactions } from "@/hooks/useExportTransactions";
+import { FileText, Download, ExternalLink, ArrowDownRight, ArrowUpRight, Send, Loader2 } from "lucide-react";
+import { useExportTransactions, ExportTransaction } from "@/hooks/useExportTransactions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +12,90 @@ import { toast } from "sonner";
 
 export default function ExportPage() {
   const { data: transactions, isLoading } = useExportTransactions();
+  const [isSending, setIsSending] = useState(false);
+
+  const handleSendToN8n = async () => {
+    if (!transactions || transactions.length === 0) {
+      toast.error("Keine Transaktionen zum Senden");
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      // Prepare data with base64 encoded files
+      const exportData = await Promise.all(
+        transactions.map(async (transaction: ExportTransaction) => {
+          let fileBase64: string | null = null;
+          let fileMimeType: string | null = null;
+
+          if (transaction.matchedInvoice?.fileUrl) {
+            try {
+              const { data: fileData, error } = await supabase.storage
+                .from("documents")
+                .download(transaction.matchedInvoice.fileUrl);
+
+              if (!error && fileData) {
+                const arrayBuffer = await fileData.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+                let binary = "";
+                bytes.forEach((b) => (binary += String.fromCharCode(b)));
+                fileBase64 = btoa(binary);
+                fileMimeType = fileData.type;
+              }
+            } catch (e) {
+              console.error("Error downloading file:", e);
+            }
+          }
+
+          return {
+            transactionId: transaction.id,
+            date: transaction.date,
+            description: transaction.description,
+            amount: transaction.amount,
+            transactionType: transaction.transactionType,
+            bank: transaction.bankStatement?.bank || null,
+            bankType: transaction.bankStatement?.bankType || null,
+            invoice: transaction.matchedInvoice ? {
+              id: transaction.matchedInvoice.id,
+              fileName: transaction.matchedInvoice.fileName,
+              issuer: transaction.matchedInvoice.issuer,
+              amount: transaction.matchedInvoice.amount,
+              date: transaction.matchedInvoice.date,
+              type: transaction.matchedInvoice.type,
+              fileBase64,
+              fileMimeType,
+            } : null,
+          };
+        })
+      );
+
+      const response = await fetch(
+        "https://vantagepartners-u62899.vm.elestio.app/webhook-test/8b92590c-86fe-497e-9a31-784a740b0931",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            exportDate: new Date().toISOString(),
+            transactionCount: exportData.length,
+            transactions: exportData,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`);
+      }
+
+      toast.success(`${exportData.length} Transaktionen erfolgreich gesendet`);
+    } catch (error) {
+      console.error("Send to n8n error:", error);
+      toast.error("Fehler beim Senden an n8n");
+    } finally {
+      setIsSending(false);
+    }
+  };
 
   const handleDownload = async (fileUrl: string | null, fileName: string) => {
     if (!fileUrl) {
@@ -66,13 +151,32 @@ export default function ExportPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-3xl font-bold tracking-tight">
-          Steuerberater Export
-        </h1>
-        <p className="mt-2 text-muted-foreground">
-          Alle zugeordneten Transaktionen mit ihren Rechnungen
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="font-heading text-3xl font-bold tracking-tight">
+            Steuerberater Export
+          </h1>
+          <p className="mt-2 text-muted-foreground">
+            Alle zugeordneten Transaktionen mit ihren Rechnungen
+          </p>
+        </div>
+        <Button
+          onClick={handleSendToN8n}
+          disabled={isSending || isLoading || !transactions?.length}
+          className="gap-2"
+        >
+          {isSending ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Wird gesendet...
+            </>
+          ) : (
+            <>
+              <Send className="h-4 w-4" />
+              An Steuerberater senden
+            </>
+          )}
+        </Button>
       </div>
 
       <Card>
