@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UploadZone } from "@/components/upload/UploadZone";
 import { GoogleDrivePicker } from "@/components/upload/GoogleDrivePicker";
-import { DocumentCard } from "@/components/documents/DocumentCard";
+import { InvoiceReviewCard } from "@/components/upload/InvoiceReviewCard";
 import { StatementCard } from "@/components/documents/StatementCard";
 import { FileText, Building, Loader2, Sparkles, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -361,14 +361,15 @@ export default function UploadPage() {
                 Erkannte Rechnungen ({processedInvoices.length})
               </h3>
               <p className="text-sm text-muted-foreground">
-                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Bestätigen" um sie zu speichern.
+                Überprüfen Sie die extrahierten Daten anhand der Dokumentvorschau und klicken Sie auf "Bestätigen" um sie zu speichern.
               </p>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="space-y-4">
                 {processedInvoices.map((invoice, index) => (
-                  <DocumentCard
+                  <InvoiceReviewCard
                     key={invoice.id}
-                    document={invoice}
+                    invoice={invoice}
                     onSave={handleInvoiceSave}
+                    onDiscard={(id) => setProcessedInvoices(prev => prev.filter(inv => inv.id !== id))}
                     index={index}
                   />
                 ))}
