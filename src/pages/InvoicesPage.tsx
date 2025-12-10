@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { DocumentCard } from "@/components/documents/DocumentCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
+import { GroupedListView } from "@/components/documents/GroupedListView";
 import { groupByYearAndMonth, InvoiceData } from "@/types/documents";
 import { useInvoices, useUpdateInvoice } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
@@ -189,72 +190,58 @@ export default function InvoicesPage() {
           emptyMessage="Keine Rechnungen gefunden. Laden Sie Dokumente unter 'Upload' hoch."
         />
       ) : viewMode === "list" ? (
-        <div className="glass-card overflow-hidden animate-fade-in">
-          {filteredInvoices.length === 0 ? (
-            <div className="flex flex-col items-center justify-center p-12 text-center">
-              <FileText className="h-12 w-12 text-muted-foreground/50" />
-              <p className="mt-4 text-lg font-medium">Keine Rechnungen gefunden</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Laden Sie Dokumente unter 'Upload' hoch.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-border bg-muted/50">
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Datum</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Aussteller</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Dateiname</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Typ</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Betrag</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Aktion</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredInvoices.map((invoice) => (
-                    <tr 
-                      key={invoice.id} 
-                      className="border-b border-border/50 transition-colors hover:bg-muted/30"
-                    >
-                      <td className="px-4 py-3 text-sm">
-                        {format(new Date(invoice.date), "dd.MM.yyyy", { locale: de })}
-                      </td>
-                      <td className="px-4 py-3 text-sm font-medium">{invoice.issuer}</td>
-                      <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px] truncate">
-                        {invoice.fileName}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge 
-                          variant={invoice.type === "incoming" ? "default" : "secondary"}
-                          className="text-xs"
-                        >
-                          {invoice.type === "incoming" ? "Eingang" : "Ausgang"}
-                        </Badge>
-                      </td>
-                      <td className={cn(
-                        "px-4 py-3 text-right text-sm font-semibold",
-                        invoice.type === "incoming" ? "text-success" : "text-foreground"
-                      )}>
-                        {invoice.type === "incoming" ? "+" : "-"}{formatAmount(invoice.amount)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleView(invoice.fileUrl)}
-                          disabled={!invoice.fileUrl}
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+        <GroupedListView
+          data={groupedInvoices}
+          emptyMessage="Laden Sie Dokumente unter 'Upload' hoch."
+          renderHeader={() => (
+            <>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Datum</th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Aussteller</th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Dateiname</th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Typ</th>
+              <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Betrag</th>
+              <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Aktion</th>
+            </>
           )}
-        </div>
+          renderRow={(invoice) => (
+            <tr 
+              key={invoice.id} 
+              className="border-b border-border/50 transition-colors hover:bg-muted/30"
+            >
+              <td className="px-4 py-3 text-sm">
+                {format(new Date(invoice.date), "dd.MM.yyyy", { locale: de })}
+              </td>
+              <td className="px-4 py-3 text-sm font-medium">{invoice.issuer}</td>
+              <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px] truncate">
+                {invoice.fileName}
+              </td>
+              <td className="px-4 py-3">
+                <Badge 
+                  variant={invoice.type === "incoming" ? "default" : "secondary"}
+                  className="text-xs"
+                >
+                  {invoice.type === "incoming" ? "Eingang" : "Ausgang"}
+                </Badge>
+              </td>
+              <td className={cn(
+                "px-4 py-3 text-right text-sm font-semibold",
+                invoice.type === "incoming" ? "text-success" : "text-foreground"
+              )}>
+                {invoice.type === "incoming" ? "+" : "-"}{formatAmount(invoice.amount)}
+              </td>
+              <td className="px-4 py-3 text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => handleView(invoice.fileUrl)}
+                  disabled={!invoice.fileUrl}
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </Button>
+              </td>
+            </tr>
+          )}
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredInvoices.map((invoice, index) => (
