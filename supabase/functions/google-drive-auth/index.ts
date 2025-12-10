@@ -19,19 +19,33 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    // Check if Google credentials are configured
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      console.error("Missing Google OAuth credentials");
+      throw new Error("Google OAuth not configured");
+    }
+
     // Get user from auth header
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
+      console.error("No authorization header provided");
       throw new Error("No authorization header");
     }
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser(
-      authHeader.replace("Bearer ", "")
-    );
+    const token = authHeader.replace("Bearer ", "");
+    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
 
-    if (userError || !user) {
-      throw new Error("Unauthorized");
+    if (userError) {
+      console.error("Auth error:", userError.message);
+      throw new Error("Authentication failed: " + userError.message);
     }
+    
+    if (!user) {
+      console.error("No user found for token");
+      throw new Error("User not found");
+    }
+
+    console.log("Authenticated user:", user.id);
 
     const { action, code, redirectUri } = await req.json();
 
