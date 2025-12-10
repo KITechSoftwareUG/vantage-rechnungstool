@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,11 +9,95 @@ import { FileText, Mail, Lock, Loader2 } from "lucide-react";
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
+  const [isSettingPassword, setIsSettingPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    // Check if user came from an invite link (they'll have a session but may need to set password)
+    const checkInviteFlow = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        // Check for invite token in URL (type=invite or type=signup)
+        const type = searchParams.get("type");
+        const tokenHash = searchParams.get("token_hash");
+        
+        if (tokenHash && (type === "invite" || type === "signup")) {
+          // User clicked invite link - verify the token
+          const { data, error } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: type === "invite" ? "invite" : "signup",
+          });
+          
+          if (!error && data.session) {
+            // User is now authenticated, prompt for password
+            setIsSettingPassword(true);
+            setEmail(data.session.user.email || "");
+          }
+        } else if (session) {
+          // User is already logged in, check if they have a password
+          // If they came from an invite and are authenticated, redirect to home
+          navigate("/");
+        }
+      } catch (error) {
+        console.error("Error checking session:", error);
+      } finally {
+        setIsCheckingSession(false);
+      }
+    };
+
+    checkInviteFlow();
+  }, [navigate, searchParams]);
+
+  const handleSetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (password !== confirmPassword) {
+      toast({
+        title: "Fehler",
+        description: "Die Passwörter stimmen nicht überein",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (password.length < 6) {
+      toast({
+        title: "Fehler",
+        description: "Das Passwort muss mindestens 6 Zeichen lang sein",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: password,
+      });
+
+      if (error) throw error;
+
+      toast({ title: "Passwort erfolgreich gesetzt" });
+      navigate("/");
+    } catch (error: any) {
+      toast({
+        title: "Fehler",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,11 +116,14 @@ export default function AuthPage() {
         const { error } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth`,
+          },
         });
         if (error) throw error;
         toast({
           title: "Konto erstellt",
-          description: "Sie können sich jetzt anmelden",
+          description: "Bitte prüfen Sie Ihre E-Mails zur Bestätigung",
         });
         setIsLogin(true);
       }
@@ -50,6 +137,14 @@ export default function AuthPage() {
       setIsLoading(false);
     }
   };
+
+  if (isCheckingSession) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -70,66 +165,135 @@ export default function AuthPage() {
               DocVault
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {isLogin ? "Melden Sie sich an" : "Erstellen Sie ein Konto"}
+              {isSettingPassword
+                ? "Bitte vergeben Sie ein Passwort"
+                : isLogin
+                ? "Melden Sie sich an"
+                : "Erstellen Sie ein Konto"}
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">E-Mail</Label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="ihre@email.de"
-                  className="pl-9"
-                  required
-                />
+          {isSettingPassword ? (
+            <form onSubmit={handleSetPassword} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">E-Mail</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    disabled
+                    className="pl-9 bg-muted"
+                  />
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="password">Passwort</Label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="pl-9"
-                  minLength={6}
-                  required
-                />
+              <div className="space-y-2">
+                <Label htmlFor="password">Neues Passwort</Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="pl-9"
+                    minLength={6}
+                    required
+                    autoFocus
+                  />
+                </div>
               </div>
-            </div>
 
-            <Button
-              type="submit"
-              variant="gradient"
-              className="w-full"
-              disabled={isLoading}
-            >
-              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isLogin ? "Anmelden" : "Registrieren"}
-            </Button>
-          </form>
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword">Passwort bestätigen</Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="confirmPassword"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="pl-9"
+                    minLength={6}
+                    required
+                  />
+                </div>
+              </div>
 
-          <div className="mt-6 text-center">
-            <button
-              type="button"
-              onClick={() => setIsLogin(!isLogin)}
-              className="text-sm text-muted-foreground hover:text-primary"
-            >
-              {isLogin
-                ? "Noch kein Konto? Jetzt registrieren"
-                : "Bereits ein Konto? Jetzt anmelden"}
-            </button>
-          </div>
+              <Button
+                type="submit"
+                variant="gradient"
+                className="w-full"
+                disabled={isLoading}
+              >
+                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Passwort speichern
+              </Button>
+            </form>
+          ) : (
+            <>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="email">E-Mail</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="ihre@email.de"
+                      className="pl-9"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="password">Passwort</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="pl-9"
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <Button
+                  type="submit"
+                  variant="gradient"
+                  className="w-full"
+                  disabled={isLoading}
+                >
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {isLogin ? "Anmelden" : "Registrieren"}
+                </Button>
+              </form>
+
+              <div className="mt-6 text-center">
+                <button
+                  type="button"
+                  onClick={() => setIsLogin(!isLogin)}
+                  className="text-sm text-muted-foreground hover:text-primary"
+                >
+                  {isLogin
+                    ? "Noch kein Konto? Jetzt registrieren"
+                    : "Bereits ein Konto? Jetzt anmelden"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
