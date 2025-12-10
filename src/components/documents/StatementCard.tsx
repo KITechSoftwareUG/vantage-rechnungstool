@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { StatementData } from "@/types/documents";
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 
 interface StatementCardProps {
   statement: StatementData;
@@ -27,6 +28,7 @@ export function StatementCard({
   index = 0 
 }: StatementCardProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [editData, setEditData] = useState(statement);
 
   const handleSave = () => {
@@ -130,7 +132,7 @@ export function StatementCard({
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => onDelete(statement.id)}
+              onClick={() => setShowDeleteDialog(true)}
               className="h-8 w-8 text-destructive hover:text-destructive"
               title="Löschen"
             >
@@ -138,6 +140,17 @@ export function StatementCard({
             </Button>
           )}
         </div>
+        
+        <DeleteConfirmationDialog
+          open={showDeleteDialog}
+          onOpenChange={setShowDeleteDialog}
+          onConfirm={() => {
+            onDelete?.(statement.id);
+            setShowDeleteDialog(false);
+          }}
+          title="Kontoauszug löschen"
+          description={`Möchten Sie den Kontoauszug "${statement.fileName}" wirklich löschen? Alle zugehörigen Transaktionen werden ebenfalls gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.`}
+        />
       </div>
 
       {/* Content */}

@@ -11,6 +11,7 @@ import { GroupedListView } from "@/components/documents/GroupedListView";
 import { groupByYearAndMonth, InvoiceData } from "@/types/documents";
 import { useInvoices, useUpdateInvoice, useDeleteInvoice } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 
 type ViewMode = "grid" | "timeline" | "list";
 
@@ -18,6 +19,8 @@ export default function InvoicesPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "incoming" | "outgoing">("all");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [invoiceToDelete, setInvoiceToDelete] = useState<InvoiceData | null>(null);
 
   const { data: invoices = [], isLoading } = useInvoices();
   const updateInvoice = useUpdateInvoice();
@@ -36,9 +39,16 @@ export default function InvoicesPage() {
     updateInvoice.mutate(data);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm("Möchten Sie diese Rechnung wirklich löschen?")) {
-      deleteInvoice.mutate(id);
+  const handleDelete = (invoice: InvoiceData) => {
+    setInvoiceToDelete(invoice);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (invoiceToDelete) {
+      deleteInvoice.mutate(invoiceToDelete.id);
+      setDeleteDialogOpen(false);
+      setInvoiceToDelete(null);
     }
   };
 
@@ -191,7 +201,10 @@ export default function InvoicesPage() {
               key={invoice.id}
               document={invoice}
               onSave={handleSave}
-              onDelete={handleDelete}
+              onDelete={(id) => {
+                const inv = invoices.find(i => i.id === id);
+                if (inv) handleDelete(inv);
+              }}
               index={index}
             />
           )}
@@ -253,7 +266,7 @@ export default function InvoicesPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => handleDelete(invoice.id)}
+                      onClick={() => handleDelete(invoice)}
                       className="text-destructive hover:text-destructive"
                       title="Löschen"
                     >
@@ -272,12 +285,24 @@ export default function InvoicesPage() {
               key={invoice.id}
               document={invoice}
               onSave={handleSave}
-              onDelete={handleDelete}
+              onDelete={(id) => {
+                const inv = invoices.find(i => i.id === id);
+                if (inv) handleDelete(inv);
+              }}
               index={index}
             />
           ))}
         </div>
       )}
+
+      <DeleteConfirmationDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={confirmDelete}
+        title="Rechnung löschen"
+        description={invoiceToDelete ? `Möchten Sie die Rechnung "${invoiceToDelete.fileName}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.` : ""}
+        isDeleting={deleteInvoice.isPending}
+      />
     </div>
   );
 }

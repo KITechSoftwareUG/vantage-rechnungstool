@@ -59,9 +59,7 @@ export default function StatementsPage() {
   };
 
   const handleDelete = (id: string) => {
-    if (confirm("Möchten Sie diesen Kontoauszug wirklich löschen? Alle zugehörigen Transaktionen werden ebenfalls gelöscht.")) {
-      deleteStatement.mutate(id);
-    }
+    deleteStatement.mutate(id);
   };
 
   const handleReprocess = async (statement: StatementData) => {
