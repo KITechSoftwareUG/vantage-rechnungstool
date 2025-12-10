@@ -5,8 +5,7 @@ import { Input } from "@/components/ui/input";
 import { StatementCard } from "@/components/documents/StatementCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
 import { groupByYearAndMonth, StatementData } from "@/types/documents";
-import { useBankStatements, useUpdateBankStatement, createBankTransactions, checkDuplicateTransactions } from "@/hooks/useDocuments";
-import { cn } from "@/lib/utils";
+import { useBankStatements, useUpdateBankStatement, useDeleteBankStatement, createBankTransactions, checkDuplicateTransactions } from "@/hooks/useDocuments";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,6 +23,7 @@ export default function StatementsPage() {
 
   const { data: statements = [], isLoading } = useBankStatements();
   const updateStatement = useUpdateBankStatement();
+  const deleteStatement = useDeleteBankStatement();
 
   // Fetch transaction counts for each statement
   const { data: transactionCounts = {} } = useQuery({
@@ -56,6 +56,12 @@ export default function StatementsPage() {
 
   const handleSave = (data: typeof statements[0]) => {
     updateStatement.mutate(data);
+  };
+
+  const handleDelete = (id: string) => {
+    if (confirm("Möchten Sie diesen Kontoauszug wirklich löschen? Alle zugehörigen Transaktionen werden ebenfalls gelöscht.")) {
+      deleteStatement.mutate(id);
+    }
   };
 
   const handleReprocess = async (statement: StatementData) => {
@@ -197,6 +203,7 @@ export default function StatementsPage() {
               key={statement.id}
               statement={statement}
               onSave={handleSave}
+              onDelete={handleDelete}
               onReprocess={handleReprocess}
               isReprocessing={reprocessingId === statement.id}
               transactionCount={transactionCounts[statement.id] || 0}
@@ -212,6 +219,7 @@ export default function StatementsPage() {
               key={statement.id}
               statement={statement}
               onSave={handleSave}
+              onDelete={handleDelete}
               onReprocess={handleReprocess}
               isReprocessing={reprocessingId === statement.id}
               transactionCount={transactionCounts[statement.id] || 0}

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, ExternalLink, FileText } from "lucide-react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { DocumentCard } from "@/components/documents/DocumentCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
 import { GroupedListView } from "@/components/documents/GroupedListView";
 import { groupByYearAndMonth, InvoiceData } from "@/types/documents";
-import { useInvoices, useUpdateInvoice } from "@/hooks/useDocuments";
+import { useInvoices, useUpdateInvoice, useDeleteInvoice } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -22,6 +22,7 @@ export default function InvoicesPage() {
 
   const { data: invoices = [], isLoading } = useInvoices();
   const updateInvoice = useUpdateInvoice();
+  const deleteInvoice = useDeleteInvoice();
 
   const filteredInvoices = invoices.filter(inv => {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -34,6 +35,12 @@ export default function InvoicesPage() {
 
   const handleSave = (data: typeof invoices[0]) => {
     updateInvoice.mutate(data);
+  };
+
+  const handleDelete = (id: string) => {
+    if (confirm("Möchten Sie diese Rechnung wirklich löschen?")) {
+      deleteInvoice.mutate(id);
+    }
   };
 
   const handleView = (fileUrl: string | undefined) => {
@@ -49,12 +56,13 @@ export default function InvoicesPage() {
     }).format(amount);
   };
 
-  // Calculate totals
+  // Eingang = ich erhalte eine Rechnung und bezahle (Ausgabe)
+  // Ausgang = ich stelle eine Rechnung und erhalte Geld (Einnahme)
   const totalIncoming = filteredInvoices
-    .filter(inv => inv.type === "incoming")
+    .filter(inv => inv.type === "outgoing")
     .reduce((sum, inv) => sum + inv.amount, 0);
   const totalOutgoing = filteredInvoices
-    .filter(inv => inv.type === "outgoing")
+    .filter(inv => inv.type === "incoming")
     .reduce((sum, inv) => sum + inv.amount, 0);
 
   if (isLoading) {
@@ -110,13 +118,13 @@ export default function InvoicesPage() {
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-3 animate-fade-in" style={{ animationDelay: "0.1s" }}>
         <div className="glass-card p-4">
-          <p className="text-sm text-muted-foreground">Gesamt Einnahmen</p>
+          <p className="text-sm text-muted-foreground">Gesamt Einnahmen (Ausgang)</p>
           <p className="mt-1 text-2xl font-bold text-success">
             +{totalIncoming.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
           </p>
         </div>
         <div className="glass-card p-4">
-          <p className="text-sm text-muted-foreground">Gesamt Ausgaben</p>
+          <p className="text-sm text-muted-foreground">Gesamt Ausgaben (Eingang)</p>
           <p className="mt-1 text-2xl font-bold text-foreground">
             -{totalOutgoing.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
           </p>
@@ -160,7 +168,7 @@ export default function InvoicesPage() {
               className="gap-1"
             >
               <ArrowDownLeft className="h-3 w-3" />
-              Eingang
+              Eingang (Ausgaben)
             </Button>
             <Button
               variant={filterType === "outgoing" ? "default" : "ghost"}
@@ -169,7 +177,7 @@ export default function InvoicesPage() {
               className="gap-1"
             >
               <ArrowUpRight className="h-3 w-3" />
-              Ausgang
+              Ausgang (Einnahmen)
             </Button>
           </div>
         </div>
@@ -184,6 +192,7 @@ export default function InvoicesPage() {
               key={invoice.id}
               document={invoice}
               onSave={handleSave}
+              onDelete={handleDelete}
               index={index}
             />
           )}
@@ -200,47 +209,62 @@ export default function InvoicesPage() {
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Dateiname</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Typ</th>
               <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Betrag</th>
-              <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Aktion</th>
+              <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Aktionen</th>
             </>
           )}
-          renderRow={(invoice) => (
-            <tr 
-              key={invoice.id} 
-              className="border-b border-border/50 transition-colors hover:bg-muted/30"
-            >
-              <td className="px-4 py-3 text-sm">
-                {format(new Date(invoice.date), "dd.MM.yyyy", { locale: de })}
-              </td>
-              <td className="px-4 py-3 text-sm font-medium">{invoice.issuer}</td>
-              <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px] truncate">
-                {invoice.fileName}
-              </td>
-              <td className="px-4 py-3">
-                <Badge 
-                  variant={invoice.type === "incoming" ? "default" : "secondary"}
-                  className="text-xs"
-                >
-                  {invoice.type === "incoming" ? "Eingang" : "Ausgang"}
-                </Badge>
-              </td>
-              <td className={cn(
-                "px-4 py-3 text-right text-sm font-semibold",
-                invoice.type === "incoming" ? "text-success" : "text-foreground"
-              )}>
-                {invoice.type === "incoming" ? "+" : "-"}{formatAmount(invoice.amount)}
-              </td>
-              <td className="px-4 py-3 text-right">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => handleView(invoice.fileUrl)}
-                  disabled={!invoice.fileUrl}
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </Button>
-              </td>
-            </tr>
-          )}
+          renderRow={(invoice) => {
+            const isExpense = invoice.type === "incoming";
+            return (
+              <tr 
+                key={invoice.id} 
+                className="border-b border-border/50 transition-colors hover:bg-muted/30"
+              >
+                <td className="px-4 py-3 text-sm">
+                  {format(new Date(invoice.date), "dd.MM.yyyy", { locale: de })}
+                </td>
+                <td className="px-4 py-3 text-sm font-medium">{invoice.issuer}</td>
+                <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px] truncate">
+                  {invoice.fileName}
+                </td>
+                <td className="px-4 py-3">
+                  <Badge 
+                    variant={isExpense ? "secondary" : "default"}
+                    className="text-xs"
+                  >
+                    {isExpense ? "Eingang" : "Ausgang"}
+                  </Badge>
+                </td>
+                <td className={cn(
+                  "px-4 py-3 text-right text-sm font-semibold",
+                  isExpense ? "text-foreground" : "text-success"
+                )}>
+                  {isExpense ? "-" : "+"}{formatAmount(invoice.amount)}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleView(invoice.fileUrl)}
+                      disabled={!invoice.fileUrl}
+                      title="Anzeigen"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleDelete(invoice.id)}
+                      className="text-destructive hover:text-destructive"
+                      title="Löschen"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            );
+          }}
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -249,6 +273,7 @@ export default function InvoicesPage() {
               key={invoice.id}
               document={invoice}
               onSave={handleSave}
+              onDelete={handleDelete}
               index={index}
             />
           ))}

@@ -1,18 +1,20 @@
 import { useState } from "react";
-import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Eye, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
+import { supabase } from "@/integrations/supabase/client";
 
 interface DocumentCardProps {
   document: InvoiceData;
   onSave: (data: InvoiceData) => void;
+  onDelete?: (id: string) => void;
   index?: number;
 }
 
-export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps) {
+export function DocumentCard({ document, onSave, onDelete, index = 0 }: DocumentCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(document);
 
@@ -31,6 +33,12 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
     setIsEditing(false);
   };
 
+  const handleView = () => {
+    if (!document.fileUrl) return;
+    const { data } = supabase.storage.from("documents").getPublicUrl(document.fileUrl);
+    window.open(data.publicUrl, "_blank");
+  };
+
   const statusColors = {
     processing: "bg-warning/10 text-warning border-warning/20",
     ready: "bg-primary/10 text-primary border-primary/20",
@@ -42,6 +50,10 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
     ready: "Bereit",
     saved: "Gespeichert",
   };
+
+  // Eingang = ich erhalte eine Rechnung und bezahle (Ausgabe)
+  // Ausgang = ich stelle eine Rechnung und erhalte Geld (Einnahme)
+  const isExpense = document.type === "incoming";
 
   return (
     <div 
@@ -56,11 +68,11 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
         <div className="flex items-center gap-3">
           <div className={cn(
             "flex h-10 w-10 items-center justify-center rounded-lg",
-            document.type === "incoming" 
-              ? "bg-success/10 text-success" 
-              : "bg-destructive/10 text-destructive"
+            isExpense
+              ? "bg-destructive/10 text-destructive" 
+              : "bg-success/10 text-success"
           )}>
-            {document.type === "incoming" ? (
+            {isExpense ? (
               <ArrowDownLeft className="h-5 w-5" />
             ) : (
               <ArrowUpRight className="h-5 w-5" />
@@ -76,16 +88,41 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
           </div>
         </div>
         
-        {!isEditing && document.status !== "processing" && document.status !== "saved" && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsEditing(true)}
-            className="h-8 w-8"
-          >
-            <Edit2 className="h-4 w-4" />
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {document.fileUrl && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleView}
+              className="h-8 w-8"
+              title="Anzeigen"
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+          )}
+          {!isEditing && document.status !== "processing" && document.status !== "saved" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsEditing(true)}
+              className="h-8 w-8"
+              title="Bearbeiten"
+            >
+              <Edit2 className="h-4 w-4" />
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onDelete(document.id)}
+              className="h-8 w-8 text-destructive hover:text-destructive"
+              title="Löschen"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Content */}
@@ -137,9 +174,9 @@ export function DocumentCard({ document, onSave, index = 0 }: DocumentCardProps)
           ) : (
             <span className={cn(
               "text-lg font-semibold",
-              document.type === "incoming" ? "text-success" : "text-foreground"
+              isExpense ? "text-foreground" : "text-success"
             )}>
-              {document.type === "incoming" ? "+" : "-"}
+              {isExpense ? "-" : "+"}
               {document.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
             </span>
           )}

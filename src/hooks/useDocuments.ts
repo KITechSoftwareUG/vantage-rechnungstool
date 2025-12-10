@@ -143,6 +143,53 @@ export function useDeleteInvoice() {
   });
 }
 
+export function useDeleteBankStatement() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      // First delete related transactions
+      await supabase.from("bank_transactions").delete().eq("bank_statement_id", id);
+      // Then delete the statement
+      const { error } = await supabase.from("bank_statements").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bank_statements"] });
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["transaction_counts"] });
+      toast({ title: "Kontoauszug gelöscht" });
+    },
+    onError: (error) => {
+      toast({
+        title: "Fehler beim Löschen",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+}
+
+// Check for duplicate invoice
+export async function checkDuplicateInvoice(
+  userId: string,
+  invoice: { date: string; issuer: string; amount: number }
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("invoices")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("date", invoice.date)
+    .eq("issuer", invoice.issuer)
+    .gte("amount", invoice.amount - 0.01)
+    .lte("amount", invoice.amount + 0.01)
+    .limit(1);
+
+  if (error) throw error;
+  return (data || []).length > 0;
+}
+
 // Bank Statements hooks
 export function useBankStatements() {
   const { user } = useAuth();

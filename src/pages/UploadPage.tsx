@@ -14,6 +14,7 @@ import {
   uploadDocument, 
   processDocumentOCR,
   checkDuplicateTransactions,
+  checkDuplicateInvoice,
   createBankTransactions 
 } from "@/hooks/useDocuments";
 import { useQueryClient } from "@tanstack/react-query";
@@ -202,6 +203,22 @@ export default function UploadPage() {
     if (!user) return;
     
     try {
+      // Check for duplicate
+      const isDuplicate = await checkDuplicateInvoice(user.id, {
+        date: data.date,
+        issuer: data.issuer,
+        amount: data.amount,
+      });
+
+      if (isDuplicate) {
+        toast({
+          title: "Duplikat erkannt",
+          description: `Eine Rechnung mit gleichem Datum, Aussteller und Betrag existiert bereits.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
       let fileUrl: string | undefined;
       
       if (data.file) {

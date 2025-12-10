@@ -1,15 +1,17 @@
 import { useState } from "react";
-import { Building, Calendar, CreditCard, Edit2, Check, X, RefreshCw, Loader2 } from "lucide-react";
+import { Building, Calendar, CreditCard, Edit2, Check, X, RefreshCw, Loader2, Eye, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { StatementData } from "@/types/documents";
+import { supabase } from "@/integrations/supabase/client";
 
 interface StatementCardProps {
   statement: StatementData;
   onSave: (data: StatementData) => void;
+  onDelete?: (id: string) => void;
   onReprocess?: (data: StatementData) => void;
   isReprocessing?: boolean;
   transactionCount?: number;
@@ -19,6 +21,7 @@ interface StatementCardProps {
 export function StatementCard({ 
   statement, 
   onSave, 
+  onDelete,
   onReprocess,
   isReprocessing = false,
   transactionCount,
@@ -40,6 +43,12 @@ export function StatementCard({
   const handleCancel = () => {
     setEditData(statement);
     setIsEditing(false);
+  };
+
+  const handleView = () => {
+    if (!statement.fileUrl) return;
+    const { data } = supabase.storage.from("documents").getPublicUrl(statement.fileUrl);
+    window.open(data.publicUrl, "_blank");
   };
 
   const statusColors = {
@@ -95,16 +104,41 @@ export function StatementCard({
           </div>
         </div>
         
-        {!isEditing && statement.status !== "processing" && statement.status !== "saved" && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsEditing(true)}
-            className="h-8 w-8"
-          >
-            <Edit2 className="h-4 w-4" />
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {statement.fileUrl && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleView}
+              className="h-8 w-8"
+              title="Anzeigen"
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+          )}
+          {!isEditing && statement.status !== "processing" && statement.status !== "saved" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsEditing(true)}
+              className="h-8 w-8"
+              title="Bearbeiten"
+            >
+              <Edit2 className="h-4 w-4" />
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onDelete(statement.id)}
+              className="h-8 w-8 text-destructive hover:text-destructive"
+              title="Löschen"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Content */}
