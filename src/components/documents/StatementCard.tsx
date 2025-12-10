@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { StatementData } from "@/types/documents";
-import { supabase } from "@/integrations/supabase/client";
 
 interface StatementCardProps {
   statement: StatementData;
@@ -47,8 +46,8 @@ export function StatementCard({
 
   const handleView = () => {
     if (!statement.fileUrl) return;
-    const { data } = supabase.storage.from("documents").getPublicUrl(statement.fileUrl);
-    window.open(data.publicUrl, "_blank");
+    // fileUrl is already a full URL, open directly
+    window.open(statement.fileUrl, "_blank");
   };
 
   const statusColors = {

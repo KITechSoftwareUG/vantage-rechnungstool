@@ -11,7 +11,6 @@ import { GroupedListView } from "@/components/documents/GroupedListView";
 import { groupByYearAndMonth, InvoiceData } from "@/types/documents";
 import { useInvoices, useUpdateInvoice, useDeleteInvoice } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
-import { supabase } from "@/integrations/supabase/client";
 
 type ViewMode = "grid" | "timeline" | "list";
 
@@ -45,8 +44,8 @@ export default function InvoicesPage() {
 
   const handleView = (fileUrl: string | undefined) => {
     if (!fileUrl) return;
-    const { data } = supabase.storage.from("documents").getPublicUrl(fileUrl);
-    window.open(data.publicUrl, "_blank");
+    // fileUrl is already a full URL, open directly
+    window.open(fileUrl, "_blank");
   };
 
   const formatAmount = (amount: number) => {
