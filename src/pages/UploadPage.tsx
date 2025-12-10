@@ -4,7 +4,7 @@ import { UploadZone } from "@/components/upload/UploadZone";
 import { GoogleDrivePicker } from "@/components/upload/GoogleDrivePicker";
 import { InvoiceReviewCard } from "@/components/upload/InvoiceReviewCard";
 import { StatementCard } from "@/components/documents/StatementCard";
-import { FileText, Building, Loader2, Sparkles, AlertTriangle } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Building, CreditCard, Loader2, Sparkles, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { InvoiceData, StatementData, ExtractedTransaction } from "@/types/documents";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,19 +25,25 @@ interface ProcessedStatement extends StatementData {
   duplicateCount?: number;
 }
 
+type UploadCategory = "incoming" | "outgoing" | "volksbank" | "amex";
+
 export default function UploadPage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState("invoices");
+  const [activeTab, setActiveTab] = useState<UploadCategory>("incoming");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [processedInvoices, setProcessedInvoices] = useState<(InvoiceData & { file: File })[]>([]);
-  const [processedStatements, setProcessedStatements] = useState<ProcessedStatement[]>([]);
+  
+  // Separate state for each category
+  const [incomingInvoices, setIncomingInvoices] = useState<(InvoiceData & { file: File })[]>([]);
+  const [outgoingInvoices, setOutgoingInvoices] = useState<(InvoiceData & { file: File })[]>([]);
+  const [volksbankStatements, setVolksbankStatements] = useState<ProcessedStatement[]>([]);
+  const [amexStatements, setAmexStatements] = useState<ProcessedStatement[]>([]);
 
   const createInvoice = useCreateInvoice();
   const createBankStatement = useCreateBankStatement();
 
-  const handleInvoiceUpload = async (files: File[]) => {
+  const handleInvoiceUpload = async (files: File[], type: "incoming" | "outgoing") => {
     if (!user) return;
     setIsProcessing(true);
     
@@ -56,7 +62,7 @@ export default function UploadPage() {
             date: result.data.date || date.toISOString().split("T")[0],
             issuer: result.data.issuer || "Unbekannt",
             amount: result.data.amount || 0,
-            type: result.data.type || "outgoing",
+            type, // Use the type from the tab, not from OCR
             status: "ready",
             year: date.getFullYear(),
             month: date.getMonth() + 1,
@@ -71,7 +77,7 @@ export default function UploadPage() {
             date: date.toISOString().split("T")[0],
             issuer: "Unbekannt - Bitte manuell eingeben",
             amount: 0,
-            type: "outgoing",
+            type, // Use the type from the tab
             status: "ready",
             year: date.getFullYear(),
             month: date.getMonth() + 1,
@@ -80,7 +86,11 @@ export default function UploadPage() {
         }
       }
 
-      setProcessedInvoices(prev => [...prev, ...newInvoices]);
+      if (type === "incoming") {
+        setIncomingInvoices(prev => [...prev, ...newInvoices]);
+      } else {
+        setOutgoingInvoices(prev => [...prev, ...newInvoices]);
+      }
       
       toast({
         title: "OCR-Verarbeitung abgeschlossen",
@@ -97,7 +107,7 @@ export default function UploadPage() {
     }
   };
 
-  const handleStatementUpload = async (files: File[]) => {
+  const handleStatementUpload = async (files: File[], bankType: "volksbank" | "amex") => {
     if (!user) return;
     setIsProcessing(true);
     
@@ -124,20 +134,11 @@ export default function UploadPage() {
             newTransactions = duplicateCheck.newTransactions;
           }
           
-          // Determine bankType from bank name
-          let bankType: "volksbank" | "amex" = "volksbank";
-          const bankName = (summary.bank || "").toLowerCase();
-          if (bankName.includes("amex") || bankName.includes("american express")) {
-            bankType = "amex";
-          } else if (summary.bankType) {
-            bankType = summary.bankType;
-          }
-          
           newStatements.push({
             id: `temp-${Date.now()}-${Math.random()}`,
             fileName: file.name,
-            bank: summary.bank || "Unbekannt",
-            bankType,
+            bank: summary.bank || (bankType === "amex" ? "American Express" : "Volksbank"),
+            bankType, // Use the bankType from the tab
             accountNumber: summary.accountNumber || "Unbekannt",
             date: summary.date || date.toISOString().split("T")[0],
             openingBalance: summary.openingBalance || 0,
@@ -155,8 +156,8 @@ export default function UploadPage() {
           newStatements.push({
             id: `temp-${Date.now()}-${Math.random()}`,
             fileName: file.name,
-            bank: "Unbekannt - Bitte manuell eingeben",
-            bankType: "volksbank",
+            bank: bankType === "amex" ? "American Express" : "Volksbank",
+            bankType,
             accountNumber: "Unbekannt",
             date: date.toISOString().split("T")[0],
             openingBalance: 0,
@@ -171,7 +172,11 @@ export default function UploadPage() {
         }
       }
 
-      setProcessedStatements(prev => [...prev, ...newStatements]);
+      if (bankType === "volksbank") {
+        setVolksbankStatements(prev => [...prev, ...newStatements]);
+      } else {
+        setAmexStatements(prev => [...prev, ...newStatements]);
+      }
       
       const totalTransactions = newStatements.reduce((sum, s) => sum + (s.transactions?.length || 0), 0);
       const totalDuplicates = newStatements.reduce((sum, s) => sum + (s.duplicateCount || 0), 0);
@@ -199,7 +204,7 @@ export default function UploadPage() {
     }
   };
 
-  const handleInvoiceSave = async (data: InvoiceData & { file?: File }) => {
+  const handleInvoiceSave = async (data: InvoiceData & { file?: File }, type: "incoming" | "outgoing") => {
     if (!user) return;
     
     try {
@@ -237,7 +242,13 @@ export default function UploadPage() {
         status: "saved",
       });
 
-      setProcessedInvoices(prev => prev.filter(inv => inv.id !== data.id));
+      if (type === "incoming") {
+        setIncomingInvoices(prev => prev.filter(inv => inv.id !== data.id));
+      } else {
+        setOutgoingInvoices(prev => prev.filter(inv => inv.id !== data.id));
+      }
+      
+      toast({ title: "Rechnung gespeichert" });
     } catch (error: any) {
       toast({
         title: "Fehler beim Speichern",
@@ -247,7 +258,7 @@ export default function UploadPage() {
     }
   };
 
-  const handleStatementSave = async (data: StatementData & { file?: File; transactions?: ExtractedTransaction[] }) => {
+  const handleStatementSave = async (data: StatementData & { file?: File; transactions?: ExtractedTransaction[] }, bankType: "volksbank" | "amex") => {
     if (!user) return;
     
     try {
@@ -287,7 +298,11 @@ export default function UploadPage() {
       // Invalidate transactions query
       queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
 
-      setProcessedStatements(prev => prev.filter(stmt => stmt.id !== data.id));
+      if (bankType === "volksbank") {
+        setVolksbankStatements(prev => prev.filter(stmt => stmt.id !== data.id));
+      } else {
+        setAmexStatements(prev => prev.filter(stmt => stmt.id !== data.id));
+      }
     } catch (error: any) {
       toast({
         title: "Fehler beim Speichern",
@@ -297,6 +312,144 @@ export default function UploadPage() {
     }
   };
 
+  const renderInvoiceSection = (
+    invoices: (InvoiceData & { file: File })[],
+    type: "incoming" | "outgoing",
+    setInvoices: React.Dispatch<React.SetStateAction<(InvoiceData & { file: File })[]>>
+  ) => (
+    <>
+      <div className="glass-card p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" />
+            <h2 className="font-heading text-lg font-semibold text-foreground">
+              {type === "incoming" ? "Eingangsrechnungen" : "Ausgangsrechnungen"} hochladen
+            </h2>
+          </div>
+          <GoogleDrivePicker 
+            onFilesSelected={(files) => handleInvoiceUpload(files, type)}
+            acceptedTypes=".pdf,.png,.jpg,.jpeg"
+          />
+        </div>
+        <p className="mb-4 text-sm text-muted-foreground">
+          {type === "incoming" 
+            ? "Rechnungen die Sie erhalten haben und bezahlen müssen (Ausgaben)"
+            : "Rechnungen die Sie gestellt haben und bezahlt werden (Einnahmen)"
+          }
+        </p>
+        <UploadZone 
+          onFilesSelected={(files) => handleInvoiceUpload(files, type)}
+          acceptedTypes=".pdf,.png,.jpg,.jpeg"
+        />
+      </div>
+
+      {isProcessing && activeTab === type && (
+        <div className="glass-card flex items-center justify-center gap-3 p-8">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <span className="text-foreground">Dokumente werden analysiert...</span>
+        </div>
+      )}
+
+      {invoices.length > 0 && (
+        <div className="space-y-4">
+          <h3 className="font-heading text-lg font-semibold text-foreground">
+            Erkannte {type === "incoming" ? "Eingangsrechnungen" : "Ausgangsrechnungen"} ({invoices.length})
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Überprüfen Sie die extrahierten Daten anhand der Dokumentvorschau und klicken Sie auf "Bestätigen" um sie zu speichern.
+          </p>
+          <div className="space-y-4">
+            {invoices.map((invoice, index) => (
+              <InvoiceReviewCard
+                key={invoice.id}
+                invoice={invoice}
+                onSave={(data) => handleInvoiceSave(data, type)}
+                onDiscard={(id) => setInvoices(prev => prev.filter(inv => inv.id !== id))}
+                index={index}
+                showTypeSelector={false}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  const renderStatementSection = (
+    statements: ProcessedStatement[],
+    bankType: "volksbank" | "amex",
+    setStatements: React.Dispatch<React.SetStateAction<ProcessedStatement[]>>
+  ) => (
+    <>
+      <div className="glass-card p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" />
+            <h2 className="font-heading text-lg font-semibold text-foreground">
+              {bankType === "volksbank" ? "Volksbank" : "American Express"} Kontoauszüge
+            </h2>
+          </div>
+          <GoogleDrivePicker 
+            onFilesSelected={(files) => handleStatementUpload(files, bankType)}
+            acceptedTypes=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv"
+          />
+        </div>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Transaktionen werden automatisch zeilenweise extrahiert und auf Duplikate geprüft.
+        </p>
+        <UploadZone 
+          onFilesSelected={(files) => handleStatementUpload(files, bankType)}
+          acceptedTypes=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv"
+        />
+      </div>
+
+      {isProcessing && activeTab === bankType && (
+        <div className="glass-card flex items-center justify-center gap-3 p-8">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <span className="text-foreground">Kontoauszüge werden analysiert und Duplikate geprüft...</span>
+        </div>
+      )}
+
+      {statements.length > 0 && (
+        <div className="space-y-4">
+          <h3 className="font-heading text-lg font-semibold text-foreground">
+            Erkannte Kontoauszüge ({statements.length})
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Überprüfen Sie die extrahierten Daten und klicken Sie auf "Bestätigen" um sie zu speichern.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {statements.map((statement, index) => (
+              <div key={statement.id} className="space-y-2">
+                <StatementCard
+                  statement={statement}
+                  onSave={(data) => handleStatementSave(data, bankType)}
+                  onDelete={(id) => setStatements(prev => prev.filter(s => s.id !== id))}
+                  index={index}
+                />
+                {/* Transaction info */}
+                <div className="glass-card p-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Transaktionen:</span>
+                    <span className="font-medium text-foreground">
+                      {statement.transactions?.length || 0} neu
+                    </span>
+                  </div>
+                  {(statement.duplicateCount || 0) > 0 && (
+                    <div className="mt-1 flex items-center gap-1 text-amber-500">
+                      <AlertTriangle className="h-3 w-3" />
+                      <span className="text-xs">{statement.duplicateCount} Duplikate übersprungen</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -305,145 +458,57 @@ export default function UploadPage() {
           Dokumente hochladen
         </h1>
         <p className="mt-1 text-muted-foreground">
-          Laden Sie Rechnungen oder Kontoauszüge hoch für automatische OCR-Erkennung
+          Wählen Sie die Kategorie und laden Sie Ihre Dokumente hoch
         </p>
       </div>
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="animate-fade-in">
-        <TabsList className="glass-card h-auto p-1">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as UploadCategory)} className="animate-fade-in">
+        <TabsList className="glass-card h-auto p-1 flex-wrap">
           <TabsTrigger 
-            value="invoices" 
+            value="incoming" 
             className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
           >
-            <FileText className="h-4 w-4" />
-            Rechnungen
+            <ArrowDownLeft className="h-4 w-4" />
+            Eingangsrechnungen
           </TabsTrigger>
           <TabsTrigger 
-            value="statements"
+            value="outgoing"
+            className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+          >
+            <ArrowUpRight className="h-4 w-4" />
+            Ausgangsrechnungen
+          </TabsTrigger>
+          <TabsTrigger 
+            value="volksbank"
             className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
           >
             <Building className="h-4 w-4" />
-            Kontoauszüge
+            Volksbank
+          </TabsTrigger>
+          <TabsTrigger 
+            value="amex"
+            className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+          >
+            <CreditCard className="h-4 w-4" />
+            American Express
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="invoices" className="mt-6 space-y-6">
-          <div className="glass-card p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-primary" />
-                <h2 className="font-heading text-lg font-semibold text-foreground">
-                  KI-gestützte Rechnungserkennung
-                </h2>
-              </div>
-              <GoogleDrivePicker 
-                onFilesSelected={handleInvoiceUpload}
-                acceptedTypes=".pdf,.png,.jpg,.jpeg"
-              />
-            </div>
-            <UploadZone 
-              onFilesSelected={handleInvoiceUpload}
-              acceptedTypes=".pdf,.png,.jpg,.jpeg"
-            />
-          </div>
-
-          {isProcessing && (
-            <div className="glass-card flex items-center justify-center gap-3 p-8">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span className="text-foreground">Dokumente werden analysiert...</span>
-            </div>
-          )}
-
-          {processedInvoices.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="font-heading text-lg font-semibold text-foreground">
-                Erkannte Rechnungen ({processedInvoices.length})
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                Überprüfen Sie die extrahierten Daten anhand der Dokumentvorschau und klicken Sie auf "Bestätigen" um sie zu speichern.
-              </p>
-              <div className="space-y-4">
-                {processedInvoices.map((invoice, index) => (
-                  <InvoiceReviewCard
-                    key={invoice.id}
-                    invoice={invoice}
-                    onSave={handleInvoiceSave}
-                    onDiscard={(id) => setProcessedInvoices(prev => prev.filter(inv => inv.id !== id))}
-                    index={index}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
+        <TabsContent value="incoming" className="mt-6 space-y-6">
+          {renderInvoiceSection(incomingInvoices, "incoming", setIncomingInvoices)}
         </TabsContent>
 
-        <TabsContent value="statements" className="mt-6 space-y-6">
-          <div className="glass-card p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-primary" />
-                <h2 className="font-heading text-lg font-semibold text-foreground">
-                  KI-gestützte Kontoauszugerkennung
-                </h2>
-              </div>
-              <GoogleDrivePicker 
-                onFilesSelected={handleStatementUpload}
-                acceptedTypes=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv"
-              />
-            </div>
-            <p className="mb-4 text-sm text-muted-foreground">
-              Transaktionen werden automatisch zeilenweise extrahiert und auf Duplikate geprüft.
-            </p>
-            <UploadZone 
-              onFilesSelected={handleStatementUpload}
-              acceptedTypes=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv"
-            />
-          </div>
+        <TabsContent value="outgoing" className="mt-6 space-y-6">
+          {renderInvoiceSection(outgoingInvoices, "outgoing", setOutgoingInvoices)}
+        </TabsContent>
 
-          {isProcessing && (
-            <div className="glass-card flex items-center justify-center gap-3 p-8">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span className="text-foreground">Kontoauszüge werden analysiert und Duplikate geprüft...</span>
-            </div>
-          )}
+        <TabsContent value="volksbank" className="mt-6 space-y-6">
+          {renderStatementSection(volksbankStatements, "volksbank", setVolksbankStatements)}
+        </TabsContent>
 
-          {processedStatements.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="font-heading text-lg font-semibold text-foreground">
-                Erkannte Kontoauszüge ({processedStatements.length})
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                Überprüfen Sie die extrahierten Daten und klicken Sie auf "Bestätigen" um sie zu speichern.
-              </p>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {processedStatements.map((statement, index) => (
-                  <div key={statement.id} className="space-y-2">
-                    <StatementCard
-                      statement={statement}
-                      onSave={handleStatementSave}
-                      index={index}
-                    />
-                    {/* Transaction info */}
-                    <div className="glass-card p-3 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Transaktionen:</span>
-                        <span className="font-medium text-foreground">
-                          {statement.transactions?.length || 0} neu
-                        </span>
-                      </div>
-                      {(statement.duplicateCount || 0) > 0 && (
-                        <div className="mt-1 flex items-center gap-1 text-amber-500">
-                          <AlertTriangle className="h-3 w-3" />
-                          <span className="text-xs">{statement.duplicateCount} Duplikate übersprungen</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        <TabsContent value="amex" className="mt-6 space-y-6">
+          {renderStatementSection(amexStatements, "amex", setAmexStatements)}
         </TabsContent>
       </Tabs>
     </div>

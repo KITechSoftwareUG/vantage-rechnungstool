@@ -3,7 +3,6 @@ import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
 import { DocumentPreview } from "./DocumentPreview";
@@ -13,9 +12,10 @@ interface InvoiceReviewCardProps {
   onSave: (data: InvoiceData & { file: File }) => void;
   onDiscard: (id: string) => void;
   index?: number;
+  showTypeSelector?: boolean;
 }
 
-export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0 }: InvoiceReviewCardProps) {
+export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showTypeSelector = false }: InvoiceReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
 
@@ -101,33 +101,17 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0 }: Inv
 
           {/* Content */}
           <div className="flex-1 space-y-4">
-            {/* Type Selection */}
+            {/* Type Display (read-only since type is determined by tab) */}
             <div className="flex items-center gap-3">
               <div className="h-4 w-4 text-muted-foreground flex items-center justify-center">
                 {isExpense ? <ArrowDownLeft className="h-4 w-4" /> : <ArrowUpRight className="h-4 w-4" />}
               </div>
-              <Select
-                value={editData.type}
-                onValueChange={(value: "incoming" | "outgoing") => setEditData({ ...editData, type: value })}
-              >
-                <SelectTrigger className="h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="incoming">
-                    <span className="flex items-center gap-2">
-                      <ArrowDownLeft className="h-3 w-3" />
-                      Eingang (Ausgabe)
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="outgoing">
-                    <span className="flex items-center gap-2">
-                      <ArrowUpRight className="h-3 w-3" />
-                      Ausgang (Einnahme)
-                    </span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex-1 flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Typ</span>
+                <Badge variant={isExpense ? "secondary" : "default"}>
+                  {isExpense ? "Eingang (Ausgabe)" : "Ausgang (Einnahme)"}
+                </Badge>
+              </div>
             </div>
 
             {/* Date */}
