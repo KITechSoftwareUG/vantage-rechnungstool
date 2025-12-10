@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UploadZone } from "@/components/upload/UploadZone";
+import { GoogleDrivePicker } from "@/components/upload/GoogleDrivePicker";
 import { DocumentCard } from "@/components/documents/DocumentCard";
 import { StatementCard } from "@/components/documents/StatementCard";
 import { FileText, Building, Loader2, Sparkles, AlertTriangle } from "lucide-react";
@@ -312,11 +313,17 @@ export default function UploadPage() {
 
         <TabsContent value="invoices" className="mt-6 space-y-6">
           <div className="glass-card p-6">
-            <div className="mb-4 flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              <h2 className="font-heading text-lg font-semibold text-foreground">
-                KI-gestützte Rechnungserkennung
-              </h2>
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                <h2 className="font-heading text-lg font-semibold text-foreground">
+                  KI-gestützte Rechnungserkennung
+                </h2>
+              </div>
+              <GoogleDrivePicker 
+                onFilesSelected={handleInvoiceUpload}
+                acceptedTypes=".pdf,.png,.jpg,.jpeg"
+              />
             </div>
             <UploadZone 
               onFilesSelected={handleInvoiceUpload}
@@ -355,11 +362,17 @@ export default function UploadPage() {
 
         <TabsContent value="statements" className="mt-6 space-y-6">
           <div className="glass-card p-6">
-            <div className="mb-4 flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              <h2 className="font-heading text-lg font-semibold text-foreground">
-                KI-gestützte Kontoauszugerkennung
-              </h2>
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                <h2 className="font-heading text-lg font-semibold text-foreground">
+                  KI-gestützte Kontoauszugerkennung
+                </h2>
+              </div>
+              <GoogleDrivePicker 
+                onFilesSelected={handleStatementUpload}
+                acceptedTypes=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv"
+              />
             </div>
             <p className="mb-4 text-sm text-muted-foreground">
               Transaktionen werden automatisch zeilenweise extrahiert und auf Duplikate geprüft.
