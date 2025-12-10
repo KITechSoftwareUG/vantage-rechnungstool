@@ -1,8 +1,9 @@
 import { useState, useMemo } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useBankTransactions } from "@/hooks/useMatching";
+import { useInvoices } from "@/hooks/useDocuments";
 import { TransactionRow } from "@/components/matching/TransactionRow";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -14,6 +15,7 @@ export default function MatchingPage() {
 
   // Alle Transaktionen ohne Filter laden
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
+  const { data: invoices = [] } = useInvoices();
 
   // Filtern nach Suchbegriff
   const filteredTransactions = useMemo(() => {
@@ -38,6 +40,7 @@ export default function MatchingPage() {
   const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
   const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
   const confirmedCount = transactions.filter((t: any) => t.matchStatus === "confirmed").length;
+  const invoiceCount = invoices.length;
 
   const handleAutoMatch = async () => {
     setIsAutoMatching(true);
@@ -77,6 +80,13 @@ export default function MatchingPage() {
       <div className="flex flex-col gap-4 animate-fade-in sm:flex-row sm:items-center sm:justify-between">
         {/* Stats */}
         <div className="flex gap-4">
+          <div className="glass-card flex items-center gap-3 px-4 py-3">
+            <FileText className="h-5 w-5 text-info" />
+            <div>
+              <p className="text-2xl font-bold text-foreground">{invoiceCount}</p>
+              <p className="text-xs text-muted-foreground">Rechnungen</p>
+            </div>
+          </div>
           <div className="glass-card flex items-center gap-3 px-4 py-3">
             <AlertCircle className="h-5 w-5 text-warning" />
             <div>
