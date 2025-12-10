@@ -5,7 +5,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
-import { supabase } from "@/integrations/supabase/client";
 
 interface DocumentCardProps {
   document: InvoiceData;
@@ -35,8 +34,8 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
 
   const handleView = () => {
     if (!document.fileUrl) return;
-    const { data } = supabase.storage.from("documents").getPublicUrl(document.fileUrl);
-    window.open(data.publicUrl, "_blank");
+    // fileUrl is already a full URL, open directly
+    window.open(document.fileUrl, "_blank");
   };
 
   const statusColors = {

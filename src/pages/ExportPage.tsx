@@ -7,7 +7,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 export default function ExportPage() {
@@ -30,17 +29,16 @@ export default function ExportPage() {
 
           if (transaction.matchedInvoice?.fileUrl) {
             try {
-              const { data: fileData, error } = await supabase.storage
-                .from("documents")
-                .download(transaction.matchedInvoice.fileUrl);
-
-              if (!error && fileData) {
-                const arrayBuffer = await fileData.arrayBuffer();
+              // fileUrl is already a full URL, fetch it directly
+              const response = await fetch(transaction.matchedInvoice.fileUrl);
+              if (response.ok) {
+                const blob = await response.blob();
+                const arrayBuffer = await blob.arrayBuffer();
                 const bytes = new Uint8Array(arrayBuffer);
                 let binary = "";
                 bytes.forEach((b) => (binary += String.fromCharCode(b)));
                 fileBase64 = btoa(binary);
-                fileMimeType = fileData.type;
+                fileMimeType = blob.type;
               }
             } catch (e) {
               console.error("Error downloading file:", e);
@@ -104,13 +102,12 @@ export default function ExportPage() {
     }
 
     try {
-      const { data, error } = await supabase.storage
-        .from("documents")
-        .download(fileUrl);
-
-      if (error) throw error;
-
-      const url = URL.createObjectURL(data);
+      // fileUrl is already a full URL, fetch it directly
+      const response = await fetch(fileUrl);
+      if (!response.ok) throw new Error("Download failed");
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = fileName;
@@ -124,22 +121,13 @@ export default function ExportPage() {
     }
   };
 
-  const handleView = async (fileUrl: string | null) => {
+  const handleView = (fileUrl: string | null) => {
     if (!fileUrl) {
       toast.error("Keine Datei verfügbar");
       return;
     }
-
-    try {
-      const { data } = supabase.storage
-        .from("documents")
-        .getPublicUrl(fileUrl);
-
-      window.open(data.publicUrl, "_blank");
-    } catch (error) {
-      console.error("View error:", error);
-      toast.error("Fehler beim Öffnen");
-    }
+    // fileUrl is already a full URL, open directly
+    window.open(fileUrl, "_blank");
   };
 
   const formatAmount = (amount: number) => {
