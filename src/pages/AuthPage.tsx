@@ -5,11 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, Mail, Lock, Loader2 } from "lucide-react";
+import { FileText, Mail, Lock, Loader2, ArrowLeft } from "lucide-react";
 
 export default function AuthPage() {
-  const [isLogin, setIsLogin] = useState(true);
   const [isSettingPassword, setIsSettingPassword] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -20,30 +20,24 @@ export default function AuthPage() {
   const [searchParams] = useSearchParams();
 
   useEffect(() => {
-    // Check if user came from an invite link (they'll have a session but may need to set password)
     const checkInviteFlow = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         
-        // Check for invite token in URL (type=invite or type=signup)
         const type = searchParams.get("type");
         const tokenHash = searchParams.get("token_hash");
         
-        if (tokenHash && (type === "invite" || type === "signup")) {
-          // User clicked invite link - verify the token
+        if (tokenHash && (type === "invite" || type === "signup" || type === "recovery")) {
           const { data, error } = await supabase.auth.verifyOtp({
             token_hash: tokenHash,
-            type: type === "invite" ? "invite" : "signup",
+            type: type === "invite" ? "invite" : type === "recovery" ? "recovery" : "signup",
           });
           
           if (!error && data.session) {
-            // User is now authenticated, prompt for password
             setIsSettingPassword(true);
             setEmail(data.session.user.email || "");
           }
         } else if (session) {
-          // User is already logged in, check if they have a password
-          // If they came from an invite and are authenticated, redirect to home
           navigate("/");
         }
       } catch (error) {
@@ -99,34 +93,45 @@ export default function AuthPage() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
-      if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        toast({ title: "Erfolgreich angemeldet" });
-        navigate("/");
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/auth`,
-          },
-        });
-        if (error) throw error;
-        toast({
-          title: "Konto erstellt",
-          description: "Bitte prüfen Sie Ihre E-Mails zur Bestätigung",
-        });
-        setIsLogin(true);
-      }
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth`,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "E-Mail gesendet",
+        description: "Prüfen Sie Ihre E-Mails für den Link zum Zurücksetzen des Passworts",
+      });
+      setIsForgotPassword(false);
+    } catch (error: any) {
+      toast({
+        title: "Fehler",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      toast({ title: "Erfolgreich angemeldet" });
+      navigate("/");
     } catch (error: any) {
       toast({
         title: "Fehler",
@@ -166,10 +171,10 @@ export default function AuthPage() {
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {isSettingPassword
-                ? "Bitte vergeben Sie ein Passwort"
-                : isLogin
-                ? "Melden Sie sich an"
-                : "Erstellen Sie ein Konto"}
+                ? "Neues Passwort vergeben"
+                : isForgotPassword
+                ? "Passwort zurücksetzen"
+                : "Melden Sie sich an"}
             </p>
           </div>
 
@@ -234,9 +239,47 @@ export default function AuthPage() {
                 Passwort speichern
               </Button>
             </form>
+          ) : isForgotPassword ? (
+            <form onSubmit={handleForgotPassword} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">E-Mail</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="ihre@email.de"
+                    className="pl-9"
+                    required
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <Button
+                type="submit"
+                variant="gradient"
+                className="w-full"
+                disabled={isLoading}
+              >
+                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Link senden
+              </Button>
+
+              <button
+                type="button"
+                onClick={() => setIsForgotPassword(false)}
+                className="flex w-full items-center justify-center gap-2 text-sm text-muted-foreground hover:text-primary"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Zurück zur Anmeldung
+              </button>
+            </form>
           ) : (
             <>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleLogin} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">E-Mail</Label>
                   <div className="relative">
@@ -277,19 +320,17 @@ export default function AuthPage() {
                   disabled={isLoading}
                 >
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {isLogin ? "Anmelden" : "Registrieren"}
+                  Anmelden
                 </Button>
               </form>
 
               <div className="mt-6 text-center">
                 <button
                   type="button"
-                  onClick={() => setIsLogin(!isLogin)}
+                  onClick={() => setIsForgotPassword(true)}
                   className="text-sm text-muted-foreground hover:text-primary"
                 >
-                  {isLogin
-                    ? "Noch kein Konto? Jetzt registrieren"
-                    : "Bereits ein Konto? Jetzt anmelden"}
+                  Passwort vergessen?
                 </button>
               </div>
             </>
