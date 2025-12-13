@@ -24,7 +24,7 @@ export interface StatementData {
   id: string;
   fileName: string;
   bank: string;
-  bankType: "volksbank" | "amex";
+  bankType: "volksbank" | "amex" | "commission";
   accountNumber: string;
   date: string;
   openingBalance: number;
