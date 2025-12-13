@@ -1,8 +1,9 @@
 import { useState, useMemo } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useBankTransactions } from "@/hooks/useMatching";
 import { useInvoices } from "@/hooks/useDocuments";
 import { TransactionRow } from "@/components/matching/TransactionRow";
@@ -16,26 +17,34 @@ export default function MatchingPage() {
   const [isAutoMatching, setIsAutoMatching] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
+  const [recurringOpen, setRecurringOpen] = useState(false);
 
   // Alle Transaktionen ohne Filter laden
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
   const { data: invoices = [] } = useInvoices();
 
-  // Sortieren: Vorschläge zuerst, dann offen, dann bestätigt
+  // Laufende Kosten separat halten
+  const recurringTransactions = useMemo(() => {
+    return transactions.filter((t: any) => t.matchStatus === "recurring");
+  }, [transactions]);
+
+  // Normale Transaktionen (ohne recurring) sortieren: Vorschläge zuerst
   const sortedTransactions = useMemo(() => {
-    return [...transactions].sort((a: any, b: any) => {
-      const statusOrder: Record<string, number> = {
-        matched: 0,    // Vorschläge zuerst
-        unmatched: 1,  // Dann offen
-        no_match: 2,   // Dann keine Rechnung
-        confirmed: 3,  // Dann bestätigt
-      };
-      const orderA = statusOrder[a.matchStatus] ?? 4;
-      const orderB = statusOrder[b.matchStatus] ?? 4;
-      if (orderA !== orderB) return orderA - orderB;
-      // Bei gleichem Status nach Datum sortieren
-      return new Date(b.date).getTime() - new Date(a.date).getTime();
-    });
+    return [...transactions]
+      .filter((t: any) => t.matchStatus !== "recurring")
+      .sort((a: any, b: any) => {
+        const statusOrder: Record<string, number> = {
+          matched: 0,    // Vorschläge zuerst
+          unmatched: 1,  // Dann offen
+          no_match: 2,   // Dann keine Rechnung
+          confirmed: 3,  // Dann bestätigt
+        };
+        const orderA = statusOrder[a.matchStatus] ?? 4;
+        const orderB = statusOrder[b.matchStatus] ?? 4;
+        if (orderA !== orderB) return orderA - orderB;
+        // Bei gleichem Status nach Datum sortieren
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      });
   }, [transactions]);
 
   // Filtern nach Status und Suchbegriff
@@ -71,6 +80,7 @@ export default function MatchingPage() {
   const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
   const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
   const confirmedCount = transactions.filter((t: any) => t.matchStatus === "confirmed").length;
+  const recurringCount = recurringTransactions.length;
   const invoiceCount = invoices.length;
 
   const handleAutoMatch = async () => {
@@ -251,6 +261,31 @@ export default function MatchingPage() {
                 <TransactionRow key={transaction.id} transaction={transaction} />
               ))}
             </div>
+
+            {/* Laufende Kosten - eingeklappt am Ende */}
+            {filterStatus === "all" && recurringCount > 0 && (
+              <Collapsible open={recurringOpen} onOpenChange={setRecurringOpen} className="mt-6">
+                <CollapsibleTrigger asChild>
+                  <button className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50">
+                    {recurringOpen ? (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <RefreshCw className="h-4 w-4 text-info" />
+                    <span className="font-medium text-foreground">Laufende Kosten</span>
+                    <span className="text-sm text-muted-foreground">({recurringCount} Transaktionen ohne Rechnung)</span>
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2 space-y-2">
+                  {recurringTransactions.map((transaction: any) => (
+                    <div key={transaction.id} className="opacity-60">
+                      <TransactionRow transaction={transaction} />
+                    </div>
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
           </div>
         )}
       </div>
