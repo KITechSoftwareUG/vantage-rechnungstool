@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, X, Link, Unlink, ChevronDown, Sparkles, Building, CreditCard } from "lucide-react";
+import { Check, X, Link, Unlink, ChevronDown, Sparkles, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -8,6 +8,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useUpdateTransactionMatch, useUnmatchedInvoices } from "@/hooks/useMatching";
 import { useToast } from "@/hooks/use-toast";
@@ -30,6 +36,7 @@ interface TransactionRowProps {
       amount: number;
       date: string;
       file_name: string;
+      file_url?: string;
     } | null;
   };
 }
@@ -37,6 +44,7 @@ interface TransactionRowProps {
 export function TransactionRow({ transaction }: TransactionRowProps) {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const updateMatch = useUpdateTransactionMatch();
   const { data: invoices = [] } = useUnmatchedInvoices();
 
@@ -164,6 +172,19 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
 
       {/* Actions */}
       <div className="flex w-32 flex-shrink-0 justify-end gap-1">
+        {/* View Invoice Button - für matched und confirmed */}
+        {transaction.matchedInvoice && (transaction.matchStatus === "matched" || transaction.matchStatus === "confirmed") && (
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="h-8 w-8 text-info" 
+            onClick={() => setPreviewOpen(true)}
+            title="Rechnung ansehen"
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+        )}
+
         {transaction.matchStatus === "matched" && transaction.matchedInvoiceId && (
           <>
             <Button variant="ghost" size="icon" className="h-8 w-8 text-success" onClick={handleConfirmMatch}>
@@ -214,6 +235,59 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
           </DropdownMenu>
         )}
       </div>
+
+      {/* Invoice Preview Dialog */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="h-5 w-5" />
+              Rechnung: {transaction.matchedInvoice?.issuer}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-4 text-sm">
+              <div>
+                <span className="text-muted-foreground">Datum:</span>
+                <p className="font-medium">
+                  {transaction.matchedInvoice?.date && new Date(transaction.matchedInvoice.date).toLocaleDateString("de-DE")}
+                </p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Betrag:</span>
+                <p className="font-medium">
+                  {transaction.matchedInvoice?.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+                </p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Datei:</span>
+                <p className="font-medium truncate">{transaction.matchedInvoice?.file_name}</p>
+              </div>
+            </div>
+            {transaction.matchedInvoice?.file_url ? (
+              <div className="border rounded-lg overflow-hidden bg-muted/20">
+                {transaction.matchedInvoice.file_url.toLowerCase().endsWith('.pdf') ? (
+                  <iframe 
+                    src={transaction.matchedInvoice.file_url} 
+                    className="w-full h-[60vh]"
+                    title="Rechnung Vorschau"
+                  />
+                ) : (
+                  <img 
+                    src={transaction.matchedInvoice.file_url} 
+                    alt="Rechnung Vorschau" 
+                    className="w-full max-h-[60vh] object-contain"
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-64 border rounded-lg bg-muted/20 text-muted-foreground">
+                Keine Vorschau verfügbar
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

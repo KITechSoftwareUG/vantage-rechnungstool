@@ -2,40 +2,71 @@ import { useState, useMemo } from "react";
 import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useBankTransactions } from "@/hooks/useMatching";
 import { useInvoices } from "@/hooks/useDocuments";
 import { TransactionRow } from "@/components/matching/TransactionRow";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
+type FilterStatus = "all" | "unmatched" | "matched" | "confirmed";
+
 export default function MatchingPage() {
   const { toast } = useToast();
   const [isAutoMatching, setIsAutoMatching] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
 
   // Alle Transaktionen ohne Filter laden
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
   const { data: invoices = [] } = useInvoices();
 
-  // Filtern nach Suchbegriff
-  const filteredTransactions = useMemo(() => {
-    if (!searchQuery.trim()) return transactions;
-    
-    const query = searchQuery.toLowerCase().trim();
-    return transactions.filter((t: any) => {
-      const description = (t.description || "").toLowerCase();
-      const amount = Math.abs(t.amount).toString();
-      const date = t.date || "";
-      const invoiceIssuer = (t.matchedInvoice?.issuer || "").toLowerCase();
-      
-      return (
-        description.includes(query) ||
-        amount.includes(query) ||
-        date.includes(query) ||
-        invoiceIssuer.includes(query)
-      );
+  // Sortieren: Vorschläge zuerst, dann offen, dann bestätigt
+  const sortedTransactions = useMemo(() => {
+    return [...transactions].sort((a: any, b: any) => {
+      const statusOrder: Record<string, number> = {
+        matched: 0,    // Vorschläge zuerst
+        unmatched: 1,  // Dann offen
+        no_match: 2,   // Dann keine Rechnung
+        confirmed: 3,  // Dann bestätigt
+      };
+      const orderA = statusOrder[a.matchStatus] ?? 4;
+      const orderB = statusOrder[b.matchStatus] ?? 4;
+      if (orderA !== orderB) return orderA - orderB;
+      // Bei gleichem Status nach Datum sortieren
+      return new Date(b.date).getTime() - new Date(a.date).getTime();
     });
-  }, [transactions, searchQuery]);
+  }, [transactions]);
+
+  // Filtern nach Status und Suchbegriff
+  const filteredTransactions = useMemo(() => {
+    let filtered = sortedTransactions;
+
+    // Status-Filter
+    if (filterStatus !== "all") {
+      filtered = filtered.filter((t: any) => t.matchStatus === filterStatus);
+    }
+
+    // Such-Filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      filtered = filtered.filter((t: any) => {
+        const description = (t.description || "").toLowerCase();
+        const amount = Math.abs(t.amount).toString();
+        const date = t.date || "";
+        const invoiceIssuer = (t.matchedInvoice?.issuer || "").toLowerCase();
+        
+        return (
+          description.includes(query) ||
+          amount.includes(query) ||
+          date.includes(query) ||
+          invoiceIssuer.includes(query)
+        );
+      });
+    }
+
+    return filtered;
+  }, [sortedTransactions, filterStatus, searchQuery]);
 
   const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
   const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
@@ -123,6 +154,41 @@ export default function MatchingPage() {
           )}
           KI Auto-Matching
         </Button>
+      </div>
+
+      {/* Filter Tabs */}
+      <div className="animate-fade-in">
+        <Tabs value={filterStatus} onValueChange={(v) => setFilterStatus(v as FilterStatus)}>
+          <TabsList className="glass-card h-auto p-1">
+            <TabsTrigger 
+              value="all" 
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+            >
+              Alle ({transactions.length})
+            </TabsTrigger>
+            <TabsTrigger 
+              value="matched" 
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+            >
+              <Sparkles className="mr-1 h-4 w-4" />
+              Vorschläge ({matchedCount})
+            </TabsTrigger>
+            <TabsTrigger 
+              value="unmatched" 
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+            >
+              <AlertCircle className="mr-1 h-4 w-4" />
+              Offen ({unmatchedCount})
+            </TabsTrigger>
+            <TabsTrigger 
+              value="confirmed" 
+              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+            >
+              <CheckCircle className="mr-1 h-4 w-4" />
+              Bestätigt ({confirmedCount})
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       {/* Search & Legend */}
