@@ -4,7 +4,7 @@ import { UploadZone } from "@/components/upload/UploadZone";
 import { GoogleDrivePicker } from "@/components/upload/GoogleDrivePicker";
 import { InvoiceReviewCard } from "@/components/upload/InvoiceReviewCard";
 import { StatementCard } from "@/components/documents/StatementCard";
-import { ArrowDownLeft, ArrowUpRight, Building, CreditCard, Loader2, Sparkles, AlertTriangle } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Building, CreditCard, Loader2, Sparkles, AlertTriangle, Receipt } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { InvoiceData, StatementData, ExtractedTransaction } from "@/types/documents";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,7 +25,7 @@ interface ProcessedStatement extends StatementData {
   duplicateCount?: number;
 }
 
-type UploadCategory = "incoming" | "outgoing" | "volksbank" | "amex";
+type UploadCategory = "incoming" | "outgoing" | "volksbank" | "amex" | "commission";
 
 export default function UploadPage() {
   const { toast } = useToast();
@@ -39,6 +39,7 @@ export default function UploadPage() {
   const [outgoingInvoices, setOutgoingInvoices] = useState<(InvoiceData & { file: File })[]>([]);
   const [volksbankStatements, setVolksbankStatements] = useState<ProcessedStatement[]>([]);
   const [amexStatements, setAmexStatements] = useState<ProcessedStatement[]>([]);
+  const [commissionStatements, setCommissionStatements] = useState<ProcessedStatement[]>([]);
 
   const createInvoice = useCreateInvoice();
   const createBankStatement = useCreateBankStatement();
@@ -107,7 +108,7 @@ export default function UploadPage() {
     }
   };
 
-  const handleStatementUpload = async (files: File[], bankType: "volksbank" | "amex") => {
+  const handleStatementUpload = async (files: File[], bankType: "volksbank" | "amex" | "commission") => {
     if (!user) return;
     setIsProcessing(true);
     
@@ -137,7 +138,7 @@ export default function UploadPage() {
           newStatements.push({
             id: `temp-${Date.now()}-${Math.random()}`,
             fileName: file.name,
-            bank: summary.bank || (bankType === "amex" ? "American Express" : "Volksbank"),
+            bank: summary.bank || (bankType === "amex" ? "American Express" : bankType === "commission" ? "Provisionsabrechnung" : "Volksbank"),
             bankType, // Use the bankType from the tab
             accountNumber: summary.accountNumber || "Unbekannt",
             date: summary.date || date.toISOString().split("T")[0],
@@ -156,7 +157,7 @@ export default function UploadPage() {
           newStatements.push({
             id: `temp-${Date.now()}-${Math.random()}`,
             fileName: file.name,
-            bank: bankType === "amex" ? "American Express" : "Volksbank",
+            bank: bankType === "amex" ? "American Express" : bankType === "commission" ? "Provisionsabrechnung" : "Volksbank",
             bankType,
             accountNumber: "Unbekannt",
             date: date.toISOString().split("T")[0],
@@ -174,8 +175,10 @@ export default function UploadPage() {
 
       if (bankType === "volksbank") {
         setVolksbankStatements(prev => [...prev, ...newStatements]);
-      } else {
+      } else if (bankType === "amex") {
         setAmexStatements(prev => [...prev, ...newStatements]);
+      } else {
+        setCommissionStatements(prev => [...prev, ...newStatements]);
       }
       
       const totalTransactions = newStatements.reduce((sum, s) => sum + (s.transactions?.length || 0), 0);
@@ -258,7 +261,7 @@ export default function UploadPage() {
     }
   };
 
-  const handleStatementSave = async (data: StatementData & { file?: File; transactions?: ExtractedTransaction[] }, bankType: "volksbank" | "amex") => {
+  const handleStatementSave = async (data: StatementData & { file?: File; transactions?: ExtractedTransaction[] }, bankType: "volksbank" | "amex" | "commission") => {
     if (!user) return;
     
     try {
@@ -300,8 +303,10 @@ export default function UploadPage() {
 
       if (bankType === "volksbank") {
         setVolksbankStatements(prev => prev.filter(stmt => stmt.id !== data.id));
-      } else {
+      } else if (bankType === "amex") {
         setAmexStatements(prev => prev.filter(stmt => stmt.id !== data.id));
+      } else {
+        setCommissionStatements(prev => prev.filter(stmt => stmt.id !== data.id));
       }
     } catch (error: any) {
       toast({
@@ -375,9 +380,17 @@ export default function UploadPage() {
     </>
   );
 
+  const getBankLabel = (bankType: "volksbank" | "amex" | "commission") => {
+    switch (bankType) {
+      case "volksbank": return "Volksbank";
+      case "amex": return "American Express";
+      case "commission": return "Provisionsabrechnung";
+    }
+  };
+
   const renderStatementSection = (
     statements: ProcessedStatement[],
-    bankType: "volksbank" | "amex",
+    bankType: "volksbank" | "amex" | "commission",
     setStatements: React.Dispatch<React.SetStateAction<ProcessedStatement[]>>
   ) => (
     <>
@@ -386,7 +399,7 @@ export default function UploadPage() {
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
             <h2 className="font-heading text-lg font-semibold text-foreground">
-              {bankType === "volksbank" ? "Volksbank" : "American Express"} Kontoauszüge
+              {getBankLabel(bankType)} {bankType === "commission" ? "" : "Kontoauszüge"}
             </h2>
           </div>
           <GoogleDrivePicker 
@@ -493,6 +506,13 @@ export default function UploadPage() {
             <CreditCard className="h-4 w-4" />
             American Express
           </TabsTrigger>
+          <TabsTrigger 
+            value="commission"
+            className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+          >
+            <Receipt className="h-4 w-4" />
+            Provisionsabrechnung
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="incoming" className="mt-6 space-y-6">
@@ -509,6 +529,10 @@ export default function UploadPage() {
 
         <TabsContent value="amex" className="mt-6 space-y-6">
           {renderStatementSection(amexStatements, "amex", setAmexStatements)}
+        </TabsContent>
+
+        <TabsContent value="commission" className="mt-6 space-y-6">
+          {renderStatementSection(commissionStatements, "commission", setCommissionStatements)}
         </TabsContent>
       </Tabs>
     </div>
