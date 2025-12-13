@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, X, Link, Unlink, ChevronDown, Sparkles, Eye } from "lucide-react";
+import { Check, X, Link, Unlink, ChevronDown, Sparkles, Eye, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -110,11 +110,26 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
     }
   };
 
+  const handleRecurring = async () => {
+    try {
+      await updateMatch.mutateAsync({
+        transactionId: transaction.id,
+        invoiceId: null,
+        matchStatus: "recurring",
+      });
+      toast({ title: "Als 'Laufende Kosten' markiert" });
+      setIsOpen(false);
+    } catch (error: any) {
+      toast({ title: "Fehler", description: error.message, variant: "destructive" });
+    }
+  };
+
   const statusConfig = {
     unmatched: { label: "Offen", color: "bg-warning/10 text-warning border-warning/20" },
     matched: { label: "Vorschlag", color: "bg-primary/10 text-primary border-primary/20" },
     confirmed: { label: "Bestätigt", color: "bg-success/10 text-success border-success/20" },
     no_match: { label: "Keine Rechnung", color: "bg-muted text-muted-foreground border-muted" },
+    recurring: { label: "Laufende Kosten", color: "bg-info/10 text-info border-info/20" },
   };
 
   const status = statusConfig[transaction.matchStatus as keyof typeof statusConfig] || statusConfig.unmatched;
@@ -228,6 +243,10 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
                   </DropdownMenuItem>
                 ))
               )}
+              <DropdownMenuItem onClick={handleRecurring} className="text-info">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Laufende Kosten (ohne Rechnung)
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleNoMatch} className="text-muted-foreground">
                 Keine Rechnung vorhanden
               </DropdownMenuItem>
