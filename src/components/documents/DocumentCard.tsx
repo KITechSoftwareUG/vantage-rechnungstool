@@ -3,6 +3,7 @@ import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
@@ -32,6 +33,13 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
   const handleCancel = () => {
     setEditData(document);
     setIsEditing(false);
+  };
+
+  const handleTypeToggle = (isOutgoing: boolean) => {
+    const newType = isOutgoing ? "outgoing" : "incoming";
+    const updatedData = { ...document, type: newType as "incoming" | "outgoing" };
+    onSave(updatedData);
+    setEditData(updatedData);
   };
 
   const handleView = () => {
@@ -139,6 +147,27 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
 
       {/* Content */}
       <div className="space-y-3">
+        {/* Type Toggle */}
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 p-2">
+          <span className={cn(
+            "text-xs font-medium transition-colors",
+            isExpense ? "text-foreground" : "text-muted-foreground"
+          )}>
+            Eingang
+          </span>
+          <Switch
+            checked={document.type === "outgoing"}
+            onCheckedChange={handleTypeToggle}
+            className="data-[state=checked]:bg-success data-[state=unchecked]:bg-destructive/70"
+          />
+          <span className={cn(
+            "text-xs font-medium transition-colors",
+            !isExpense ? "text-success" : "text-muted-foreground"
+          )}>
+            Ausgang
+          </span>
+        </div>
+
         {/* Date */}
         <div className="flex items-center gap-3">
           <Calendar className="h-4 w-4 text-muted-foreground" />
