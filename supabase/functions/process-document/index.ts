@@ -92,15 +92,22 @@ serve(async (req) => {
     if (documentType === "invoice") {
       prompt = `Analysiere dieses Dokument als Rechnung und extrahiere folgende Informationen im JSON-Format:
       - date: Rechnungsdatum im Format YYYY-MM-DD
-      - issuer: Name des Ausstellers/Unternehmens
-      - amount: Gesamtbetrag als Zahl (ohne Währungssymbol). WICHTIG: 
+      - issuer: Name des Ausstellers/Unternehmens (wer hat die Rechnung ausgestellt)
+      - amount: Gesamtbetrag als POSITIVE Zahl (ohne Währungssymbol). WICHTIG: 
         * Wenn "Amount Due" oder "Fälliger Betrag" 0,00 ist, suche nach dem ursprünglichen Rechnungsbetrag (z.B. "Total", "Gesamtbetrag", "Invoice Total", "Subtotal" etc.)
-        * Der Betrag darf negativ sein, wenn es sich um eine Gutschrift handelt
         * Nimm immer den tatsächlichen Rechnungsbetrag, nicht den offenen Betrag
-      - type: "incoming" wenn es eine Eingangsrechnung ist (Geld kommt rein), "outgoing" wenn es eine Ausgangsrechnung ist (Geld geht raus)
+        * Betrag IMMER als positive Zahl angeben!
+      - type: SEHR WICHTIG - korrekte Unterscheidung:
+        * "outgoing" = EINGANGSRECHNUNG = Rechnung von einem anderen Unternehmen AN MICH = ICH muss bezahlen = Geld geht RAUS
+          Beispiele: Rechnungen von OpenAI, Google, Amazon, Lieferanten, Dienstleistern, Software-Abos etc.
+        * "incoming" = AUSGANGSRECHNUNG = Rechnung die ICH an einen Kunden stelle = Kunde bezahlt MIR = Geld kommt REIN
+          Beispiele: Meine eigenen Rechnungen an Kunden für meine Dienstleistungen
+        
+        REGEL: Wenn das Dokument eine Rechnung von einem bekannten Unternehmen (OpenAI, Google, Amazon, Adobe, Microsoft, etc.) ist, 
+        dann ist es IMMER "outgoing" (Eingangsrechnung), weil diese Unternehmen mir niemals Geld schulden würden.
       
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-      Beispiel: {"date": "2024-01-15", "issuer": "Firma GmbH", "amount": 1250.50, "type": "incoming"}`;
+      Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "amount": 52.50, "type": "outgoing"}`;
     } else {
       // Bank statement - extract BOTH summary AND individual transactions
       prompt = `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
