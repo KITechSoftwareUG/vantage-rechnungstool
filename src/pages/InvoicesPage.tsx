@@ -4,7 +4,7 @@ import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { DocumentCard } from "@/components/documents/DocumentCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
 import { GroupedListView } from "@/components/documents/GroupedListView";
@@ -226,6 +226,10 @@ export default function InvoicesPage() {
           )}
           renderRow={(invoice) => {
             const isExpense = invoice.type === "incoming";
+            const handleTypeToggle = (isOutgoing: boolean) => {
+              const newType = isOutgoing ? "outgoing" : "incoming";
+              updateInvoice.mutate({ ...invoice, type: newType as "incoming" | "outgoing" });
+            };
             return (
               <tr 
                 key={invoice.id} 
@@ -239,12 +243,25 @@ export default function InvoicesPage() {
                   {invoice.fileName}
                 </td>
                 <td className="px-4 py-3">
-                  <Badge 
-                    variant={isExpense ? "secondary" : "default"}
-                    className="text-xs"
-                  >
-                    {isExpense ? "Eingang" : "Ausgang"}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <span className={cn(
+                      "text-xs",
+                      isExpense ? "text-foreground font-medium" : "text-muted-foreground"
+                    )}>
+                      Ein
+                    </span>
+                    <Switch
+                      checked={invoice.type === "outgoing"}
+                      onCheckedChange={handleTypeToggle}
+                      className="data-[state=checked]:bg-success data-[state=unchecked]:bg-destructive/70 scale-75"
+                    />
+                    <span className={cn(
+                      "text-xs",
+                      !isExpense ? "text-success font-medium" : "text-muted-foreground"
+                    )}>
+                      Aus
+                    </span>
+                  </div>
                 </td>
                 <td className={cn(
                   "px-4 py-3 text-right text-sm font-semibold",
