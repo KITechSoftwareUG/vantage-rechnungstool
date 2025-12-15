@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
-import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 
 interface DocumentCardProps {
   document: InvoiceData;
@@ -17,7 +16,6 @@ interface DocumentCardProps {
 
 export function DocumentCard({ document, onSave, onDelete, index = 0 }: DocumentCardProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [editData, setEditData] = useState(document);
 
   const handleSave = () => {
@@ -124,7 +122,7 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setShowDeleteDialog(true)}
+              onClick={() => onDelete(document.id)}
               className="h-8 w-8 text-destructive hover:text-destructive"
               title="Löschen"
             >
@@ -132,17 +130,6 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
             </Button>
           )}
         </div>
-        
-        <DeleteConfirmationDialog
-          open={showDeleteDialog}
-          onOpenChange={setShowDeleteDialog}
-          onConfirm={() => {
-            onDelete?.(document.id);
-            setShowDeleteDialog(false);
-          }}
-          title="Rechnung löschen"
-          description={`Möchten Sie die Rechnung "${document.fileName}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.`}
-        />
       </div>
 
       {/* Content */}
