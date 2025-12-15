@@ -118,16 +118,26 @@ serve(async (req) => {
       - description: Beschreibung/Verwendungszweck der Transaktion
       - amount: Betrag als positive Zahl in EUR (der finale abgerechnete Betrag in Euro)
       - type: "credit" für Gutschriften/Einzahlungen, "debit" für Abbuchungen/Ausgaben
-      - originalCurrency: SEHR WICHTIG für Währungsumrechnungen (besonders bei American Express):
-        Wenn die Transaktion ursprünglich in einer Fremdwährung war (USD, GBP, CHF etc.) und dann in EUR umgerechnet wurde:
-        Gib den KOMPLETTEN Original-Text der Umrechnung an, z.B. "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"
-        oder wenn nur der Originalbetrag verfügbar ist: "5.95 USD"
-        Wenn keine Umrechnung stattfand (also originär EUR), dann null.
-        Suche nach Spalten wie "Fremdwährung", "Originalbetrag", "Foreign Spend Amount", etc.
+      - originalCurrency: SEHR WICHTIG - speziell für AMERICAN EXPRESS Abrechnungen:
+        
+        AMEX FORMAT: American Express Abrechnungen haben typischerweise diese Spalten:
+        - Spalte A: Datum
+        - Spalte B: Beschreibung
+        - Spalte C: EUR Betrag (nach Umrechnung)
+        - Spalte D: Fremdwährungsinformationen (WICHTIG!)
+        
+        Aus Spalte D extrahiere den KOMPLETTEN Text, z.B.:
+        "Foreign Spend Amount: 19.00 US Dollars Commission Amount: 0.34 Currency Exchange Rate: 1.0909"
+        
+        Wenn die Transaktion in Fremdwährung war, gib den GESAMTEN Inhalt von Spalte D an.
+        Bei EUR-Transaktionen (keine Umrechnung): null
+        
+        ANDERE BANKEN (Volksbank etc.): Suche nach Spalten wie "Fremdwährung", "Originalbetrag" etc.
+        Wenn keine Umrechnung stattfand: null
 
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
       
-      Beispiel:
+      Beispiel für AMEX:
       {
         "summary": {
           "bank": "American Express",
@@ -139,7 +149,7 @@ serve(async (req) => {
         },
         "transactions": [
           {"date": "2024-01-05", "description": "OPENAI SAN FRANCISCO", "amount": 5.26, "type": "debit", "originalCurrency": "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"},
-          {"date": "2024-01-10", "description": "Hotel London", "amount": 410.00, "type": "debit", "originalCurrency": "350.00 GBP"},
+          {"date": "2024-01-10", "description": "GOOGLE*CLOUD", "amount": 19.69, "type": "debit", "originalCurrency": "Foreign Spend Amount: 19.00 US Dollars Commission Amount: 0.34 Currency Exchange Rate: 1.0909"},
           {"date": "2024-01-15", "description": "Restaurant München", "amount": 85.00, "type": "debit", "originalCurrency": null}
         ]
       }`;
