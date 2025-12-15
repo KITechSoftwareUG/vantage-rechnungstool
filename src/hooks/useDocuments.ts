@@ -171,23 +171,27 @@ export function useDeleteBankStatement() {
   });
 }
 
-// Check for duplicate invoice
+// Check for duplicate invoice - stricter check: same date AND same issuer AND same amount
 export async function checkDuplicateInvoice(
   userId: string,
-  invoice: { date: string; issuer: string; amount: number }
+  invoice: { date: string; issuer: string; amount: number; fileName?: string }
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from("invoices")
-    .select("id")
+    .select("id, file_name, issuer, amount")
     .eq("user_id", userId)
-    .eq("date", invoice.date)
-    .eq("issuer", invoice.issuer)
-    .gte("amount", invoice.amount - 0.01)
-    .lte("amount", invoice.amount + 0.01)
-    .limit(1);
+    .eq("date", invoice.date);
 
   if (error) throw error;
-  return (data || []).length > 0;
+  
+  // Check for exact match: same issuer AND same amount (within 0.01 tolerance)
+  const hasDuplicate = (data || []).some(
+    (existing) =>
+      existing.issuer.toLowerCase().trim() === invoice.issuer.toLowerCase().trim() &&
+      Math.abs(Number(existing.amount) - invoice.amount) < 0.01
+  );
+  
+  return hasDuplicate;
 }
 
 // Bank Statements hooks

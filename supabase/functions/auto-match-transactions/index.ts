@@ -39,12 +39,24 @@ serve(async (req) => {
 
     if (transError) throw transError;
 
-    // Get all unmatched invoices
-    const { data: invoices, error: invError } = await supabaseClient
+    // Get all invoices that are NOT already matched to a transaction
+    const { data: matchedInvoiceIds, error: matchedError } = await supabaseClient
+      .from("bank_transactions")
+      .select("matched_invoice_id")
+      .not("matched_invoice_id", "is", null);
+    
+    if (matchedError) throw matchedError;
+    
+    const alreadyMatchedIds = new Set((matchedInvoiceIds || []).map((t: any) => t.matched_invoice_id));
+    
+    const { data: allInvoices, error: invError } = await supabaseClient
       .from("invoices")
       .select("*");
 
     if (invError) throw invError;
+    
+    // Filter out already matched invoices
+    const invoices = (allInvoices || []).filter((inv: any) => !alreadyMatchedIds.has(inv.id));
 
     if (!transactions || transactions.length === 0 || !invoices || invoices.length === 0) {
       return new Response(

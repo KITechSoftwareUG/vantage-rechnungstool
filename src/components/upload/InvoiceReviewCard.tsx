@@ -108,17 +108,42 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
 
           {/* Content */}
           <div className="flex-1 space-y-4">
-            {/* Type Display (read-only since type is determined by tab) */}
+            {/* Type Selector - editable when in editing mode */}
             <div className="flex items-center gap-3">
               <div className="h-4 w-4 text-muted-foreground flex items-center justify-center">
                 {isExpense ? <ArrowDownLeft className="h-4 w-4" /> : <ArrowUpRight className="h-4 w-4" />}
               </div>
-              <div className="flex-1 flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Typ</span>
-                <Badge variant={isExpense ? "secondary" : "default"}>
-                  {isExpense ? "Eingang (Ausgabe)" : "Ausgang (Einnahme)"}
-                </Badge>
-              </div>
+              {isEditing ? (
+                <div className="flex-1 flex gap-2">
+                  <Button
+                    type="button"
+                    variant={editData.type === "incoming" ? "default" : "outline"}
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => setEditData({ ...editData, type: "incoming" })}
+                  >
+                    <ArrowDownLeft className="mr-1 h-3 w-3" />
+                    Eingang
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={editData.type === "outgoing" ? "default" : "outline"}
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => setEditData({ ...editData, type: "outgoing" })}
+                  >
+                    <ArrowUpRight className="mr-1 h-3 w-3" />
+                    Ausgang
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex-1 flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Typ</span>
+                  <Badge variant={isExpense ? "secondary" : "default"}>
+                    {isExpense ? "Eingang (Ausgabe)" : "Ausgang (Einnahme)"}
+                  </Badge>
+                </div>
+              )}
             </div>
 
             {/* Date */}
