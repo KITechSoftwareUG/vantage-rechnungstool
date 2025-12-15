@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -9,8 +9,15 @@ import { useInvoices } from "@/hooks/useDocuments";
 import { TransactionRow } from "@/components/matching/TransactionRow";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { MONTH_NAMES } from "@/types/documents";
 
 type FilterStatus = "all" | "unmatched" | "matched" | "confirmed";
+
+interface MonthGroup {
+  year: number;
+  month: number;
+  transactions: any[];
+}
 
 export default function MatchingPage() {
   const { toast } = useToast();
@@ -18,6 +25,7 @@ export default function MatchingPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [recurringOpen, setRecurringOpen] = useState(false);
+  const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
 
   // Alle Transaktionen ohne Filter laden
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
@@ -76,6 +84,55 @@ export default function MatchingPage() {
 
     return filtered;
   }, [sortedTransactions, filterStatus, searchQuery]);
+
+  // Gruppiere nach Jahr und Monat
+  const groupedByMonth = useMemo(() => {
+    const groups: MonthGroup[] = [];
+    const groupMap = new Map<string, any[]>();
+
+    filteredTransactions.forEach((t: any) => {
+      const date = new Date(t.date);
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1;
+      const key = `${year}-${month}`;
+      
+      if (!groupMap.has(key)) {
+        groupMap.set(key, []);
+      }
+      groupMap.get(key)!.push(t);
+    });
+
+    groupMap.forEach((transactions, key) => {
+      const [year, month] = key.split("-").map(Number);
+      groups.push({ year, month, transactions });
+    });
+
+    // Sortiere nach Jahr und Monat absteigend
+    return groups.sort((a, b) => {
+      if (a.year !== b.year) return b.year - a.year;
+      return b.month - a.month;
+    });
+  }, [filteredTransactions]);
+
+  const toggleMonth = (key: string) => {
+    setOpenMonths(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  // Automatisch erste Gruppe öffnen wenn noch keine offen
+  useMemo(() => {
+    if (groupedByMonth.length > 0 && openMonths.size === 0) {
+      const firstKey = `${groupedByMonth[0].year}-${groupedByMonth[0].month}`;
+      setOpenMonths(new Set([firstKey]));
+    }
+  }, [groupedByMonth.length]);
 
   const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
   const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
@@ -230,7 +287,7 @@ export default function MatchingPage() {
           <div className="glass-card flex items-center justify-center p-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-        ) : filteredTransactions.length === 0 ? (
+        ) : groupedByMonth.length === 0 ? (
           <div className="glass-card flex flex-col items-center justify-center p-12 text-center">
             <Building className="h-12 w-12 text-muted-foreground/50" />
             <h3 className="mt-4 font-heading text-lg font-semibold text-foreground">
@@ -244,23 +301,46 @@ export default function MatchingPage() {
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {/* Header */}
-            <div className="flex items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground">
-              <div className="w-6"></div>
-              <div className="w-24">Datum</div>
-              <div className="flex-1">Beschreibung</div>
-              <div className="w-28 text-right">Betrag</div>
-              <div className="w-28 text-center">Status</div>
-              <div className="w-32 text-right">Aktionen</div>
-            </div>
-
-            {/* Transactions */}
-            <div className="space-y-2">
-              {filteredTransactions.map((transaction: any) => (
-                <TransactionRow key={transaction.id} transaction={transaction} />
-              ))}
-            </div>
+          <div className="space-y-4">
+            {/* Monatsgruppen */}
+            {groupedByMonth.map(({ year, month, transactions: monthTransactions }) => {
+              const key = `${year}-${month}`;
+              const isOpen = openMonths.has(key);
+              const monthName = MONTH_NAMES[month - 1];
+              
+              return (
+                <Collapsible key={key} open={isOpen} onOpenChange={() => toggleMonth(key)}>
+                  <CollapsibleTrigger asChild>
+                    <button className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-gradient-to-r from-primary/5 to-transparent px-4 py-3 text-left transition-colors hover:bg-primary/10">
+                      {isOpen ? (
+                        <ChevronDown className="h-4 w-4 text-primary" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <Calendar className="h-4 w-4 text-primary" />
+                      <span className="font-heading font-semibold text-foreground">{monthName} {year}</span>
+                      <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                        {monthTransactions.length} Transaktionen
+                      </span>
+                    </button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="mt-2 space-y-2 pl-4">
+                    {/* Header */}
+                    <div className="flex items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground">
+                      <div className="w-6"></div>
+                      <div className="w-24">Datum</div>
+                      <div className="flex-1">Beschreibung</div>
+                      <div className="w-28 text-right">Betrag</div>
+                      <div className="w-28 text-center">Status</div>
+                      <div className="w-32 text-right">Aktionen</div>
+                    </div>
+                    {monthTransactions.map((transaction: any) => (
+                      <TransactionRow key={transaction.id} transaction={transaction} />
+                    ))}
+                  </CollapsibleContent>
+                </Collapsible>
+              );
+            })}
 
             {/* Laufende Kosten - eingeklappt am Ende */}
             {filterStatus === "all" && recurringCount > 0 && (
