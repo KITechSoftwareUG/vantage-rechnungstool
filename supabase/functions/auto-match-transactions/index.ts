@@ -122,15 +122,84 @@ serve(async (req) => {
         }
       }
       
-      // Always match by exact amount (within 1 cent tolerance)
-      potentialMatches = invoices.filter((inv: any) => {
-        return Math.abs(matchAmount - inv.amount) < 0.01;
+      // IMPROVED MATCHING STRATEGY:
+      // 1. First find matches by name/description similarity
+      // 2. Then validate with amount (with currency tolerance)
+      
+      // Step 1: Find invoices with similar names/descriptions
+      const transactionDesc = transaction.description.toLowerCase();
+      
+      // Calculate similarity score for each invoice based on name matching
+      const invoicesWithScores = invoices.map((inv: any) => {
+        const issuerLower = inv.issuer.toLowerCase();
+        let nameScore = 0;
+        
+        // Check if issuer name is contained in transaction description
+        if (transactionDesc.includes(issuerLower)) {
+          nameScore = 100;
+        } else {
+          // Check word-by-word matching
+          const issuerWords = issuerLower.split(/[\s,.-]+/).filter((w: string) => w.length > 2);
+          const descWords = transactionDesc.split(/[\s,.-]+/).filter((w: string) => w.length > 2);
+          
+          let matchedWords = 0;
+          for (const issuerWord of issuerWords) {
+            for (const descWord of descWords) {
+              if (descWord.includes(issuerWord) || issuerWord.includes(descWord)) {
+                matchedWords++;
+                break;
+              }
+            }
+          }
+          
+          if (issuerWords.length > 0) {
+            nameScore = (matchedWords / issuerWords.length) * 80;
+          }
+        }
+        
+        // Amount matching with tolerance for currency differences (up to 10% difference)
+        const amountDiff = Math.abs(matchAmount - inv.amount);
+        const amountTolerance = Math.max(matchAmount, inv.amount) * 0.10; // 10% tolerance
+        const exactMatch = amountDiff < 0.01;
+        const closeMatch = amountDiff <= amountTolerance;
+        
+        let amountScore = 0;
+        if (exactMatch) {
+          amountScore = 100;
+        } else if (closeMatch) {
+          amountScore = 80 - (amountDiff / amountTolerance * 30); // 50-80 for close matches
+        }
+        
+        // Combined score: prioritize name matches, use amount as validation
+        const combinedScore = (nameScore * 0.6) + (amountScore * 0.4);
+        
+        return {
+          invoice: inv,
+          nameScore,
+          amountScore,
+          combinedScore,
+          exactAmountMatch: exactMatch,
+          closeAmountMatch: closeMatch
+        };
       });
+      
+      // Filter potential matches: good name match OR exact amount match
+      potentialMatches = invoicesWithScores
+        .filter((item: any) => item.nameScore >= 50 || item.exactAmountMatch)
+        .sort((a: any, b: any) => b.combinedScore - a.combinedScore)
+        .map((item: any) => item.invoice);
+      
+      if (potentialMatches.length === 0) {
+        // Fallback: exact amount match only
+        potentialMatches = invoices.filter((inv: any) => {
+          return Math.abs(matchAmount - inv.amount) < 0.01;
+        });
+      }
 
       if (potentialMatches.length === 0) continue;
 
-      if (LOVABLE_API_KEY && potentialMatches.length > 1) {
-        // Use AI to find the best match when multiple candidates
+      if (LOVABLE_API_KEY && potentialMatches.length >= 1) {
+        // Use AI for intelligent matching - now also for single candidates with name matching
         try {
           const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
             method: "POST",
@@ -143,24 +212,35 @@ serve(async (req) => {
               messages: [
                 {
                   role: "system",
-                  content: `You are a financial matching assistant. Match bank transactions to invoices based on:
-                  - Amount matching (already pre-filtered)
-                  - Date proximity (invoice date should be close to or before transaction date)
-                  - Description matching (company names, reference numbers)
+                  content: `Du bist ein Finanz-Matching-Assistent. Ordne Banktransaktionen zu Rechnungen zu basierend auf:
                   
-                  Return ONLY a JSON object with: { "matchedInvoiceId": "id or null", "confidence": 0-100, "reason": "brief explanation" }`,
+                  1. NAMEN-MATCHING (HÖCHSTE PRIORITÄT):
+                     - Vergleiche den Aussteller der Rechnung mit dem Verwendungszweck der Transaktion
+                     - Firmen können leicht unterschiedliche Namen haben (z.B. "OpenAI" vs "OPENAI SAN FRANCISCO")
+                     - Auch Abkürzungen und verschiedene Schreibweisen berücksichtigen
+                  
+                  2. BETRAG (WICHTIG, ABER MIT TOLERANZ):
+                     - Beträge sollten ungefähr übereinstimmen
+                     - Bei Währungsumrechnungen kann es Abweichungen bis zu 10% geben
+                     - Exakte Betragsübereinstimmung ist ein gutes Zeichen, aber nicht zwingend erforderlich
+                  
+                  3. DATUM:
+                     - Rechnungsdatum sollte vor oder nahe am Transaktionsdatum liegen
+                  
+                  Antworte NUR mit einem JSON-Objekt: { "matchedInvoiceId": "id oder null", "confidence": 0-100, "reason": "kurze Begründung" }`,
                 },
                 {
                   role: "user",
-                  content: `Match this transaction to the best invoice:
+                  content: `Ordne diese Transaktion der besten Rechnung zu:
                   
-                  Transaction:
-                  - Date: ${transaction.date}
-                  - Description: ${transaction.description}
-                  - Amount: ${matchAmount} EUR
+                  Transaktion:
+                  - Datum: ${transaction.date}
+                  - Verwendungszweck: ${transaction.description}
+                  - Betrag: ${matchAmount} EUR
+                  ${transaction.original_currency ? `- Originalwährung: ${transaction.original_currency}` : ''}
                   
-                  Possible invoices:
-                  ${potentialMatches.map((inv: any) => `- ID: ${inv.id}, Issuer: ${inv.issuer}, Amount: ${inv.amount} EUR, Date: ${inv.date}`).join("\n")}`,
+                  Mögliche Rechnungen:
+                  ${potentialMatches.map((inv: any) => `- ID: ${inv.id}, Aussteller: ${inv.issuer}, Betrag: ${inv.amount} EUR, Datum: ${inv.date}`).join("\n")}`,
                 },
               ],
             }),
@@ -176,7 +256,7 @@ serve(async (req) => {
                 if (jsonMatch) {
                   const result = JSON.parse(jsonMatch[0]);
                   
-                  if (result.matchedInvoiceId && result.confidence >= 70) {
+                  if (result.matchedInvoiceId && result.confidence >= 60) {
                     await supabaseClient
                       .from("bank_transactions")
                       .update({
@@ -186,6 +266,7 @@ serve(async (req) => {
                       })
                       .eq("id", transaction.id);
 
+                    console.log(`Matched transaction ${transaction.id} to invoice ${result.matchedInvoiceId} with ${result.confidence}% confidence: ${result.reason}`);
                     matchedCount++;
                     continue;
                   }
@@ -200,9 +281,10 @@ serve(async (req) => {
         }
       }
 
-      // Fallback: If only one match, use it with 100% confidence (exact amount match)
-      if (potentialMatches.length === 1) {
-        const match = potentialMatches[0];
+      // Fallback: If only one match with exact amount, use it
+      const exactMatches = invoices.filter((inv: any) => Math.abs(matchAmount - inv.amount) < 0.01);
+      if (exactMatches.length === 1) {
+        const match = exactMatches[0];
 
         await supabaseClient
           .from("bank_transactions")
