@@ -21,6 +21,7 @@ const MemoizedDocumentPreview = memo(DocumentPreview);
 export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showTypeSelector = false }: InvoiceReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
+  const [amountInput, setAmountInput] = useState(invoice.amount.toString().replace('.', ','));
   
   // Memoize the file to prevent DocumentPreview re-renders
   const memoizedFile = useMemo(() => invoice.file, [invoice.file]);
@@ -165,13 +166,24 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
                 <Input
                   type="text"
                   inputMode="decimal"
-                  value={editData.amount.toString().replace('.', ',')}
+                  value={amountInput}
                   onChange={(e) => {
-                    // Allow minus sign, digits, comma and dot
-                    const value = e.target.value.replace(',', '.');
-                    const parsed = parseFloat(value);
-                    if (!isNaN(parsed) || value === '' || value === '-' || value === '-.' || value.endsWith('.')) {
-                      setEditData({ ...editData, amount: isNaN(parsed) ? 0 : parsed });
+                    const value = e.target.value;
+                    // Allow: digits, comma, dot, minus sign
+                    if (/^-?[\d]*[,.]?[\d]*$/.test(value) || value === '') {
+                      setAmountInput(value);
+                      const parsed = parseFloat(value.replace(',', '.'));
+                      if (!isNaN(parsed)) {
+                        setEditData({ ...editData, amount: parsed });
+                      }
+                    }
+                  }}
+                  onBlur={() => {
+                    // Format on blur
+                    const parsed = parseFloat(amountInput.replace(',', '.'));
+                    if (!isNaN(parsed)) {
+                      setAmountInput(parsed.toString().replace('.', ','));
+                      setEditData({ ...editData, amount: parsed });
                     }
                   }}
                   className="h-9"
