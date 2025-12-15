@@ -40,9 +40,9 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
     setIsEditing(false);
   };
 
-  // Eingang = ich erhalte eine Rechnung und bezahle (Ausgabe)
-  // Ausgang = ich stelle eine Rechnung und erhalte Geld (Einnahme)
-  const isExpense = editData.type === "incoming";
+  // outgoing = Eingangsrechnung = ich erhalte eine Rechnung und bezahle (Ausgabe/Geld geht raus)
+  // incoming = Ausgangsrechnung = ich stelle eine Rechnung und erhalte Geld (Einnahme/Geld kommt rein)
+  const isExpense = editData.type === "outgoing";
 
   return (
     <div 
@@ -117,20 +117,34 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
                 <div className="flex-1 flex gap-2">
                   <Button
                     type="button"
-                    variant={editData.type === "incoming" ? "default" : "outline"}
+                    variant={editData.type === "outgoing" ? "default" : "outline"}
                     size="sm"
                     className="flex-1"
-                    onClick={() => setEditData({ ...editData, type: "incoming" })}
+                    onClick={() => {
+                      if (editData.type !== "outgoing") {
+                        // Wechsel zu Eingangsrechnung - Betrag positiv machen
+                        const newAmount = Math.abs(editData.amount);
+                        setEditData({ ...editData, type: "outgoing", amount: newAmount });
+                        setAmountInput(newAmount.toString().replace('.', ','));
+                      }
+                    }}
                   >
                     <ArrowDownLeft className="mr-1 h-3 w-3" />
                     Eingang
                   </Button>
                   <Button
                     type="button"
-                    variant={editData.type === "outgoing" ? "default" : "outline"}
+                    variant={editData.type === "incoming" ? "default" : "outline"}
                     size="sm"
                     className="flex-1"
-                    onClick={() => setEditData({ ...editData, type: "outgoing" })}
+                    onClick={() => {
+                      if (editData.type !== "incoming") {
+                        // Wechsel zu Ausgangsrechnung - Betrag positiv machen
+                        const newAmount = Math.abs(editData.amount);
+                        setEditData({ ...editData, type: "incoming", amount: newAmount });
+                        setAmountInput(newAmount.toString().replace('.', ','));
+                      }
+                    }}
                   >
                     <ArrowUpRight className="mr-1 h-3 w-3" />
                     Ausgang
