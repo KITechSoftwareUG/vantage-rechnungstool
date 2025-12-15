@@ -1,11 +1,12 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useBankTransactions } from "@/hooks/useMatching";
+import { useBankTransactions, useUpdateTransactionMatch } from "@/hooks/useMatching";
 import { useInvoices } from "@/hooks/useDocuments";
+import { useRecurringPatterns, matchesRecurringPattern } from "@/hooks/useRecurringPatterns";
 import { TransactionRow } from "@/components/matching/TransactionRow";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -30,6 +31,35 @@ export default function MatchingPage() {
   // Alle Transaktionen ohne Filter laden
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
   const { data: invoices = [] } = useInvoices();
+  const { data: recurringPatterns = [] } = useRecurringPatterns();
+  const updateMatch = useUpdateTransactionMatch();
+
+  // Auto-mark unmatched transactions that match recurring patterns
+  useEffect(() => {
+    const autoMarkRecurring = async () => {
+      const unmatchedTransactions = transactions.filter(
+        (t: any) => t.matchStatus === "unmatched"
+      );
+
+      for (const transaction of unmatchedTransactions) {
+        if (matchesRecurringPattern(transaction.description, recurringPatterns)) {
+          try {
+            await updateMatch.mutateAsync({
+              transactionId: transaction.id,
+              invoiceId: null,
+              matchStatus: "recurring",
+            });
+          } catch (error) {
+            console.error("Error auto-marking recurring:", error);
+          }
+        }
+      }
+    };
+
+    if (recurringPatterns.length > 0 && transactions.length > 0) {
+      autoMarkRecurring();
+    }
+  }, [recurringPatterns, transactions.length]);
 
   // Laufende Kosten separat halten
   const recurringTransactions = useMemo(() => {

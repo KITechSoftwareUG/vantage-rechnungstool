@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useUpdateTransactionMatch, useUnmatchedInvoices } from "@/hooks/useMatching";
+import { useAddRecurringPattern } from "@/hooks/useRecurringPatterns";
 import { useToast } from "@/hooks/use-toast";
 
 interface TransactionRowProps {
@@ -46,6 +47,7 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const updateMatch = useUpdateTransactionMatch();
+  const addRecurringPattern = useAddRecurringPattern();
   const { data: invoices = [] } = useUnmatchedInvoices();
 
   // Bestimme Bank-Typ basierend auf bankType oder bankName
@@ -112,12 +114,18 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
 
   const handleRecurring = async () => {
     try {
+      // Save pattern for future recognition
+      await addRecurringPattern.mutateAsync(transaction.description);
+      
       await updateMatch.mutateAsync({
         transactionId: transaction.id,
         invoiceId: null,
         matchStatus: "recurring",
       });
-      toast({ title: "Als 'Laufende Kosten' markiert" });
+      toast({ 
+        title: "Als 'Laufende Kosten' markiert",
+        description: "Ähnliche Transaktionen werden automatisch erkannt"
+      });
       setIsOpen(false);
     } catch (error: any) {
       toast({ title: "Fehler", description: error.message, variant: "destructive" });
