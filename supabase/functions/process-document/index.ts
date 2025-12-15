@@ -93,7 +93,10 @@ serve(async (req) => {
       prompt = `Analysiere dieses Dokument als Rechnung und extrahiere folgende Informationen im JSON-Format:
       - date: Rechnungsdatum im Format YYYY-MM-DD
       - issuer: Name des Ausstellers/Unternehmens
-      - amount: Gesamtbetrag als Zahl (ohne Währungssymbol)
+      - amount: Gesamtbetrag als Zahl (ohne Währungssymbol). WICHTIG: 
+        * Wenn "Amount Due" oder "Fälliger Betrag" 0,00 ist, suche nach dem ursprünglichen Rechnungsbetrag (z.B. "Total", "Gesamtbetrag", "Invoice Total", "Subtotal" etc.)
+        * Der Betrag darf negativ sein, wenn es sich um eine Gutschrift handelt
+        * Nimm immer den tatsächlichen Rechnungsbetrag, nicht den offenen Betrag
       - type: "incoming" wenn es eine Eingangsrechnung ist (Geld kommt rein), "outgoing" wenn es eine Ausgangsrechnung ist (Geld geht raus)
       
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.

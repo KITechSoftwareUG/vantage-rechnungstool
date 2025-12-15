@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo, memo } from "react";
 import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,9 +15,15 @@ interface InvoiceReviewCardProps {
   showTypeSelector?: boolean;
 }
 
+// Memoized document preview to prevent re-renders when editing
+const MemoizedDocumentPreview = memo(DocumentPreview);
+
 export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showTypeSelector = false }: InvoiceReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
+  
+  // Memoize the file to prevent DocumentPreview re-renders
+  const memoizedFile = useMemo(() => invoice.file, [invoice.file]);
 
   const handleSave = () => {
     const date = new Date(editData.date);
@@ -46,7 +52,7 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
     >
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left: Document Preview */}
-        <DocumentPreview file={invoice.file} className="h-[400px]" />
+        <MemoizedDocumentPreview file={memoizedFile} className="h-[400px]" />
 
         {/* Right: Extracted Data */}
         <div className="flex flex-col">
@@ -157,10 +163,17 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
               <Euro className="h-4 w-4 text-muted-foreground" />
               {isEditing ? (
                 <Input
-                  type="number"
-                  step="0.01"
-                  value={editData.amount}
-                  onChange={(e) => setEditData({ ...editData, amount: parseFloat(e.target.value) })}
+                  type="text"
+                  inputMode="decimal"
+                  value={editData.amount.toString().replace('.', ',')}
+                  onChange={(e) => {
+                    // Allow minus sign, digits, comma and dot
+                    const value = e.target.value.replace(',', '.');
+                    const parsed = parseFloat(value);
+                    if (!isNaN(parsed) || value === '' || value === '-' || value === '-.' || value.endsWith('.')) {
+                      setEditData({ ...editData, amount: isNaN(parsed) ? 0 : parsed });
+                    }
+                  }}
                   className="h-9"
                   placeholder="Betrag"
                 />
