@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Eye, Trash2 } from "lucide-react";
+import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Eye, Trash2, Banknote, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +40,13 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
     setEditData(updatedData);
   };
 
+  const handlePaymentMethodToggle = (isCash: boolean) => {
+    const newMethod = isCash ? "cash" : "bank";
+    const updatedData = { ...document, paymentMethod: newMethod as "bank" | "cash" };
+    onSave(updatedData);
+    setEditData(updatedData);
+  };
+
   const handleView = () => {
     if (!document.fileUrl) return;
     // fileUrl is already a full URL, open directly
@@ -61,6 +68,7 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
   // Eingang = ich erhalte eine Rechnung und bezahle (Ausgabe)
   // Ausgang = ich stelle eine Rechnung und erhalte Geld (Einnahme)
   const isExpense = document.type === "incoming";
+  const isCash = document.paymentMethod === "cash";
 
   return (
     <div 
@@ -92,6 +100,11 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
             <Badge variant="outline" className={cn("mt-1", statusColors[document.status])}>
               {statusLabels[document.status]}
             </Badge>
+            {isCash && (
+              <Badge variant="outline" className="mt-1 ml-1 bg-amber-500/10 text-amber-600 border-amber-500/20">
+                Kasse
+              </Badge>
+            )}
           </div>
         </div>
         
@@ -132,7 +145,6 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
         </div>
       </div>
 
-      {/* Content */}
       <div className="space-y-3">
         {/* Type Toggle */}
         <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 p-2">
@@ -153,6 +165,33 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
           )}>
             Ausgang
           </span>
+        </div>
+
+        {/* Payment Method Toggle */}
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 p-2">
+          <div className="flex items-center gap-1">
+            <CreditCard className="h-3 w-3 text-muted-foreground" />
+            <span className={cn(
+              "text-xs font-medium transition-colors",
+              !isCash ? "text-foreground" : "text-muted-foreground"
+            )}>
+              Bank
+            </span>
+          </div>
+          <Switch
+            checked={isCash}
+            onCheckedChange={handlePaymentMethodToggle}
+            className="data-[state=checked]:bg-amber-500 data-[state=unchecked]:bg-primary"
+          />
+          <div className="flex items-center gap-1">
+            <Banknote className="h-3 w-3 text-muted-foreground" />
+            <span className={cn(
+              "text-xs font-medium transition-colors",
+              isCash ? "text-amber-600" : "text-muted-foreground"
+            )}>
+              Kasse
+            </span>
+          </div>
         </div>
 
         {/* Date */}
