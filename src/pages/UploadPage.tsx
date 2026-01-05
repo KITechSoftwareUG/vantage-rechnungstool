@@ -65,6 +65,7 @@ export default function UploadPage() {
             amount: result.data.amount || 0,
             type, // Use the type from the tab, not from OCR
             status: "ready",
+            paymentMethod: "bank",
             year: date.getFullYear(),
             month: date.getMonth() + 1,
             file,
@@ -80,6 +81,7 @@ export default function UploadPage() {
             amount: 0,
             type, // Use the type from the tab
             status: "ready",
+            paymentMethod: "bank",
             year: date.getFullYear(),
             month: date.getMonth() + 1,
             file,
@@ -243,6 +245,7 @@ export default function UploadPage() {
         amount: data.amount,
         type: data.type,
         status: "saved",
+        paymentMethod: data.paymentMethod || "bank",
       });
 
       if (type === "incoming") {
