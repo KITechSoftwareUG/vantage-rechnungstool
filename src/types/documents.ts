@@ -11,6 +11,7 @@ export interface InvoiceData {
   fileUrl?: string;
   createdAt?: string;
   paymentMethod?: "bank" | "cash";
+  invoiceNumber?: string | null;
 }
 
 export interface ExtractedTransaction {

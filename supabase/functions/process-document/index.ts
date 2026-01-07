@@ -93,6 +93,9 @@ serve(async (req) => {
       prompt = `Analysiere dieses Dokument als Rechnung und extrahiere folgende Informationen im JSON-Format:
       - date: Rechnungsdatum im Format YYYY-MM-DD
       - issuer: Name des Ausstellers/Unternehmens (wer hat die Rechnung ausgestellt)
+      - invoiceNumber: Die Rechnungsnummer (z.B. "INV-2024-001", "RE2024-1234", "#12345" etc.). 
+        Suche nach Begriffen wie: "Invoice Number", "Rechnungsnummer", "Invoice #", "Rechnung Nr.", "Invoice ID", "Beleg-Nr." etc.
+        Falls keine Rechnungsnummer gefunden wird: null
       - amount: Gesamtbetrag als POSITIVE Zahl (ohne Währungssymbol). WICHTIG: 
         * Wenn "Amount Due" oder "Fälliger Betrag" 0,00 ist, suche nach dem ursprünglichen Rechnungsbetrag (z.B. "Total", "Gesamtbetrag", "Invoice Total", "Subtotal" etc.)
         * Nimm immer den tatsächlichen Rechnungsbetrag, nicht den offenen Betrag
@@ -107,7 +110,7 @@ serve(async (req) => {
         dann ist es IMMER "outgoing" (Eingangsrechnung), weil diese Unternehmen mir niemals Geld schulden würden.
       
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-      Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "amount": 52.50, "type": "outgoing"}`;
+      Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "type": "outgoing"}`;
     } else {
       // Bank statement - extract BOTH summary AND individual transactions
       prompt = `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:

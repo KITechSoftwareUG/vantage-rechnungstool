@@ -243,6 +243,11 @@ export default function ExportPage() {
                           {transaction.matchedInvoice.type === "incoming" ? "Eingang" : "Ausgang"}
                         </Badge>
                       </div>
+                      {transaction.matchedInvoice.invoiceNumber && (
+                        <p className="text-xs font-mono text-primary">
+                          #{transaction.matchedInvoice.invoiceNumber}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground truncate">
                         {transaction.matchedInvoice.fileName}
                       </p>
