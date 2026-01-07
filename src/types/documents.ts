@@ -10,6 +10,7 @@ export interface InvoiceData {
   month: number;
   fileUrl?: string;
   createdAt?: string;
+  paymentMethod?: "bank" | "cash";
 }
 
 export interface ExtractedTransaction {

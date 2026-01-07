@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
-import { FileText, Download, ExternalLink, ArrowDownRight, ArrowUpRight, Send, Loader2 } from "lucide-react";
+import { FileText, Download, ExternalLink, ArrowDownRight, ArrowUpRight, Send, Loader2, Wallet } from "lucide-react";
 import { useExportTransactions, ExportTransaction } from "@/hooks/useExportTransactions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -201,9 +201,16 @@ export default function ExportPage() {
                       <span className="font-medium">
                         {format(new Date(transaction.date), "dd.MM.yyyy", { locale: de })}
                       </span>
-                      <Badge variant="outline" className="text-xs">
-                        {transaction.bankStatement?.bank || "Unbekannt"}
-                      </Badge>
+                      {transaction.isCashPayment ? (
+                        <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/20">
+                          <Wallet className="mr-1 h-3 w-3" />
+                          Kasse
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">
+                          {transaction.bankStatement?.bank || "Unbekannt"}
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-sm text-muted-foreground line-clamp-1">
                       {transaction.description}

@@ -16,11 +16,13 @@ export interface ExportTransaction {
     amount: number;
     date: string;
     type: "incoming" | "outgoing";
+    paymentMethod: "bank" | "cash";
   } | null;
   bankStatement: {
     bank: string;
     bankType: string;
   } | null;
+  isCashPayment: boolean;
 }
 
 export function useExportTransactions() {
@@ -48,7 +50,8 @@ export function useExportTransactions() {
             issuer,
             amount,
             date,
-            type
+            type,
+            payment_method
           ),
           bank_statements!bank_transactions_bank_statement_id_fkey (
             bank,
@@ -76,11 +79,13 @@ export function useExportTransactions() {
           amount: t.invoices.amount,
           date: t.invoices.date,
           type: t.invoices.type as "incoming" | "outgoing",
+          paymentMethod: (t.invoices.payment_method || "bank") as "bank" | "cash",
         } : null,
         bankStatement: t.bank_statements ? {
           bank: t.bank_statements.bank,
           bankType: t.bank_statements.bank_type,
         } : null,
+        isCashPayment: !t.bank_statement_id,
       })) as ExportTransaction[];
     },
     enabled: !!user?.id,
