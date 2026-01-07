@@ -4,7 +4,7 @@ import { UploadZone } from "@/components/upload/UploadZone";
 import { GoogleDrivePicker } from "@/components/upload/GoogleDrivePicker";
 import { InvoiceReviewCard } from "@/components/upload/InvoiceReviewCard";
 import { StatementCard } from "@/components/documents/StatementCard";
-import { ArrowDownLeft, ArrowUpRight, Building, CreditCard, Loader2, Sparkles, AlertTriangle, Receipt } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Building, CreditCard, Loader2, Sparkles, AlertTriangle, Receipt, Wallet } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { InvoiceData, StatementData, ExtractedTransaction } from "@/types/documents";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,6 +18,7 @@ import {
   createBankTransactions 
 } from "@/hooks/useDocuments";
 import { useQueryClient } from "@tanstack/react-query";
+import { useCreateBankTransaction } from "@/hooks/useMatching";
 
 interface ProcessedStatement extends StatementData {
   file: File;
@@ -25,7 +26,7 @@ interface ProcessedStatement extends StatementData {
   duplicateCount?: number;
 }
 
-type UploadCategory = "incoming" | "outgoing" | "volksbank" | "amex" | "commission";
+type UploadCategory = "incoming" | "outgoing" | "cash" | "volksbank" | "amex" | "commission";
 
 export default function UploadPage() {
   const { toast } = useToast();
@@ -37,12 +38,14 @@ export default function UploadPage() {
   // Separate state for each category
   const [incomingInvoices, setIncomingInvoices] = useState<(InvoiceData & { file: File })[]>([]);
   const [outgoingInvoices, setOutgoingInvoices] = useState<(InvoiceData & { file: File })[]>([]);
+  const [cashInvoices, setCashInvoices] = useState<(InvoiceData & { file: File })[]>([]);
   const [volksbankStatements, setVolksbankStatements] = useState<ProcessedStatement[]>([]);
   const [amexStatements, setAmexStatements] = useState<ProcessedStatement[]>([]);
   const [commissionStatements, setCommissionStatements] = useState<ProcessedStatement[]>([]);
 
   const createInvoice = useCreateInvoice();
   const createBankStatement = useCreateBankStatement();
+  const createBankTransaction = useCreateBankTransaction();
 
   const handleInvoiceUpload = async (files: File[], type: "incoming" | "outgoing") => {
     if (!user) return;
@@ -261,6 +264,134 @@ export default function UploadPage() {
     }
   };
 
+  // Handler for cash/private payment invoices - creates invoice + matched transaction in one go
+  const handleCashInvoiceSave = async (data: InvoiceData & { file?: File }) => {
+    if (!user) return;
+    
+    try {
+      // Check for duplicate
+      const isDuplicate = await checkDuplicateInvoice(user.id, {
+        date: data.date,
+        issuer: data.issuer,
+        amount: data.amount,
+      });
+
+      if (isDuplicate) {
+        toast({
+          title: "Duplikat erkannt",
+          description: `Eine Rechnung mit gleichem Datum, Aussteller und Betrag existiert bereits.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      let fileUrl: string | undefined;
+      
+      if (data.file) {
+        fileUrl = await uploadDocument(data.file, user.id, "invoices");
+      }
+
+      // Create invoice with payment_method = 'cash'
+      const invoice = await createInvoice.mutateAsync({
+        fileName: data.fileName,
+        fileUrl,
+        date: data.date,
+        year: data.year,
+        month: data.month,
+        issuer: data.issuer,
+        amount: data.amount,
+        type: data.type,
+        status: "saved",
+        paymentMethod: "cash",
+      });
+
+      // Create a matching "cash" transaction that is already confirmed
+      await createBankTransaction.mutateAsync({
+        bankStatementId: null,
+        date: data.date,
+        description: `Kasse: ${data.issuer}`,
+        amount: data.amount,
+        transactionType: data.type === "outgoing" ? "debit" : "credit",
+        matchedInvoiceId: invoice.id,
+        matchConfidence: 100,
+        matchStatus: "confirmed",
+      });
+
+      setCashInvoices(prev => prev.filter(inv => inv.id !== data.id));
+      
+      toast({ 
+        title: "Kassenbeleg gespeichert",
+        description: "Beleg und Transaktion wurden automatisch zugeordnet."
+      });
+    } catch (error: any) {
+      toast({
+        title: "Fehler beim Speichern",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCashInvoiceUpload = async (files: File[]) => {
+    if (!user) return;
+    setIsProcessing(true);
+    
+    try {
+      const newInvoices: (InvoiceData & { file: File })[] = [];
+
+      for (const file of files) {
+        try {
+          const result = await processDocumentOCR(file, "invoice");
+          
+          const date = new Date(result.data.date || new Date());
+          
+          newInvoices.push({
+            id: `temp-${Date.now()}-${Math.random()}`,
+            fileName: file.name,
+            date: result.data.date || date.toISOString().split("T")[0],
+            issuer: result.data.issuer || "Unbekannt",
+            amount: result.data.amount || 0,
+            type: "outgoing", // Cash payments are typically expenses
+            status: "ready",
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            file,
+          });
+        } catch (error) {
+          console.error("OCR error for file:", file.name, error);
+          const date = new Date();
+          newInvoices.push({
+            id: `temp-${Date.now()}-${Math.random()}`,
+            fileName: file.name,
+            date: date.toISOString().split("T")[0],
+            issuer: "Unbekannt - Bitte manuell eingeben",
+            amount: 0,
+            type: "outgoing",
+            status: "ready",
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            file,
+          });
+        }
+      }
+
+      setCashInvoices(prev => [...prev, ...newInvoices]);
+      
+      toast({
+        title: "OCR-Verarbeitung abgeschlossen",
+        description: `${files.length} Kassenbeleg(e) analysiert`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Fehler bei der Verarbeitung",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleStatementSave = async (data: StatementData & { file?: File; transactions?: ExtractedTransaction[] }, bankType: "volksbank" | "amex" | "commission") => {
     if (!user) return;
     
@@ -370,6 +501,63 @@ export default function UploadPage() {
                 invoice={invoice}
                 onSave={(data) => handleInvoiceSave(data, type)}
                 onDiscard={(id) => setInvoices(prev => prev.filter(inv => inv.id !== id))}
+                index={index}
+                showTypeSelector={false}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // Render cash payment section
+  const renderCashSection = () => (
+    <>
+      <div className="glass-card p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Wallet className="h-5 w-5 text-primary" />
+            <h2 className="font-heading text-lg font-semibold text-foreground">
+              Kasse / Barzahlung
+            </h2>
+          </div>
+          <GoogleDrivePicker 
+            onFilesSelected={handleCashInvoiceUpload}
+            acceptedTypes=".pdf,.png,.jpg,.jpeg"
+          />
+        </div>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Belege für Bar- oder Privatzahlungen. Diese werden automatisch als "Kasse" markiert und sofort zugeordnet.
+        </p>
+        <UploadZone 
+          onFilesSelected={handleCashInvoiceUpload}
+          acceptedTypes=".pdf,.png,.jpg,.jpeg"
+        />
+      </div>
+
+      {isProcessing && activeTab === "cash" && (
+        <div className="glass-card flex items-center justify-center gap-3 p-8">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <span className="text-foreground">Kassenbelege werden analysiert...</span>
+        </div>
+      )}
+
+      {cashInvoices.length > 0 && (
+        <div className="space-y-4">
+          <h3 className="font-heading text-lg font-semibold text-foreground">
+            Erkannte Kassenbelege ({cashInvoices.length})
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Überprüfen Sie die extrahierten Daten. Nach dem Bestätigen wird automatisch eine Transaktion erstellt.
+          </p>
+          <div className="space-y-4">
+            {cashInvoices.map((invoice, index) => (
+              <InvoiceReviewCard
+                key={invoice.id}
+                invoice={invoice}
+                onSave={handleCashInvoiceSave}
+                onDiscard={(id) => setCashInvoices(prev => prev.filter(inv => inv.id !== id))}
                 index={index}
                 showTypeSelector={false}
               />
@@ -513,6 +701,13 @@ export default function UploadPage() {
             <Receipt className="h-4 w-4" />
             Provisionsabrechnung
           </TabsTrigger>
+          <TabsTrigger 
+            value="cash"
+            className="flex items-center gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+          >
+            <Wallet className="h-4 w-4" />
+            Kasse
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="incoming" className="mt-6 space-y-6">
@@ -533,6 +728,10 @@ export default function UploadPage() {
 
         <TabsContent value="commission" className="mt-6 space-y-6">
           {renderStatementSection(commissionStatements, "commission", setCommissionStatements)}
+        </TabsContent>
+
+        <TabsContent value="cash" className="mt-6 space-y-6">
+          {renderCashSection()}
         </TabsContent>
       </Tabs>
     </div>

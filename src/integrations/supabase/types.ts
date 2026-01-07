@@ -171,6 +171,7 @@ export type Database = {
           id: string
           issuer: string
           month: number
+          payment_method: string
           status: string
           type: string
           updated_at: string
@@ -186,6 +187,7 @@ export type Database = {
           id?: string
           issuer: string
           month: number
+          payment_method?: string
           status?: string
           type: string
           updated_at?: string
@@ -201,6 +203,7 @@ export type Database = {
           id?: string
           issuer?: string
           month?: number
+          payment_method?: string
           status?: string
           type?: string
           updated_at?: string
