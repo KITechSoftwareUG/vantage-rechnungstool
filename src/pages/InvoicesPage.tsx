@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, Banknote, CreditCard } from "lucide-react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 import { DocumentCard } from "@/components/documents/DocumentCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
 import { GroupedListView } from "@/components/documents/GroupedListView";
@@ -20,7 +19,6 @@ export default function InvoicesPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "incoming" | "outgoing">("all");
-  const [filterPayment, setFilterPayment] = useState<"all" | "bank" | "cash">("all");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [invoiceToDelete, setInvoiceToDelete] = useState<InvoiceData | null>(null);
 
@@ -32,8 +30,7 @@ export default function InvoicesPage() {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           inv.issuer.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesType = filterType === "all" || inv.type === filterType;
-    const matchesPayment = filterPayment === "all" || inv.paymentMethod === filterPayment;
-    return matchesSearch && matchesType && matchesPayment;
+    return matchesSearch && matchesType;
   });
 
   const groupedInvoices = groupByYearAndMonth(filteredInvoices);
@@ -76,10 +73,6 @@ export default function InvoicesPage() {
   const totalOutgoing = filteredInvoices
     .filter(inv => inv.type === "incoming")
     .reduce((sum, inv) => sum + inv.amount, 0);
-  
-  // Cash/Kasse statistics
-  const cashInvoices = invoices.filter(inv => inv.paymentMethod === "cash");
-  const totalCash = cashInvoices.reduce((sum, inv) => sum + inv.amount, 0);
 
   if (isLoading) {
     return (
@@ -132,7 +125,7 @@ export default function InvoicesPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-4 animate-fade-in" style={{ animationDelay: "0.1s" }}>
+      <div className="grid gap-4 sm:grid-cols-3 animate-fade-in" style={{ animationDelay: "0.1s" }}>
         <div className="glass-card p-4">
           <p className="text-sm text-muted-foreground">Gesamt Einnahmen (Ausgang)</p>
           <p className="mt-1 text-2xl font-bold text-success">
@@ -155,15 +148,6 @@ export default function InvoicesPage() {
             {(totalIncoming - totalOutgoing).toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
           </p>
         </div>
-        <div className="glass-card p-4">
-          <div className="flex items-center gap-2">
-            <Banknote className="h-4 w-4 text-amber-500" />
-            <p className="text-sm text-muted-foreground">Kasse ({cashInvoices.length})</p>
-          </div>
-          <p className="mt-1 text-2xl font-bold text-amber-600">
-            {totalCash.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
-          </p>
-        </div>
       </div>
 
       {/* Filters */}
@@ -178,7 +162,7 @@ export default function InvoicesPage() {
               className="pl-9"
             />
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
             <Button
               variant={filterType === "all" ? "default" : "ghost"}
               size="sm"
@@ -193,7 +177,7 @@ export default function InvoicesPage() {
               className="gap-1"
             >
               <ArrowDownLeft className="h-3 w-3" />
-              Eingang
+              Eingang (Ausgaben)
             </Button>
             <Button
               variant={filterType === "outgoing" ? "default" : "ghost"}
@@ -202,33 +186,7 @@ export default function InvoicesPage() {
               className="gap-1"
             >
               <ArrowUpRight className="h-3 w-3" />
-              Ausgang
-            </Button>
-            <div className="h-4 w-px bg-border mx-1" />
-            <Button
-              variant={filterPayment === "all" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setFilterPayment("all")}
-            >
-              Alle Zahlungen
-            </Button>
-            <Button
-              variant={filterPayment === "bank" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setFilterPayment("bank")}
-              className="gap-1"
-            >
-              <CreditCard className="h-3 w-3" />
-              Bank
-            </Button>
-            <Button
-              variant={filterPayment === "cash" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setFilterPayment("cash")}
-              className="gap-1 text-amber-600"
-            >
-              <Banknote className="h-3 w-3" />
-              Kasse
+              Ausgang (Einnahmen)
             </Button>
           </div>
         </div>
@@ -262,21 +220,15 @@ export default function InvoicesPage() {
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Aussteller</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Dateiname</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Typ</th>
-              <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Zahlung</th>
               <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Betrag</th>
               <th className="px-4 py-3 text-right text-xs font-medium uppercase text-muted-foreground">Aktionen</th>
             </>
           )}
           renderRow={(invoice) => {
             const isExpense = invoice.type === "incoming";
-            const isCash = invoice.paymentMethod === "cash";
             const handleTypeToggle = (isOutgoing: boolean) => {
               const newType = isOutgoing ? "outgoing" : "incoming";
               updateInvoice.mutate({ ...invoice, type: newType as "incoming" | "outgoing" });
-            };
-            const handlePaymentToggle = (isCashPayment: boolean) => {
-              const newMethod = isCashPayment ? "cash" : "bank";
-              updateInvoice.mutate({ ...invoice, paymentMethod: newMethod as "bank" | "cash" });
             };
             return (
               <tr 
@@ -309,17 +261,6 @@ export default function InvoicesPage() {
                     )}>
                       Aus
                     </span>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <CreditCard className={cn("h-3 w-3", !isCash ? "text-primary" : "text-muted-foreground")} />
-                    <Switch
-                      checked={isCash}
-                      onCheckedChange={handlePaymentToggle}
-                      className="data-[state=checked]:bg-amber-500 data-[state=unchecked]:bg-primary scale-75"
-                    />
-                    <Banknote className={cn("h-3 w-3", isCash ? "text-amber-500" : "text-muted-foreground")} />
                   </div>
                 </td>
                 <td className={cn(

@@ -1,9 +1,8 @@
 import { useState, useMemo, memo } from "react";
-import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Banknote, CreditCard } from "lucide-react";
+import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
 import { DocumentPreview } from "./DocumentPreview";
@@ -44,7 +43,6 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
   // outgoing = Eingangsrechnung = ich erhalte eine Rechnung und bezahle (Ausgabe/Geld geht raus)
   // incoming = Ausgangsrechnung = ich stelle eine Rechnung und erhalte Geld (Einnahme/Geld kommt rein)
   const isExpense = editData.type === "outgoing";
-  const isCash = editData.paymentMethod === "cash";
 
   return (
     <div 
@@ -240,44 +238,6 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
                     {isExpense ? "-" : "+"}
                     {invoice.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
                   </span>
-                </div>
-              )}
-            </div>
-
-            {/* Payment Method */}
-            <div className="flex items-center gap-3">
-              <div className="h-4 w-4 text-muted-foreground flex items-center justify-center">
-                {isCash ? <Banknote className="h-4 w-4" /> : <CreditCard className="h-4 w-4" />}
-              </div>
-              {isEditing ? (
-                <div className="flex-1 flex gap-2">
-                  <Button
-                    type="button"
-                    variant={editData.paymentMethod === "bank" ? "default" : "outline"}
-                    size="sm"
-                    className="flex-1"
-                    onClick={() => setEditData({ ...editData, paymentMethod: "bank" })}
-                  >
-                    <CreditCard className="mr-1 h-3 w-3" />
-                    Bank
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={editData.paymentMethod === "cash" ? "default" : "outline"}
-                    size="sm"
-                    className="flex-1 text-amber-600"
-                    onClick={() => setEditData({ ...editData, paymentMethod: "cash" })}
-                  >
-                    <Banknote className="mr-1 h-3 w-3" />
-                    Kasse
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex-1 flex justify-between items-center">
-                  <span className="text-sm text-muted-foreground">Zahlung</span>
-                  <Badge variant={isCash ? "outline" : "default"} className={isCash ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : ""}>
-                    {isCash ? "Kasse / Bar" : "Bank / Karte"}
-                  </Badge>
                 </div>
               )}
             </div>

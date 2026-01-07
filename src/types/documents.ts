@@ -6,7 +6,6 @@ export interface InvoiceData {
   amount: number;
   type: "incoming" | "outgoing";
   status: "processing" | "ready" | "saved";
-  paymentMethod: "bank" | "cash";
   year: number;
   month: number;
   fileUrl?: string;

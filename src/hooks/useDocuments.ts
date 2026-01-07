@@ -31,7 +31,6 @@ export function useInvoices() {
         amount: Number(inv.amount),
         type: inv.type as "incoming" | "outgoing",
         status: inv.status as "processing" | "ready" | "saved",
-        paymentMethod: (inv.payment_method as "bank" | "cash") || "bank",
         createdAt: inv.created_at,
       }));
     },
@@ -61,7 +60,6 @@ export function useCreateInvoice() {
           amount: invoice.amount,
           type: invoice.type,
           status: invoice.status,
-          payment_method: invoice.paymentMethod || "bank",
         })
         .select()
         .single();
@@ -100,7 +98,6 @@ export function useUpdateInvoice() {
           amount: invoice.amount,
           type: invoice.type,
           status: invoice.status,
-          payment_method: invoice.paymentMethod || "bank",
         })
         .eq("id", invoice.id)
         .select()
