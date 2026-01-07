@@ -66,6 +66,7 @@ export default function UploadPage() {
             date: result.data.date || date.toISOString().split("T")[0],
             issuer: result.data.issuer || "Unbekannt",
             amount: result.data.amount || 0,
+            invoiceNumber: result.data.invoiceNumber || null,
             type, // Use the type from the tab, not from OCR
             status: "ready",
             year: date.getFullYear(),
@@ -351,6 +352,7 @@ export default function UploadPage() {
             date: result.data.date || date.toISOString().split("T")[0],
             issuer: result.data.issuer || "Unbekannt",
             amount: result.data.amount || 0,
+            invoiceNumber: result.data.invoiceNumber || null,
             type: "outgoing", // Cash payments are typically expenses
             status: "ready",
             year: date.getFullYear(),

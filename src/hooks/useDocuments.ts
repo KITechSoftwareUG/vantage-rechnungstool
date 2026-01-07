@@ -61,6 +61,7 @@ export function useCreateInvoice() {
           type: invoice.type,
           status: invoice.status,
           payment_method: invoice.paymentMethod || "bank",
+          invoice_number: invoice.invoiceNumber || null,
         })
         .select()
         .single();

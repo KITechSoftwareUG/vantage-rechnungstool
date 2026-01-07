@@ -17,6 +17,7 @@ export interface ExportTransaction {
     date: string;
     type: "incoming" | "outgoing";
     paymentMethod: "bank" | "cash";
+    invoiceNumber: string | null;
   } | null;
   bankStatement: {
     bank: string;
@@ -51,7 +52,8 @@ export function useExportTransactions() {
             amount,
             date,
             type,
-            payment_method
+            payment_method,
+            invoice_number
           ),
           bank_statements!bank_transactions_bank_statement_id_fkey (
             bank,
@@ -80,6 +82,7 @@ export function useExportTransactions() {
           date: t.invoices.date,
           type: t.invoices.type as "incoming" | "outgoing",
           paymentMethod: (t.invoices.payment_method || "bank") as "bank" | "cash",
+          invoiceNumber: t.invoices.invoice_number || null,
         } : null,
         bankStatement: t.bank_statements ? {
           bank: t.bank_statements.bank,

@@ -1,5 +1,5 @@
 import { useState, useMemo, memo } from "react";
-import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Hash } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
   const [amountInput, setAmountInput] = useState(invoice.amount.toString().replace('.', ','));
+  const [invoiceNumberInput, setInvoiceNumberInput] = useState(invoice.invoiceNumber || '');
   
   // Memoize the file to prevent DocumentPreview re-renders
   const memoizedFile = useMemo(() => invoice.file, [invoice.file]);
@@ -30,6 +31,7 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
     const date = new Date(editData.date);
     onSave({
       ...editData,
+      invoiceNumber: invoiceNumberInput.trim() || null,
       year: date.getFullYear(),
       month: date.getMonth() + 1,
     });
@@ -194,6 +196,26 @@ export function InvoiceReviewCard({ invoice, onSave, onDiscard, index = 0, showT
                 <div className="flex-1 flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Aussteller</span>
                   <span className="text-sm font-medium text-foreground">{invoice.issuer}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Invoice Number */}
+            <div className="flex items-center gap-3">
+              <Hash className="h-4 w-4 text-muted-foreground" />
+              {isEditing ? (
+                <Input
+                  value={invoiceNumberInput}
+                  onChange={(e) => setInvoiceNumberInput(e.target.value)}
+                  className="h-9"
+                  placeholder="Rechnungsnummer (optional)"
+                />
+              ) : (
+                <div className="flex-1 flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Rechnungs-Nr.</span>
+                  <span className="text-sm font-medium text-foreground">
+                    {invoice.invoiceNumber || <span className="text-muted-foreground italic">—</span>}
+                  </span>
                 </div>
               )}
             </div>

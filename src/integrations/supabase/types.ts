@@ -169,6 +169,7 @@ export type Database = {
           file_name: string
           file_url: string | null
           id: string
+          invoice_number: string | null
           issuer: string
           month: number
           payment_method: string
@@ -185,6 +186,7 @@ export type Database = {
           file_name: string
           file_url?: string | null
           id?: string
+          invoice_number?: string | null
           issuer: string
           month: number
           payment_method?: string
@@ -201,6 +203,7 @@ export type Database = {
           file_name?: string
           file_url?: string | null
           id?: string
+          invoice_number?: string | null
           issuer?: string
           month?: number
           payment_method?: string
