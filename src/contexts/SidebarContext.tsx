@@ -1,23 +1,19 @@
 import { createContext, useContext, useState, ReactNode, useCallback } from "react";
 
 interface SidebarContextType {
-  isCollapsed: boolean;
-  toggle: () => void;
-  collapse: () => void;
-  expand: () => void;
+  isHovered: boolean;
+  setHovered: (hovered: boolean) => void;
 }
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined);
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
 
-  const toggle = useCallback(() => setIsCollapsed((prev) => !prev), []);
-  const collapse = useCallback(() => setIsCollapsed(true), []);
-  const expand = useCallback(() => setIsCollapsed(false), []);
+  const setHovered = useCallback((hovered: boolean) => setIsHovered(hovered), []);
 
   return (
-    <SidebarContext.Provider value={{ isCollapsed, toggle, collapse, expand }}>
+    <SidebarContext.Provider value={{ isHovered, setHovered }}>
       {children}
     </SidebarContext.Provider>
   );
