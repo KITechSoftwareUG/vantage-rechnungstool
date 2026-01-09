@@ -1,25 +1,15 @@
 import { ReactNode } from "react";
 import { AppSidebar } from "./AppSidebar";
-import { useIsMobile } from "@/hooks/use-mobile";
-import { cn } from "@/lib/utils";
 
 interface MainLayoutProps {
   children: ReactNode;
 }
 
 export function MainLayout({ children }: MainLayoutProps) {
-  const isMobile = useIsMobile();
-
   return (
     <div className="flex min-h-screen w-full bg-background">
       <AppSidebar />
-      <main
-        className={cn(
-          "flex-1 overflow-auto transition-all duration-300",
-          // On mobile: always expanded sidebar (ml-64), on desktop: always collapsed (ml-16)
-          isMobile ? "ml-64" : "ml-16"
-        )}
-      >
+      <main className="ml-64 flex-1 overflow-auto">
         <div className="relative min-h-screen">
           {/* Background gradient effects */}
           <div className="pointer-events-none fixed inset-0 overflow-hidden">
