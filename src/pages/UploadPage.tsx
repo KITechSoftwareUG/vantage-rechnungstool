@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UploadZone } from "@/components/upload/UploadZone";
-import { GoogleDrivePicker } from "@/components/upload/GoogleDrivePicker";
+import { GoogleDriveSync } from "@/components/upload/GoogleDriveSync";
 import { InvoiceReviewCard } from "@/components/upload/InvoiceReviewCard";
 import { StatementCard } from "@/components/documents/StatementCard";
 import { ArrowDownLeft, ArrowUpRight, Building, CreditCard, Loader2, Sparkles, AlertTriangle, Receipt, Wallet } from "lucide-react";
@@ -464,9 +464,9 @@ export default function UploadPage() {
               {type === "incoming" ? "Eingangsrechnungen" : "Ausgangsrechnungen"} hochladen
             </h2>
           </div>
-          <GoogleDrivePicker 
-            onFilesSelected={(files) => handleInvoiceUpload(files, type)}
-            acceptedTypes=".pdf,.png,.jpg,.jpeg"
+          <GoogleDriveSync 
+            category={type}
+            onFilesImported={(files) => handleInvoiceUpload(files, type)}
           />
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
@@ -524,9 +524,9 @@ export default function UploadPage() {
               Kasse / Barzahlung
             </h2>
           </div>
-          <GoogleDrivePicker 
-            onFilesSelected={handleCashInvoiceUpload}
-            acceptedTypes=".pdf,.png,.jpg,.jpeg"
+          <GoogleDriveSync 
+            category="cash"
+            onFilesImported={handleCashInvoiceUpload}
           />
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
@@ -592,9 +592,9 @@ export default function UploadPage() {
               {getBankLabel(bankType)} {bankType === "commission" ? "" : "Kontoauszüge"}
             </h2>
           </div>
-          <GoogleDrivePicker 
-            onFilesSelected={(files) => handleStatementUpload(files, bankType)}
-            acceptedTypes=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv"
+          <GoogleDriveSync 
+            category={bankType}
+            onFilesImported={(files) => handleStatementUpload(files, bankType)}
           />
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
