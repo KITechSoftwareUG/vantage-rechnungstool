@@ -215,6 +215,36 @@ export type Database = {
         }
         Relationships: []
       }
+      processed_drive_files: {
+        Row: {
+          created_at: string
+          drive_file_id: string
+          file_name: string
+          folder_type: string
+          id: string
+          processed_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          drive_file_id: string
+          file_name: string
+          folder_type: string
+          id?: string
+          processed_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          drive_file_id?: string
+          file_name?: string
+          folder_type?: string
+          id?: string
+          processed_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       recurring_patterns: {
         Row: {
           created_at: string
