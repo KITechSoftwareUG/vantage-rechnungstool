@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useGoogleDrive } from "@/hooks/useGoogleDrive";
 import { useToast } from "@/hooks/use-toast";
-import { Cloud, CloudOff, Loader2, FolderSync, Check } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { Cloud, CloudOff, Loader2, FolderSync, Check, Radio } from "lucide-react";
 
 // Mapping of upload categories to Google Drive folder names
 const FOLDER_MAPPING: Record<string, string> = {
@@ -14,28 +16,35 @@ const FOLDER_MAPPING: Record<string, string> = {
   cash: "06 Kasse",
 };
 
+const POLL_INTERVAL = 10000; // 10 seconds
+
 interface GoogleDriveSyncProps {
   category: "incoming" | "outgoing" | "volksbank" | "amex" | "commission" | "cash";
   onFilesImported: (files: File[]) => void;
 }
 
-interface DriveFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  size?: string;
-}
-
-interface DriveFolder {
-  id: string;
-  name: string;
+interface SyncResult {
+  connected: boolean;
+  newFiles?: Array<{
+    id: string;
+    name: string;
+    mimeType: string;
+    content: string; // base64
+  }>;
+  totalInFolder?: number;
+  alreadyProcessed?: number;
+  message?: string;
+  error?: string;
 }
 
 export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncProps) {
   const { toast } = useToast();
-  const { isConnected, isLoading, accessToken, connect, disconnect, handleCallback } = useGoogleDrive();
+  const { isConnected, isLoading, connect, disconnect, handleCallback } = useGoogleDrive();
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncComplete, setSyncComplete] = useState(false);
+  const [isPolling, setIsPolling] = useState(false);
+  const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [stats, setStats] = useState<{ total: number; processed: number } | null>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Handle OAuth callback
   useEffect(() => {
@@ -49,7 +58,7 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
         .then(() => {
           toast({
             title: "Google Drive verbunden",
-            description: "Du kannst jetzt Dateien synchronisieren.",
+            description: "Auto-Sync ist jetzt aktiv (alle 10 Sekunden).",
           });
         })
         .catch((error) => {
@@ -61,6 +70,113 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
         });
     }
   }, [handleCallback, toast]);
+
+  const syncFiles = useCallback(async (showToasts = false): Promise<number> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return 0;
+
+      const response = await supabase.functions.invoke("sync-google-drive", {
+        body: { folderType: category },
+      });
+
+      if (response.error) {
+        console.error("Sync error:", response.error);
+        return 0;
+      }
+
+      const result: SyncResult = response.data;
+
+      if (!result.connected) {
+        return 0;
+      }
+
+      setStats({
+        total: result.totalInFolder || 0,
+        processed: result.alreadyProcessed || 0,
+      });
+
+      if (result.newFiles && result.newFiles.length > 0) {
+        // Convert base64 content to File objects
+        const files: File[] = result.newFiles.map((f) => {
+          const binary = atob(f.content);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          return new File([bytes], f.name, { type: f.mimeType });
+        });
+
+        // Mark files as processed
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from("processed_drive_files").insert(
+            result.newFiles.map((f) => ({
+              user_id: user.id,
+              drive_file_id: f.id,
+              file_name: f.name,
+              folder_type: category,
+            }))
+          );
+        }
+
+        onFilesImported(files);
+
+        if (showToasts || files.length > 0) {
+          toast({
+            title: `${files.length} neue Datei(en)`,
+            description: `Aus "${FOLDER_MAPPING[category]}" importiert`,
+          });
+        }
+
+        return files.length;
+      }
+
+      return 0;
+    } catch (error) {
+      console.error("Sync failed:", error);
+      return 0;
+    }
+  }, [category, onFilesImported, toast]);
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      const count = await syncFiles(true);
+      setLastSync(new Date());
+      if (count === 0) {
+        toast({
+          title: "Keine neuen Dateien",
+          description: "Alle Dateien wurden bereits verarbeitet.",
+        });
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Auto-polling when connected
+  useEffect(() => {
+    if (isConnected && !isLoading) {
+      // Initial sync
+      syncFiles(false).then(() => setLastSync(new Date()));
+
+      // Start polling
+      setIsPolling(true);
+      pollIntervalRef.current = setInterval(async () => {
+        await syncFiles(false);
+        setLastSync(new Date());
+      }, POLL_INTERVAL);
+
+      return () => {
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+        setIsPolling(false);
+      };
+    }
+  }, [isConnected, isLoading, syncFiles]);
 
   const handleConnect = async () => {
     try {
@@ -75,11 +191,17 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
   };
 
   const handleDisconnect = async () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    setIsPolling(false);
+
     try {
       await disconnect();
       toast({
         title: "Verbindung getrennt",
-        description: "Google Drive wurde erfolgreich getrennt.",
+        description: "Google Drive Auto-Sync wurde deaktiviert.",
       });
     } catch (error: any) {
       toast({
@@ -87,160 +209,6 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
         description: error.message,
         variant: "destructive",
       });
-    }
-  };
-
-  const findFolder = async (folderName: string): Promise<DriveFolder | null> => {
-    if (!accessToken) return null;
-
-    try {
-      const query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-      const response = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }
-      );
-
-      if (!response.ok) throw new Error("Fehler beim Suchen des Ordners");
-
-      const data = await response.json();
-      return data.files?.[0] || null;
-    } catch (error) {
-      console.error("Error finding folder:", error);
-      return null;
-    }
-  };
-
-  const listFilesInFolder = async (folderId: string): Promise<DriveFile[]> => {
-    if (!accessToken) return [];
-
-    try {
-      // Get supported file types for the category
-      const mimeTypes = [
-        "application/pdf",
-        "image/png",
-        "image/jpeg",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-        "text/csv",
-      ];
-
-      const mimeFilter = mimeTypes.map(t => `mimeType='${t}'`).join(" or ");
-      const query = `'${folderId}' in parents and (${mimeFilter}) and trashed=false`;
-
-      const response = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,size)&orderBy=name`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }
-      );
-
-      if (!response.ok) throw new Error("Fehler beim Laden der Dateien");
-
-      const data = await response.json();
-      return data.files || [];
-    } catch (error) {
-      console.error("Error listing files:", error);
-      return [];
-    }
-  };
-
-  const downloadFile = async (file: DriveFile): Promise<File | null> => {
-    if (!accessToken) return null;
-
-    try {
-      const response = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }
-      );
-
-      if (!response.ok) throw new Error(`Fehler beim Download von ${file.name}`);
-
-      const blob = await response.blob();
-      return new File([blob], file.name, { type: file.mimeType });
-    } catch (error) {
-      console.error("Error downloading file:", error);
-      return null;
-    }
-  };
-
-  const handleSync = async () => {
-    if (!accessToken) return;
-
-    setIsSyncing(true);
-    setSyncComplete(false);
-
-    try {
-      const folderName = FOLDER_MAPPING[category];
-      
-      toast({
-        title: "Suche Ordner...",
-        description: `Suche "${folderName}" in Google Drive`,
-      });
-
-      const folder = await findFolder(folderName);
-
-      if (!folder) {
-        toast({
-          title: "Ordner nicht gefunden",
-          description: `Der Ordner "${folderName}" wurde nicht gefunden. Bitte stelle sicher, dass er in Google Drive existiert.`,
-          variant: "destructive",
-        });
-        return;
-      }
-
-      toast({
-        title: "Lade Dateien...",
-        description: `Hole Dateien aus "${folderName}"`,
-      });
-
-      const driveFiles = await listFilesInFolder(folder.id);
-
-      if (driveFiles.length === 0) {
-        toast({
-          title: "Keine Dateien gefunden",
-          description: `Der Ordner "${folderName}" enthält keine unterstützten Dateien.`,
-        });
-        return;
-      }
-
-      toast({
-        title: "Importiere Dateien...",
-        description: `${driveFiles.length} Datei(en) werden heruntergeladen`,
-      });
-
-      const downloadedFiles: File[] = [];
-
-      for (const driveFile of driveFiles) {
-        const file = await downloadFile(driveFile);
-        if (file) {
-          downloadedFiles.push(file);
-        }
-      }
-
-      if (downloadedFiles.length > 0) {
-        onFilesImported(downloadedFiles);
-        setSyncComplete(true);
-        
-        toast({
-          title: "Sync abgeschlossen",
-          description: `${downloadedFiles.length} Datei(en) aus "${folderName}" importiert`,
-        });
-
-        // Reset sync complete indicator after 3 seconds
-        setTimeout(() => setSyncComplete(false), 3000);
-      }
-    } catch (error: any) {
-      toast({
-        title: "Sync fehlgeschlagen",
-        description: error.message,
-        variant: "destructive",
-      });
-    } finally {
-      setIsSyncing(false);
     }
   };
 
@@ -263,30 +231,41 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
   }
 
   return (
-    <div className="flex gap-2">
+    <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
+        {isPolling && (
+          <Badge variant="secondary" className="gap-1 animate-pulse">
+            <Radio className="h-3 w-3" />
+            Live
+          </Badge>
+        )}
+        {stats && (
+          <span className="text-xs text-muted-foreground">
+            {stats.processed}/{stats.total} verarbeitet
+          </span>
+        )}
+      </div>
+      
       <Button
-        variant={syncComplete ? "default" : "outline"}
-        onClick={handleSync}
+        variant="outline"
+        size="sm"
+        onClick={handleManualSync}
         disabled={isSyncing}
         className="gap-2"
       >
         {isSyncing ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
-            Synchronisiere...
-          </>
-        ) : syncComplete ? (
-          <>
-            <Check className="h-4 w-4" />
-            Synchronisiert
+            Sync...
           </>
         ) : (
           <>
             <FolderSync className="h-4 w-4" />
-            Von Google Drive
+            Jetzt prüfen
           </>
         )}
       </Button>
+      
       <Button
         variant="ghost"
         size="icon"
