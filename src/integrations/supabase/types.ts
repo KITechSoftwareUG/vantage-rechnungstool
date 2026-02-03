@@ -27,6 +27,7 @@ export type Database = {
           id: string
           month: number
           opening_balance: number
+          source_endpoint: string | null
           status: string
           updated_at: string
           user_id: string
@@ -44,6 +45,7 @@ export type Database = {
           id?: string
           month: number
           opening_balance: number
+          source_endpoint?: string | null
           status?: string
           updated_at?: string
           user_id: string
@@ -61,6 +63,7 @@ export type Database = {
           id?: string
           month?: number
           opening_balance?: number
+          source_endpoint?: string | null
           status?: string
           updated_at?: string
           user_id?: string
@@ -131,6 +134,48 @@ export type Database = {
           },
         ]
       }
+      document_ingestion_log: {
+        Row: {
+          created_at: string
+          document_id: string | null
+          document_type: string
+          endpoint_category: string
+          endpoint_month: number | null
+          endpoint_year: number
+          error_message: string | null
+          file_name: string
+          id: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_id?: string | null
+          document_type: string
+          endpoint_category: string
+          endpoint_month?: number | null
+          endpoint_year: number
+          error_message?: string | null
+          file_name: string
+          id?: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          document_id?: string | null
+          document_type?: string
+          endpoint_category?: string
+          endpoint_month?: number | null
+          endpoint_year?: number
+          error_message?: string | null
+          file_name?: string
+          id?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       google_drive_tokens: {
         Row: {
           access_token: string
@@ -173,6 +218,7 @@ export type Database = {
           issuer: string
           month: number
           payment_method: string
+          source_endpoint: string | null
           status: string
           type: string
           updated_at: string
@@ -190,6 +236,7 @@ export type Database = {
           issuer: string
           month: number
           payment_method?: string
+          source_endpoint?: string | null
           status?: string
           type: string
           updated_at?: string
@@ -207,6 +254,7 @@ export type Database = {
           issuer?: string
           month?: number
           payment_method?: string
+          source_endpoint?: string | null
           status?: string
           type?: string
           updated_at?: string
