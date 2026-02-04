@@ -110,6 +110,31 @@ serve(async (req) => {
       );
     }
 
+    // Get optional drive_file_id for deduplication with Google Drive Sync
+    const driveFileId = url.searchParams.get("drive_file_id");
+
+    // If drive_file_id provided, check if already processed
+    if (driveFileId) {
+      const { data: existingFile } = await supabase
+        .from("processed_drive_files")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("drive_file_id", driveFileId)
+        .maybeSingle();
+
+      if (existingFile) {
+        return new Response(
+          JSON.stringify({ 
+            success: true, 
+            message: "File already processed (deduplicated)", 
+            deduplicated: true,
+            drive_file_id: driveFileId,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     // Parse the request body - expecting multipart/form-data with file
     const contentType = req.headers.get("content-type") || "";
     
@@ -306,6 +331,18 @@ serve(async (req) => {
         .eq("id", logEntry.id);
     }
 
+    // If drive_file_id provided, mark as processed for deduplication
+    if (driveFileId) {
+      await supabase
+        .from("processed_drive_files")
+        .insert({
+          user_id: userId,
+          drive_file_id: driveFileId,
+          file_name: fileName,
+          folder_type: category,
+        });
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -313,6 +350,7 @@ serve(async (req) => {
         document_id: documentId,
         document_type: config.documentType,
         file_name: fileName,
+        drive_file_id: driveFileId || null,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
