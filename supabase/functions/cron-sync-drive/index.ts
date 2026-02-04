@@ -6,12 +6,15 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Default year for cron sync
+const DEFAULT_YEAR = 2026;
+
 const FOLDER_MAPPING: Record<string, string> = {
-  "incoming": "01 Eingang (Provisionsabrechnungen, etc...)",
-  "outgoing": "02 Ausgang (Rechnungen, Belege, etc...)",
-  "volksbank": "03 VR-Bank Kontoauszüge",
-  "amex": "04 AMEX Kontoauszüge",
-  "commission": "05 Provisionsabrechnung",
+  "incoming": "01 Eingang",
+  "outgoing": "02 Ausgang",
+  "commission": "03 Provisionsabrechnung",
+  "volksbank": "04 VR-Bank Kontoauszüge",
+  "amex": "05 AMEX Kontoauszüge",
   "cash": "06 Kasse",
 };
 
@@ -64,8 +67,11 @@ async function refreshAccessToken(supabase: any, userId: string, refreshToken: s
   return newTokens.access_token;
 }
 
-async function findFolderByName(accessToken: string, folderName: string): Promise<string | null> {
-  const query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+async function findFolderByName(accessToken: string, folderName: string, parentId?: string): Promise<string | null> {
+  let query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  if (parentId) {
+    query += ` and '${parentId}' in parents`;
+  }
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
 
   const response = await fetch(url, {
@@ -132,11 +138,18 @@ serve(async (req) => {
         }
       }
 
-      // Process each folder
+      // First find the year folder
+      const yearFolderId = await findFolderByName(accessToken, DEFAULT_YEAR.toString());
+      if (!yearFolderId) {
+        console.log(`Year folder "${DEFAULT_YEAR}" not found for user ${userId}`);
+        continue;
+      }
+
+      // Process each folder within the year folder
       for (const [folderType, folderName] of Object.entries(FOLDER_MAPPING)) {
-        const folderId = await findFolderByName(accessToken, folderName);
+        const folderId = await findFolderByName(accessToken, folderName, yearFolderId);
         if (!folderId) {
-          console.log(`Folder "${folderName}" not found for user ${userId}`);
+          console.log(`Folder "${folderName}" not found in ${DEFAULT_YEAR} for user ${userId}`);
           continue;
         }
 

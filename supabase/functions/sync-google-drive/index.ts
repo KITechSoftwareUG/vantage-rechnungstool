@@ -16,6 +16,7 @@ const MONTH_FOLDERS = [
   "09 September", "10 Oktober", "11 November", "12 Dezember"
 ];
 
+// Base folder mapping (without year prefix)
 const FOLDER_MAPPING: Record<string, string> = {
   "incoming": "01 Eingang",
   "outgoing": "02 Ausgang",
@@ -24,6 +25,11 @@ const FOLDER_MAPPING: Record<string, string> = {
   "amex": "05 AMEX Kontoauszüge",
   "cash": "06 Kasse",
 };
+
+// Function to get folder name with year context
+function getFolderNameForYear(folderType: string, year: number): string {
+  return FOLDER_MAPPING[folderType] || folderType;
+}
 
 const SUPPORTED_MIME_TYPES = [
   "application/pdf",
@@ -197,7 +203,7 @@ serve(async (req) => {
       throw new Error("User not found");
     }
 
-    const { folderType } = await req.json();
+    const { folderType, year = 2026 } = await req.json();
 
     // Get Google access token
     const accessToken = await getAccessToken(supabase, user.id);
@@ -208,19 +214,32 @@ serve(async (req) => {
       );
     }
 
-    // Find the folder
-    const folderName = FOLDER_MAPPING[folderType];
+    // Find the year folder first (e.g., "2026")
+    const yearFolderId = await findFolderByName(accessToken, year.toString());
+    if (!yearFolderId) {
+      return new Response(
+        JSON.stringify({ 
+          connected: true, 
+          newFiles: [], 
+          message: `Year folder "${year}" not found in Google Drive` 
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Find the category folder within the year folder
+    const folderName = getFolderNameForYear(folderType, year);
     if (!folderName) {
       throw new Error(`Unknown folder type: ${folderType}`);
     }
 
-    const folderId = await findFolderByName(accessToken, folderName);
+    const folderId = await findFolderByName(accessToken, folderName, yearFolderId);
     if (!folderId) {
       return new Response(
         JSON.stringify({ 
           connected: true, 
           newFiles: [], 
-          message: `Folder "${folderName}" not found` 
+          message: `Folder "${folderName}" not found in year ${year}` 
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -13,7 +14,8 @@ import {
   CheckCircle2, 
   AlertCircle,
   RefreshCw,
-  Folder
+  Folder,
+  Calendar
 } from "lucide-react";
 
 // Mapping of folder types to Google Drive folder names
@@ -25,6 +27,10 @@ const FOLDER_MAPPING: Record<string, string> = {
   amex: "05 AMEX Kontoauszüge",
   cash: "06 Kasse",
 };
+
+// Available years for sync
+const AVAILABLE_YEARS = [2024, 2025, 2026, 2027];
+const DEFAULT_YEAR = 2026;
 
 interface SyncStatus {
   isConnected: boolean;
@@ -38,6 +44,7 @@ interface SyncStatus {
 export function GoogleDriveSyncCard() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [selectedYear, setSelectedYear] = useState<number>(DEFAULT_YEAR);
   const [status, setStatus] = useState<SyncStatus>({
     isConnected: false,
     isLoading: true,
@@ -181,10 +188,10 @@ export function GoogleDriveSyncCard() {
     let totalNew = 0;
 
     try {
-      // Sync all folder types
+      // Sync all folder types with selected year
       for (const folderType of Object.keys(FOLDER_MAPPING)) {
         const response = await supabase.functions.invoke("sync-google-drive", {
-          body: { folderType },
+          body: { folderType, year: selectedYear },
         });
 
         if (response.data?.newFiles?.length > 0) {
@@ -314,6 +321,26 @@ export function GoogleDriveSyncCard() {
               </p>
             )}
 
+            {/* Year selector */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Calendar className="h-4 w-4" />
+                <span>Jahr:</span>
+              </div>
+              <Select value={selectedYear.toString()} onValueChange={(v) => setSelectedYear(parseInt(v))}>
+                <SelectTrigger className="w-[100px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {AVAILABLE_YEARS.map((year) => (
+                    <SelectItem key={year} value={year.toString()}>
+                      {year}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             {/* Action buttons */}
             <div className="flex gap-2">
               <Button 
@@ -324,12 +351,12 @@ export function GoogleDriveSyncCard() {
                 {isSyncing ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Synchronisiere...
+                    Synchronisiere {selectedYear}...
                   </>
                 ) : (
                   <>
                     <FolderSync className="h-4 w-4" />
-                    Jetzt synchronisieren
+                    {selectedYear} synchronisieren
                   </>
                 )}
               </Button>
