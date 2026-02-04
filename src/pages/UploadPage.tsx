@@ -1,4 +1,3 @@
-import { EndpointUrlsCard } from "@/components/upload/EndpointUrlsCard";
 import { IngestionTracker } from "@/components/upload/IngestionTracker";
 
 export default function UploadPage() {
@@ -14,12 +13,8 @@ export default function UploadPage() {
         </p>
       </div>
 
-      {/* Main Content Grid */}
-      <div className="grid gap-6 lg:grid-cols-2 animate-fade-in">
-        {/* Endpoint URLs */}
-        <EndpointUrlsCard />
-
-        {/* Ingestion Tracker */}
+      {/* Ingestion Tracker - Full Width */}
+      <div className="animate-fade-in">
         <IngestionTracker />
       </div>
     </div>
