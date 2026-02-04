@@ -6,6 +6,16 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Folders with monthly subfolders
+const FOLDERS_WITH_MONTHS = ["incoming", "outgoing"];
+
+// Month subfolder names
+const MONTH_FOLDERS = [
+  "01 Januar", "02 Februar", "03 März", "04 April",
+  "05 Mai", "06 Juni", "07 Juli", "08 August",
+  "09 September", "10 Oktober", "11 November", "12 Dezember"
+];
+
 const FOLDER_MAPPING: Record<string, string> = {
   "incoming": "01 Eingang",
   "outgoing": "02 Ausgang",
@@ -88,8 +98,11 @@ async function getAccessToken(supabase: any, userId: string): Promise<string | n
   return tokenData.access_token;
 }
 
-async function findFolderByName(accessToken: string, folderName: string): Promise<string | null> {
-  const query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+async function findFolderByName(accessToken: string, folderName: string, parentId?: string): Promise<string | null> {
+  let query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  if (parentId) {
+    query += ` and '${parentId}' in parents`;
+  }
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
 
   const response = await fetch(url, {
@@ -98,6 +111,18 @@ async function findFolderByName(accessToken: string, folderName: string): Promis
 
   const data = await response.json();
   return data.files?.[0]?.id || null;
+}
+
+async function getSubfolders(accessToken: string, parentId: string): Promise<Array<{id: string, name: string}>> {
+  const query = `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  const data = await response.json();
+  return data.files || [];
 }
 
 async function getFilesInFolder(accessToken: string, folderId: string): Promise<DriveFile[]> {
@@ -111,6 +136,34 @@ async function getFilesInFolder(accessToken: string, folderId: string): Promise<
 
   const data = await response.json();
   return data.files || [];
+}
+
+// Get files from folder, including month subfolders if applicable
+async function getFilesWithMonthInfo(
+  accessToken: string, 
+  folderId: string, 
+  folderType: string
+): Promise<Array<DriveFile & { month?: number }>> {
+  // Check if this folder type has month subfolders
+  if (FOLDERS_WITH_MONTHS.includes(folderType)) {
+    const subfolders = await getSubfolders(accessToken, folderId);
+    const allFiles: Array<DriveFile & { month?: number }> = [];
+    
+    for (const subfolder of subfolders) {
+      // Extract month number from folder name (e.g., "01 Januar" -> 1)
+      const monthMatch = subfolder.name.match(/^(\d{2})\s/);
+      const month = monthMatch ? parseInt(monthMatch[1], 10) : null;
+      
+      const files = await getFilesInFolder(accessToken, subfolder.id);
+      allFiles.push(...files.map(f => ({ ...f, month: month || undefined })));
+    }
+    
+    return allFiles;
+  } else {
+    // No subfolders, get files directly
+    const files = await getFilesInFolder(accessToken, folderId);
+    return files.map(f => ({ ...f, month: undefined }));
+  }
 }
 
 async function downloadFile(accessToken: string, fileId: string): Promise<ArrayBuffer> {
@@ -173,8 +226,8 @@ serve(async (req) => {
       );
     }
 
-    // Get files in folder
-    const allFiles = await getFilesInFolder(accessToken, folderId);
+    // Get files in folder (including month subfolders for incoming/outgoing)
+    const allFiles = await getFilesWithMonthInfo(accessToken, folderId, folderType);
 
     // Get already processed files
     const { data: processedFiles } = await supabase
@@ -188,7 +241,7 @@ serve(async (req) => {
     // Filter to only new files
     const newFiles = allFiles.filter(f => !processedIds.has(f.id));
 
-    // Download and return new files with their content
+    // Download and return new files with their content (including month info)
     const filesWithContent = await Promise.all(
       newFiles.slice(0, 10).map(async (file) => { // Limit to 10 files per sync
         try {
@@ -199,6 +252,7 @@ serve(async (req) => {
             name: file.name,
             mimeType: file.mimeType,
             content: base64,
+            month: file.month, // Include month from subfolder
           };
         } catch (e) {
           console.error(`Failed to download ${file.name}:`, e);
