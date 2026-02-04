@@ -7,11 +7,11 @@ const corsHeaders = {
 };
 
 const FOLDER_MAPPING: Record<string, string> = {
-  "incoming": "01 Eingang (Provisionsabrechnungen, etc...)",
-  "outgoing": "02 Ausgang (Rechnungen, Belege, etc...)",
-  "volksbank": "03 VR-Bank Kontoauszüge",
-  "amex": "04 AMEX Kontoauszüge",
-  "commission": "05 Provisionsabrechnung",
+  "incoming": "01 Eingang",
+  "outgoing": "02 Ausgang",
+  "commission": "03 Provisionsabrechnung",
+  "volksbank": "04 VR-Bank Kontoauszüge",
+  "amex": "05 AMEX Kontoauszüge",
   "cash": "06 Kasse",
 };
 
