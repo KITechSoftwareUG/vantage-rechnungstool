@@ -92,9 +92,8 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Verify API key (stored as user profile setting or a dedicated table)
-    // For now, we use the LOVABLE_API_KEY secret as a shared key
-    const validApiKey = Deno.env.get("LOVABLE_API_KEY");
+    // Verify API key using the N8N_API_KEY secret
+    const validApiKey = Deno.env.get("N8N_API_KEY");
     if (apiKey !== validApiKey) {
       return new Response(
         JSON.stringify({ error: "Invalid API key." }),
