@@ -3,6 +3,9 @@ import { NavLink } from "@/components/NavLink";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "next-themes";
+import logoDarkmode from "@/assets/logo_darkmode.png";
+import logoLightmode from "@/assets/logo_lightmode.png";
 
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -15,17 +18,18 @@ const navItems = [
 
 export function AppSidebar() {
   const { user, signOut } = useAuth();
+  const { resolvedTheme } = useTheme();
+
+  const logoSrc = resolvedTheme === "dark" ? logoDarkmode : logoLightmode;
 
   return (
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Logo */}
       <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-blue-500">
-            <FileText className="h-5 w-5 text-primary-foreground" />
-          </div>
+          <img src={logoSrc} alt="Logo" className="h-9 w-auto shrink-0" />
           <span className="font-heading text-lg font-semibold text-sidebar-foreground">
-            Platzhalter
+            Vantage
           </span>
         </div>
         <ThemeToggle />
