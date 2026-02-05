@@ -170,16 +170,25 @@ serve(async (req) => {
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
-      const file = formData.get("file") as File | null;
+      // n8n sends file as 'data', but also accept 'file' as fallback
+      const file = (formData.get("data") || formData.get("file")) as File | null;
       
       if (!file) {
+        // Log available fields for debugging
+        const availableFields: string[] = [];
+        formData.forEach((_, key) => availableFields.push(key));
+        
         return new Response(
-          JSON.stringify({ error: "Keine Datei im Form-Data. Verwende das Feld 'file'." }),
+          JSON.stringify({ 
+            error: "Keine Datei im Form-Data gefunden.", 
+            hinweis: "Verwende das Feld 'data' oder 'file'.",
+            gefundeneFelder: availableFields,
+          }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
-      fileName = file.name;
+      fileName = file.name || "uploaded_file.pdf";
       mimeType = file.type || "application/pdf";
       fileData = new Uint8Array(await file.arrayBuffer());
     } else if (contentType.includes("application/json")) {
