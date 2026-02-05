@@ -7,6 +7,24 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// German to English category mapping
+const CATEGORY_ALIASES: Record<string, string> = {
+  // German names
+  "eingang": "incoming",
+  "ausgang": "outgoing",
+  "vrbank": "volksbank",
+  "vr-bank": "volksbank",
+  "provision": "commission",
+  "kasse": "cash",
+  // English names (passthrough)
+  "incoming": "incoming",
+  "outgoing": "outgoing",
+  "volksbank": "volksbank",
+  "amex": "amex",
+  "commission": "commission",
+  "cash": "cash",
+};
+
 // Valid categories and their document types
 const CATEGORY_CONFIG: Record<string, { documentType: "invoice" | "statement"; requiresMonth: boolean }> = {
   "incoming": { documentType: "invoice", requiresMonth: true },
@@ -33,23 +51,34 @@ serve(async (req) => {
     if (relevantParts.length < 2) {
       return new Response(
         JSON.stringify({ 
-          error: "Invalid path. Expected: /n8n-webhook/{category}/{year} or /n8n-webhook/{category}/{year}/{month}",
-          validCategories: Object.keys(CATEGORY_CONFIG),
+          error: "Ungültiger Pfad. Erwartet: /n8n-webhook/{kategorie}/{jahr} oder /n8n-webhook/{kategorie}/{jahr}/{monat}",
+          gueltigeKategorien: Object.keys(CATEGORY_ALIASES),
+          beispiel: "/n8n-webhook/eingang/2026/1",
         }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const category = relevantParts[0];
+    const rawCategory = relevantParts[0].toLowerCase();
     const year = parseInt(relevantParts[1], 10);
     const month = relevantParts[2] ? parseInt(relevantParts[2], 10) : null;
 
-    // Validate category
-    if (!CATEGORY_CONFIG[category]) {
+    // Map category alias to canonical name
+    const category = CATEGORY_ALIASES[rawCategory];
+    
+    if (!category) {
       return new Response(
         JSON.stringify({ 
-          error: `Invalid category: ${category}`,
-          validCategories: Object.keys(CATEGORY_CONFIG),
+          error: `Unbekannte Kategorie: ${rawCategory}`,
+          gueltigeKategorien: Object.keys(CATEGORY_ALIASES),
+          beispiele: {
+            "eingang": "Eingangsrechnungen (Ausgaben)",
+            "ausgang": "Ausgangsrechnungen (Einnahmen)",
+            "volksbank": "VR-Bank Kontoauszüge",
+            "amex": "American Express Auszüge",
+            "provision": "Provisionsabrechnungen",
+            "kasse": "Kassenbuch",
+          },
         }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -60,7 +89,7 @@ serve(async (req) => {
     // Validate year
     if (isNaN(year) || year < 2020 || year > 2100) {
       return new Response(
-        JSON.stringify({ error: `Invalid year: ${relevantParts[1]}. Must be between 2020-2100.` }),
+        JSON.stringify({ error: `Ungültiges Jahr: ${relevantParts[1]}. Muss zwischen 2020-2100 liegen.` }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -70,21 +99,27 @@ serve(async (req) => {
       if (month === null || isNaN(month) || month < 1 || month > 12) {
         return new Response(
           JSON.stringify({ 
-            error: `Category ${category} requires a valid month (1-12). Path: /n8n-webhook/${category}/${year}/{month}` 
+            error: `Kategorie ${rawCategory} benötigt einen gültigen Monat (1-12). Pfad: /n8n-webhook/${rawCategory}/${year}/{monat}` 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
     }
 
-    // Get API key from header or query param
+    // Get API key from header or query param (OPTIONAL now, but recommended)
     const apiKey = req.headers.get("x-api-key") || url.searchParams.get("api_key");
+    const validApiKey = Deno.env.get("N8N_API_KEY");
     
-    if (!apiKey) {
-      return new Response(
-        JSON.stringify({ error: "Missing API key. Provide via x-api-key header or api_key query param." }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // Only validate API key if N8N_API_KEY is configured AND a key was provided
+    if (validApiKey && validApiKey.length > 0) {
+      if (apiKey && apiKey !== validApiKey) {
+        return new Response(
+          JSON.stringify({ error: "Ungültiger API-Key." }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      // Note: If no API key is provided but one is configured, we still allow the request
+      // This makes the API key optional for easier n8n setup
     }
 
     // Initialize Supabase with service role for inserting data
@@ -92,20 +127,11 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Verify API key using the N8N_API_KEY secret
-    const validApiKey = Deno.env.get("N8N_API_KEY");
-    if (apiKey !== validApiKey) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API key." }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     // Get the user ID from query param (required for multi-user setup)
     const userId = url.searchParams.get("user_id");
     if (!userId) {
       return new Response(
-        JSON.stringify({ error: "Missing user_id query parameter." }),
+        JSON.stringify({ error: "Fehlender user_id Query-Parameter." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -126,7 +152,7 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({ 
             success: true, 
-            message: "File already processed (deduplicated)", 
+            message: "Datei bereits verarbeitet (Duplikat)", 
             deduplicated: true,
             drive_file_id: driveFileId,
           }),
@@ -148,7 +174,7 @@ serve(async (req) => {
       
       if (!file) {
         return new Response(
-          JSON.stringify({ error: "No file provided in form data. Use 'file' field." }),
+          JSON.stringify({ error: "Keine Datei im Form-Data. Verwende das Feld 'file'." }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -162,7 +188,7 @@ serve(async (req) => {
       
       if (!body.file_content || !body.file_name) {
         return new Response(
-          JSON.stringify({ error: "JSON body must include 'file_content' (base64) and 'file_name'." }),
+          JSON.stringify({ error: "JSON-Body muss 'file_content' (base64) und 'file_name' enthalten." }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -178,7 +204,7 @@ serve(async (req) => {
       }
     } else {
       return new Response(
-        JSON.stringify({ error: "Content-Type must be multipart/form-data or application/json." }),
+        JSON.stringify({ error: "Content-Type muss multipart/form-data oder application/json sein." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -229,7 +255,7 @@ serve(async (req) => {
       }
       
       return new Response(
-        JSON.stringify({ error: `Upload failed: ${uploadError.message}` }),
+        JSON.stringify({ error: `Upload fehlgeschlagen: ${uploadError.message}` }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -271,7 +297,7 @@ serve(async (req) => {
         }
         
         return new Response(
-          JSON.stringify({ error: `Invoice creation failed: ${invoiceError.message}` }),
+          JSON.stringify({ error: `Rechnung konnte nicht erstellt werden: ${invoiceError.message}` }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -315,7 +341,7 @@ serve(async (req) => {
         }
         
         return new Response(
-          JSON.stringify({ error: `Statement creation failed: ${statementError.message}` }),
+          JSON.stringify({ error: `Kontoauszug konnte nicht erstellt werden: ${statementError.message}` }),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -346,7 +372,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Document received via ${endpointId}`,
+        message: `Dokument empfangen über ${endpointId}`,
         document_id: documentId,
         document_type: config.documentType,
         file_name: fileName,
@@ -357,7 +383,7 @@ serve(async (req) => {
 
   } catch (error: unknown) {
     console.error("Webhook error:", error);
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = error instanceof Error ? error.message : "Unbekannter Fehler";
     return new Response(
       JSON.stringify({ error: message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
