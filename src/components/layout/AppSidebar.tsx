@@ -29,7 +29,7 @@ export function AppSidebar() {
         <div className="flex items-center gap-3">
           <img src={logoSrc} alt="Logo" className="h-9 w-auto shrink-0" />
           <span className="font-heading text-lg font-semibold text-sidebar-foreground">
-            Vantage
+            Matching Tool
           </span>
         </div>
         <ThemeToggle />
