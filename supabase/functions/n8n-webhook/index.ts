@@ -12,14 +12,139 @@ const monthMap: Record<string, number> = {
   juli: 7, august: 8, september: 9, oktober: 10, november: 11, dezember: 12,
 };
 
-// Map category to document type
-const categoryMap: Record<string, string> = {
-  eingang: "incoming",
-  ausgang: "outgoing",
-  vrbank: "vrbank",
-  provision: "provision",
+// Map category to document type for OCR routing
+const categoryToDocType: Record<string, "invoice" | "statement"> = {
+  eingang: "invoice",
+  ausgang: "invoice",
+  vrbank: "statement",
+  provision: "invoice",
+  kasse: "invoice",
+};
+
+// Map category to payment method
+const categoryToPayment: Record<string, string> = {
+  eingang: "bank",
+  ausgang: "bank",
+  vrbank: "bank",
+  provision: "bank",
   kasse: "cash",
 };
+
+// Map category to bank type for statements
+const categoryToBankType: Record<string, string> = {
+  vrbank: "volksbank",
+};
+
+// Convert ArrayBuffer to base64 in chunks to avoid stack overflow
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode.apply(null, Array.from(chunk));
+  }
+  return btoa(binary);
+}
+
+// Retry fetch with exponential backoff
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3,
+  baseDelay = 2000
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        console.log(`Attempt ${attempt + 1}: Got ${response.status}, retrying...`);
+        lastError = new Error(`AI Gateway error: ${response.status}`);
+        if (attempt < maxRetries - 1) {
+          await new Promise(resolve => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
+          continue;
+        }
+        throw lastError;
+      }
+      return response;
+    } catch (error) {
+      console.log(`Attempt ${attempt + 1}: Network error, retrying...`, error);
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
+      }
+    }
+  }
+  throw lastError || new Error("Max retries exceeded");
+}
+
+// Build OCR prompt based on document type
+function getOcrPrompt(docType: "invoice" | "statement"): string {
+  if (docType === "invoice") {
+    return `Analysiere dieses Dokument als Rechnung und extrahiere folgende Informationen im JSON-Format:
+    - date: Rechnungsdatum im Format YYYY-MM-DD
+    - issuer: Name des Ausstellers/Unternehmens (wer hat die Rechnung ausgestellt)
+    - invoiceNumber: Die Rechnungsnummer (z.B. "INV-2024-001", "RE2024-1234", "#12345" etc.). 
+      Suche nach Begriffen wie: "Invoice Number", "Rechnungsnummer", "Invoice #", "Rechnung Nr.", "Invoice ID", "Beleg-Nr." etc.
+      Falls keine Rechnungsnummer gefunden wird: null
+    - amount: Gesamtbetrag als POSITIVE Zahl (ohne Währungssymbol). WICHTIG: 
+      * Wenn "Amount Due" oder "Fälliger Betrag" 0,00 ist, suche nach dem ursprünglichen Rechnungsbetrag (z.B. "Total", "Gesamtbetrag", "Invoice Total", "Subtotal" etc.)
+      * Nimm immer den tatsächlichen Rechnungsbetrag, nicht den offenen Betrag
+      * Betrag IMMER als positive Zahl angeben!
+    - type: SEHR WICHTIG - korrekte Unterscheidung:
+      * "outgoing" = EINGANGSRECHNUNG = Rechnung von einem anderen Unternehmen AN MICH = ICH muss bezahlen = Geld geht RAUS
+      * "incoming" = AUSGANGSRECHNUNG = Rechnung die ICH an einen Kunden stelle = Kunde bezahlt MIR = Geld kommt REIN
+      
+      REGEL: Wenn das Dokument eine Rechnung von einem bekannten Unternehmen (OpenAI, Google, Amazon, Adobe, Microsoft, etc.) ist, 
+      dann ist es IMMER "outgoing" (Eingangsrechnung), weil diese Unternehmen mir niemals Geld schulden würden.
+    
+    Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
+    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "type": "outgoing"}`;
+  }
+
+  return `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
+
+    1. Zusammenfassung (summary):
+    - bank: Name der Bank (z.B. "Volksbank", "American Express", "Raiffeisenbank", "VR Bank")
+    - bankType: "volksbank" wenn Volksbank/Raiffeisenbank/VR Bank, "amex" wenn American Express
+    - accountNumber: Kontonummer oder IBAN
+    - date: Datum des Auszugs im Format YYYY-MM-DD
+    - openingBalance: Anfangssaldo als Zahl (kann 0 sein wenn nicht vorhanden)
+    - closingBalance: Endsaldo als Zahl (kann 0 sein wenn nicht vorhanden)
+
+    2. Einzelne Transaktionen (transactions) - WICHTIG: Extrahiere ALLE Transaktionszeilen:
+    - date: Buchungsdatum im Format YYYY-MM-DD
+    - description: Beschreibung/Verwendungszweck der Transaktion
+    - amount: Betrag als positive Zahl in EUR
+    - type: "credit" für Gutschriften/Einzahlungen, "debit" für Abbuchungen/Ausgaben
+    - originalCurrency: Bei Fremdwährungstransaktionen den kompletten Text, sonst null
+
+    Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
+    Beispiel:
+    {
+      "summary": {
+        "bank": "Volksbank",
+        "bankType": "volksbank",
+        "accountNumber": "DE12345678",
+        "date": "2024-01-31",
+        "openingBalance": 1000,
+        "closingBalance": 1450
+      },
+      "transactions": [
+        {"date": "2024-01-05", "description": "Gehalt", "amount": 3000, "type": "credit", "originalCurrency": null}
+      ]
+    }`;
+}
+
+// Sanitize string for filename
+function sanitizeForFilename(str: string): string {
+  return str
+    .replace(/[^a-zA-Z0-9äöüÄÖÜß\-_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .substring(0, 40);
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -29,9 +154,7 @@ Deno.serve(async (req) => {
   try {
     const url = new URL(req.url);
     const pathParts = url.pathname.split("/").filter(Boolean);
-    
-    // Expected path: /n8n-webhook/{category}/{year}/{month}
-    // pathParts: ["n8n-webhook", "eingang", "2026", "januar"]
+
     const category = pathParts[1]?.toLowerCase();
     const year = parseInt(pathParts[2], 10);
     const monthName = pathParts[3]?.toLowerCase();
@@ -42,11 +165,8 @@ Deno.serve(async (req) => {
     const contentType = req.headers.get("content-type") || "";
 
     console.log("=== N8N WEBHOOK ===");
-    console.log("Path:", url.pathname);
-    console.log("Category:", category, "→", categoryMap[category]);
-    console.log("Year:", year, "Month:", month);
+    console.log("Category:", category, "Year:", year, "Month:", month);
     console.log("User ID:", userId);
-    console.log("Content-Type:", contentType);
 
     // Validate required parameters
     if (!userId) {
@@ -56,7 +176,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    if (!category || !categoryMap[category]) {
+    const docType = categoryToDocType[category];
+    if (!docType) {
       return new Response(
         JSON.stringify({ success: false, error: `Invalid category: ${category}` }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -81,12 +202,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log("File size:", fileSize, "bytes");
-
-    // Generate filename based on timestamp
-    const timestamp = Date.now();
-    const extension = contentType.includes("pdf") ? "pdf" : "bin";
-    const fileName = `n8n_${category}_${year}_${month}_${timestamp}.${extension}`;
+    console.log("File size:", fileSize, "bytes, docType:", docType);
 
     // Initialize Supabase client
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -111,11 +227,15 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Upload file to Supabase Storage
-    const storagePath = `${userId}/${year}/${month}/${fileName}`;
+    // Upload file to storage with temp name first
+    const timestamp = Date.now();
+    const extension = contentType.includes("pdf") ? "pdf" : "bin";
+    const tempFileName = `n8n_${category}_${timestamp}.${extension}`;
+    const tempStoragePath = `${userId}/${year}/${month}/${tempFileName}`;
+
     const { error: uploadError } = await supabase.storage
       .from("documents")
-      .upload(storagePath, fileBuffer, {
+      .upload(tempStoragePath, fileBuffer, {
         contentType: contentType || "application/pdf",
         upsert: false,
       });
@@ -128,25 +248,268 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Get public URL
-    const { data: urlData } = supabase.storage.from("documents").getPublicUrl(storagePath);
-    const fileUrl = urlData?.publicUrl;
+    console.log("File uploaded to temp path:", tempStoragePath);
 
-    console.log("File uploaded:", storagePath);
-
-    // Log ingestion
-    const { error: logError } = await supabase.from("document_ingestion_log").insert({
-      user_id: userId,
-      file_name: fileName,
-      document_type: categoryMap[category],
-      endpoint_category: category,
-      endpoint_year: year,
-      endpoint_month: month,
-      status: "received",
-    });
+    // Log ingestion as "processing"
+    const { data: logEntry, error: logError } = await supabase
+      .from("document_ingestion_log")
+      .insert({
+        user_id: userId,
+        file_name: tempFileName,
+        document_type: docType === "invoice" ? category : "vrbank",
+        endpoint_category: category,
+        endpoint_year: year,
+        endpoint_month: month,
+        status: "processing",
+      })
+      .select("id")
+      .single();
 
     if (logError) {
       console.error("Log error:", logError);
+    }
+
+    // ===== OCR PROCESSING =====
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) {
+      // Update log status
+      if (logEntry) {
+        await supabase.from("document_ingestion_log").update({
+          status: "error",
+          error_message: "LOVABLE_API_KEY not configured",
+        }).eq("id", logEntry.id);
+      }
+      return new Response(
+        JSON.stringify({ success: false, error: "OCR not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const base64 = arrayBufferToBase64(fileBuffer);
+    const mimeType = contentType || "application/pdf";
+    const prompt = getOcrPrompt(docType);
+
+    console.log("Starting OCR for:", docType);
+
+    const aiResponse = await fetchWithRetry(
+      "https://ai.gateway.lovable.dev/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:${mimeType};base64,${base64}` },
+                },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+
+    if (!aiResponse.ok) {
+      const errorText = await aiResponse.text();
+      console.error("AI Gateway error:", aiResponse.status, errorText);
+      if (logEntry) {
+        await supabase.from("document_ingestion_log").update({
+          status: "error",
+          error_message: `OCR failed: ${aiResponse.status}`,
+        }).eq("id", logEntry.id);
+      }
+      return new Response(
+        JSON.stringify({ success: false, error: `OCR failed: ${aiResponse.status}` }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const aiData = await aiResponse.json();
+    const aiContent = aiData.choices?.[0]?.message?.content || "";
+    console.log("OCR Response:", aiContent);
+
+    // Parse JSON from AI response
+    let extractedData: any;
+    try {
+      const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        extractedData = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error("No JSON found in OCR response");
+      }
+    } catch (parseError) {
+      console.error("Failed to parse OCR response:", parseError);
+      if (docType === "invoice") {
+        extractedData = {
+          date: `${year}-${String(month).padStart(2, "0")}-01`,
+          issuer: "Unbekannt",
+          amount: 0,
+          type: category === "eingang" ? "outgoing" : "incoming",
+        };
+      } else {
+        extractedData = {
+          summary: {
+            bank: "Unbekannt",
+            bankType: categoryToBankType[category] || "volksbank",
+            accountNumber: "Unbekannt",
+            date: `${year}-${String(month).padStart(2, "0")}-01`,
+            openingBalance: 0,
+            closingBalance: 0,
+          },
+          transactions: [],
+        };
+      }
+    }
+
+    // ===== BUILD FINAL FILENAME & RENAME =====
+    let finalFileName: string;
+    let finalStoragePath: string;
+
+    if (docType === "invoice") {
+      const issuer = sanitizeForFilename(extractedData.issuer || "Unbekannt");
+      const date = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
+      const amount = Math.abs(extractedData.amount || 0).toFixed(2).replace(".", ",");
+      finalFileName = `${date}_${issuer}_${amount}EUR.${extension}`;
+    } else {
+      const summary = extractedData.summary || extractedData;
+      const bank = sanitizeForFilename(summary.bank || "Bank");
+      const date = summary.date || `${year}-${String(month).padStart(2, "0")}-01`;
+      finalFileName = `${date}_${bank}_Kontoauszug.${extension}`;
+    }
+
+    finalStoragePath = `${userId}/${year}/${month}/${finalFileName}`;
+
+    // Copy file to new name then delete old
+    const { data: fileData } = await supabase.storage
+      .from("documents")
+      .download(tempStoragePath);
+
+    if (fileData) {
+      const arrayBuf = await fileData.arrayBuffer();
+      await supabase.storage
+        .from("documents")
+        .upload(finalStoragePath, arrayBuf, {
+          contentType: contentType || "application/pdf",
+          upsert: true,
+        });
+      await supabase.storage.from("documents").remove([tempStoragePath]);
+      console.log("File renamed to:", finalStoragePath);
+    } else {
+      // Fallback: keep temp name
+      finalFileName = tempFileName;
+      finalStoragePath = tempStoragePath;
+      console.log("Could not rename, keeping temp name");
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage.from("documents").getPublicUrl(finalStoragePath);
+    const fileUrl = urlData?.publicUrl || "";
+
+    // ===== CREATE DATABASE RECORD =====
+    let documentId: string | null = null;
+
+    if (docType === "invoice") {
+      const invoiceDate = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
+      const { data: invoice, error: invoiceError } = await supabase
+        .from("invoices")
+        .insert({
+          user_id: userId,
+          file_name: finalFileName,
+          file_url: fileUrl,
+          date: invoiceDate,
+          year: year,
+          month: month,
+          issuer: extractedData.issuer || "Unbekannt",
+          amount: Math.abs(extractedData.amount || 0),
+          type: extractedData.type || (category === "eingang" ? "outgoing" : "incoming"),
+          payment_method: categoryToPayment[category] || "bank",
+          invoice_number: extractedData.invoiceNumber || null,
+          status: "ready",
+          source_endpoint: `n8n/${category}`,
+        })
+        .select("id")
+        .single();
+
+      if (invoiceError) {
+        console.error("Invoice insert error:", invoiceError);
+      } else {
+        documentId = invoice?.id || null;
+        console.log("Invoice created:", documentId);
+      }
+    } else {
+      // Bank statement
+      const summary = extractedData.summary || extractedData;
+      const statementDate = summary.date || `${year}-${String(month).padStart(2, "0")}-01`;
+
+      const { data: statement, error: statementError } = await supabase
+        .from("bank_statements")
+        .insert({
+          user_id: userId,
+          file_name: finalFileName,
+          file_url: fileUrl,
+          date: statementDate,
+          year: year,
+          month: month,
+          bank: summary.bank || "Unbekannt",
+          bank_type: summary.bankType || categoryToBankType[category] || "volksbank",
+          account_number: summary.accountNumber || "Unbekannt",
+          opening_balance: summary.openingBalance || 0,
+          closing_balance: summary.closingBalance || 0,
+          status: "ready",
+          source_endpoint: `n8n/${category}`,
+        })
+        .select("id")
+        .single();
+
+      if (statementError) {
+        console.error("Statement insert error:", statementError);
+      } else {
+        documentId = statement?.id || null;
+        console.log("Bank statement created:", documentId);
+
+        // Insert transactions if available
+        const transactions = extractedData.transactions || [];
+        if (transactions.length > 0 && documentId) {
+          const txRows = transactions.map((tx: any) => ({
+            user_id: userId,
+            bank_statement_id: documentId,
+            date: tx.date || statementDate,
+            description: tx.description || "",
+            amount: Math.abs(tx.amount || 0),
+            transaction_type: tx.type || "debit",
+            original_currency: tx.originalCurrency || null,
+            match_status: "unmatched",
+          }));
+
+          const { error: txError } = await supabase
+            .from("bank_transactions")
+            .insert(txRows);
+
+          if (txError) {
+            console.error("Transactions insert error:", txError);
+          } else {
+            console.log(`Inserted ${transactions.length} transactions`);
+          }
+        }
+      }
+    }
+
+    // Update ingestion log with result
+    if (logEntry) {
+      await supabase.from("document_ingestion_log").update({
+        status: documentId ? "completed" : "error",
+        document_id: documentId,
+        file_name: finalFileName,
+        error_message: documentId ? null : "Failed to create DB record",
+      }).eq("id", logEntry.id);
     }
 
     // Mark as processed if drive_file_id provided
@@ -154,21 +517,24 @@ Deno.serve(async (req) => {
       await supabase.from("processed_drive_files").insert({
         user_id: userId,
         drive_file_id: driveFileId,
-        file_name: fileName,
+        file_name: finalFileName,
         folder_type: category,
       });
     }
 
-    console.log("=== SUCCESS ===");
+    console.log("=== WORKFLOW COMPLETE ===");
 
     return new Response(
       JSON.stringify({
         success: true,
-        message: "File received and stored",
-        fileName: fileName,
+        message: "File processed successfully",
+        documentId: documentId || null,
+        documentType: docType,
+        fileName: finalFileName,
         fileSize: fileSize,
-        storagePath: storagePath,
-        fileUrl: fileUrl,
+        extractedData: docType === "invoice"
+          ? { date: extractedData.date, issuer: extractedData.issuer, amount: extractedData.amount, type: extractedData.type }
+          : { bank: extractedData.summary?.bank, date: extractedData.summary?.date, transactions: (extractedData.transactions || []).length },
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
@@ -176,9 +542,9 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("Error:", error);
     return new Response(
-      JSON.stringify({ 
-        success: false, 
-        error: error instanceof Error ? error.message : "Unknown error" 
+      JSON.stringify({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
