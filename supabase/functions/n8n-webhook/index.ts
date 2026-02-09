@@ -434,7 +434,7 @@ Deno.serve(async (req) => {
           type: extractedData.type || (category === "eingang" ? "outgoing" : "incoming"),
           payment_method: categoryToPayment[category] || "bank",
           invoice_number: extractedData.invoiceNumber || null,
-          status: "ready",
+          status: "processing",
           source_endpoint: `n8n/${category}`,
         })
         .select("id")
@@ -465,7 +465,7 @@ Deno.serve(async (req) => {
           account_number: summary.accountNumber || "Unbekannt",
           opening_balance: summary.openingBalance || 0,
           closing_balance: summary.closingBalance || 0,
-          status: "ready",
+          status: "processing",
           source_endpoint: `n8n/${category}`,
         })
         .select("id")

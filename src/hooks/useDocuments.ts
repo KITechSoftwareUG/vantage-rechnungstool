@@ -16,6 +16,7 @@ export function useInvoices() {
       const { data, error } = await supabase
         .from("invoices")
         .select("*")
+        .neq("status", "processing")
         .order("date", { ascending: false });
 
       if (error) throw error;
