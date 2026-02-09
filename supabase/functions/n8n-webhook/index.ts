@@ -162,11 +162,12 @@ Deno.serve(async (req) => {
 
     const userId = url.searchParams.get("user_id");
     const driveFileId = url.searchParams.get("drive_file_id");
+    const originalFileName = url.searchParams.get("file_name") || url.searchParams.get("fileName") || "";
     const contentType = req.headers.get("content-type") || "";
 
     console.log("=== N8N WEBHOOK ===");
     console.log("Category:", category, "Year:", year, "Month:", month);
-    console.log("User ID:", userId);
+    console.log("User ID:", userId, "Original filename:", originalFileName);
 
     // Validate required parameters
     if (!userId) {
@@ -250,12 +251,13 @@ Deno.serve(async (req) => {
 
     console.log("File uploaded to temp path:", tempStoragePath);
 
-    // Log ingestion as "processing"
+    // Log ingestion as "processing" - use original filename if available
+    const displayFileName = originalFileName || tempFileName;
     const { data: logEntry, error: logError } = await supabase
       .from("document_ingestion_log")
       .insert({
         user_id: userId,
-        file_name: tempFileName,
+        file_name: displayFileName,
         document_type: docType === "invoice" ? category : "vrbank",
         endpoint_category: category,
         endpoint_year: year,
