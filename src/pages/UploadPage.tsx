@@ -1,5 +1,4 @@
 import { IngestionTracker } from "@/components/upload/IngestionTracker";
-import { GoogleDriveSyncCard } from "@/components/upload/GoogleDriveSyncCard";
 
 export default function UploadPage() {
   return (
@@ -10,13 +9,8 @@ export default function UploadPage() {
           Dokumente Einspeisung
         </h1>
         <p className="mt-1 text-muted-foreground">
-          Dokumente werden automatisch über n8n oder Google Drive eingespeist
+          Dokumente werden automatisch über n8n eingespeist
         </p>
-      </div>
-
-      {/* Google Drive Sync Card */}
-      <div className="animate-fade-in">
-        <GoogleDriveSyncCard />
       </div>
 
       {/* Ingestion Tracker - Full Width */}
