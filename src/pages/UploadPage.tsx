@@ -1,4 +1,5 @@
 import { IngestionTracker } from "@/components/upload/IngestionTracker";
+import { ReviewQueue } from "@/components/upload/ReviewQueue";
 
 export default function UploadPage() {
   return (
@@ -13,7 +14,12 @@ export default function UploadPage() {
         </p>
       </div>
 
-      {/* Ingestion Tracker - Full Width */}
+      {/* Review Queue - Documents pending review */}
+      <div className="animate-fade-in">
+        <ReviewQueue />
+      </div>
+
+      {/* Ingestion Tracker */}
       <div className="animate-fade-in">
         <IngestionTracker />
       </div>
