@@ -34,15 +34,26 @@ interface IngestionLog {
 }
 
 const CATEGORY_ICONS: Record<string, React.ElementType> = {
+  eingang: ArrowDownLeft,
+  ausgang: ArrowUpRight,
+  vrbank: Building,
+  provision: Receipt,
+  kasse: Wallet,
+  // Fallback for legacy/english values
   incoming: ArrowDownLeft,
   outgoing: ArrowUpRight,
   volksbank: Building,
-  amex: CreditCard,
   commission: Receipt,
   cash: Wallet,
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
+  eingang: "Eingangsrechnung",
+  ausgang: "Ausgangsrechnung",
+  vrbank: "VR-Bank Kontoauszug",
+  provision: "Provisionsabrechnung",
+  kasse: "Kasse",
+  // Fallback for legacy/english values
   incoming: "Eingangsrechnung",
   outgoing: "Ausgangsrechnung",
   volksbank: "Volksbank",
@@ -77,6 +88,7 @@ export function IngestionTracker() {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case "completed":
       case "success":
         return (
           <Badge variant="secondary" className="gap-1 bg-primary/20 text-primary">
@@ -96,6 +108,13 @@ export function IngestionTracker() {
           <Badge variant="secondary" className="gap-1">
             <Clock className="h-3 w-3 animate-pulse" />
             Verarbeitung
+          </Badge>
+        );
+      case "received":
+        return (
+          <Badge variant="outline" className="gap-1">
+            <Clock className="h-3 w-3" />
+            Empfangen
           </Badge>
         );
       default:
