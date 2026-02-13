@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,9 +26,11 @@ import {
   Wallet,
   RefreshCw,
   ChevronRight,
-  FolderOpen
+  FolderOpen,
+  Trash2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 
 interface IngestionLog {
   id: string;
@@ -36,6 +39,7 @@ interface IngestionLog {
   endpoint_month: number | null;
   file_name: string;
   document_type: string;
+  document_id: string | null;
   status: string;
   error_message: string | null;
   created_at: string;
@@ -99,6 +103,11 @@ function getSourceBreadcrumb(log: IngestionLog) {
 export function IngestionTracker() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
+  const [deleteLogId, setDeleteLogId] = useState<string | null>(null);
+  const [deleteLogDocId, setDeleteLogDocId] = useState<string | null>(null);
+  const [deleteLogDocType, setDeleteLogDocType] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: logs, isLoading, refetch } = useQuery({
     queryKey: ["ingestion-logs"],
@@ -142,6 +151,37 @@ export function IngestionTracker() {
 
   const toggleCategory = (cat: string) => {
     setOpenCategories((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  };
+
+  const deleteMutation = useMutation({
+    mutationFn: async ({ logId, documentId, documentType }: { logId: string; documentId: string | null; documentType: string }) => {
+      // Delete the associated document if it exists
+      if (documentId) {
+        const table = documentType === "bank_statement" ? "bank_statements" : "invoices";
+        await supabase.from(table).delete().eq("id", documentId);
+      }
+      // Delete the ingestion log
+      const { error } = await supabase.from("document_ingestion_log").delete().eq("id", logId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-statements"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
+      toast({ title: "Dokument entfernt" });
+      setDeleteLogId(null);
+    },
+    onError: (error) => {
+      toast({ title: "Fehler", description: error.message, variant: "destructive" });
+      setDeleteLogId(null);
+    },
+  });
+
+  const handleDeleteClick = (log: IngestionLog) => {
+    setDeleteLogId(log.id);
+    setDeleteLogDocId(log.document_id ?? null);
+    setDeleteLogDocType(log.document_type);
   };
 
   const getStatusBadge = (status: string) => {
@@ -203,6 +243,7 @@ export function IngestionTracker() {
   }
 
   return (
+    <>
     <Card>
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="flex items-center gap-2 text-lg">
@@ -277,7 +318,17 @@ export function IngestionTracker() {
                                 <p className="truncate text-sm font-medium">
                                   {log.file_name}
                                 </p>
-                                {getStatusBadge(log.status)}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {getStatusBadge(log.status)}
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteClick(log); }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
                               </div>
                               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                 <FolderOpen className="h-3 w-3 shrink-0" />
@@ -309,5 +360,14 @@ export function IngestionTracker() {
         )}
       </CardContent>
     </Card>
+    <DeleteConfirmationDialog
+      open={!!deleteLogId}
+      onOpenChange={(open) => !open && setDeleteLogId(null)}
+      onConfirm={() => deleteLogId && deleteMutation.mutate({ logId: deleteLogId, documentId: deleteLogDocId, documentType: deleteLogDocType || "" })}
+      title="Dokument entfernen"
+      description="Möchten Sie dieses Dokument wirklich entfernen? Der Eintrag und das zugehörige Dokument werden aus der Datenbank gelöscht."
+      isDeleting={deleteMutation.isPending}
+    />
+    </>
   );
 }
