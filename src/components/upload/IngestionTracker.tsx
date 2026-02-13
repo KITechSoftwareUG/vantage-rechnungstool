@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface IngestionLog {
   id: string;
@@ -106,6 +107,8 @@ export function IngestionTracker() {
   const [deleteLogId, setDeleteLogId] = useState<string | null>(null);
   const [deleteLogDocId, setDeleteLogDocId] = useState<string | null>(null);
   const [deleteLogDocType, setDeleteLogDocType] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -153,14 +156,58 @@ export function IngestionTracker() {
     setOpenCategories((prev) => ({ ...prev, [cat]: !prev[cat] }));
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (!logs) return;
+    if (selectedIds.size === logs.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(logs.map((l) => l.id)));
+    }
+  };
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async () => {
+      if (!logs) return;
+      const selected = logs.filter((l) => selectedIds.has(l.id));
+      for (const log of selected) {
+        if (log.document_id) {
+          const table = log.document_type === "bank_statement" ? "bank_statements" : "invoices";
+          await supabase.from(table).delete().eq("id", log.document_id);
+        }
+      }
+      const ids = selected.map((l) => l.id);
+      const { error } = await supabase.from("document_ingestion_log").delete().in("id", ids);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-statements"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
+      toast({ title: `${selectedIds.size} Dokument${selectedIds.size !== 1 ? "e" : ""} entfernt` });
+      setSelectedIds(new Set());
+      setShowBulkDelete(false);
+    },
+    onError: (error) => {
+      toast({ title: "Fehler", description: error.message, variant: "destructive" });
+      setShowBulkDelete(false);
+    },
+  });
   const deleteMutation = useMutation({
     mutationFn: async ({ logId, documentId, documentType }: { logId: string; documentId: string | null; documentType: string }) => {
-      // Delete the associated document if it exists
       if (documentId) {
         const table = documentType === "bank_statement" ? "bank_statements" : "invoices";
         await supabase.from(table).delete().eq("id", documentId);
       }
-      // Delete the ingestion log
       const { error } = await supabase.from("document_ingestion_log").delete().eq("id", logId);
       if (error) throw error;
     },
@@ -250,14 +297,38 @@ export function IngestionTracker() {
           <FileText className="h-5 w-5" />
           Eingespeiste Dokumente
         </CardTitle>
-        <Button 
-          variant="ghost" 
-          size="sm" 
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-        >
-          <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-        </Button>
+        <div className="flex items-center gap-2">
+          {logs && logs.length > 0 && (
+            <>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={selectedIds.size === logs.length && logs.length > 0}
+                  onCheckedChange={toggleSelectAll}
+                />
+                <span className="text-xs text-muted-foreground">Alle</span>
+              </div>
+              {selectedIds.size > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="gap-1"
+                  onClick={() => setShowBulkDelete(true)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {selectedIds.size} löschen
+                </Button>
+              )}
+            </>
+          )}
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {!logs || logs.length === 0 ? (
@@ -313,6 +384,11 @@ export function IngestionTracker() {
                             key={log.id}
                             className="flex items-start gap-3 rounded-md p-2.5 transition-colors hover:bg-muted/30"
                           >
+                            <Checkbox
+                              checked={selectedIds.has(log.id)}
+                              onCheckedChange={() => toggleSelect(log.id)}
+                              className="mt-0.5"
+                            />
                             <div className="flex-1 min-w-0 space-y-1">
                               <div className="flex items-start justify-between gap-2">
                                 <p className="truncate text-sm font-medium">
@@ -367,6 +443,14 @@ export function IngestionTracker() {
       title="Dokument entfernen"
       description="Möchten Sie dieses Dokument wirklich entfernen? Der Eintrag und das zugehörige Dokument werden aus der Datenbank gelöscht."
       isDeleting={deleteMutation.isPending}
+    />
+    <DeleteConfirmationDialog
+      open={showBulkDelete}
+      onOpenChange={setShowBulkDelete}
+      onConfirm={() => bulkDeleteMutation.mutate()}
+      title={`${selectedIds.size} Dokument${selectedIds.size !== 1 ? "e" : ""} entfernen`}
+      description={`Möchten Sie ${selectedIds.size} ausgewählte Dokument${selectedIds.size !== 1 ? "e" : ""} wirklich entfernen? Die Einträge und zugehörigen Dokumente werden aus der Datenbank gelöscht.`}
+      isDeleting={bulkDeleteMutation.isPending}
     />
     </>
   );
