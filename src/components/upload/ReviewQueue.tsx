@@ -3,7 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { ReviewCard } from "./ReviewCard";
-import { Loader2, Inbox } from "lucide-react";
+import { Loader2, Inbox, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { useState } from "react";
 
@@ -26,6 +27,7 @@ export function ReviewQueue() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [discardId, setDiscardId] = useState<string | null>(null);
+  const [discardAll, setDiscardAll] = useState(false);
 
   const { data: pendingInvoices = [], isLoading } = useQuery({
     queryKey: ["pending-invoices", user?.id],
@@ -100,6 +102,24 @@ export function ReviewQueue() {
     },
   });
 
+  const discardAllMutation = useMutation({
+    mutationFn: async () => {
+      const ids = pendingInvoices.map((inv) => inv.id);
+      const { error } = await supabase.from("invoices").delete().in("id", ids);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      toast({ title: "Alle Rechnungen verworfen" });
+      setDiscardAll(false);
+    },
+    onError: (error) => {
+      toast({ title: "Fehler", description: error.message, variant: "destructive" });
+      setDiscardAll(false);
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -114,11 +134,24 @@ export function ReviewQueue() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Inbox className="h-5 w-5 text-primary" />
-        <h2 className="text-lg font-semibold text-foreground">
-          Zur Überprüfung ({pendingInvoices.length})
-        </h2>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Inbox className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-semibold text-foreground">
+            Zur Überprüfung ({pendingInvoices.length})
+          </h2>
+        </div>
+        {pendingInvoices.length > 1 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => setDiscardAll(true)}
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            Alle verwerfen
+          </Button>
+        )}
       </div>
       <div className="space-y-4">
         {pendingInvoices.map((invoice, index) => (
@@ -138,6 +171,14 @@ export function ReviewQueue() {
         title="Rechnung verwerfen"
         description="Möchten Sie diese Rechnung wirklich verwerfen? Das Dokument wird gelöscht."
         isDeleting={discardMutation.isPending}
+      />
+      <DeleteConfirmationDialog
+        open={discardAll}
+        onOpenChange={(open) => !open && setDiscardAll(false)}
+        onConfirm={() => discardAllMutation.mutate()}
+        title="Alle Rechnungen verwerfen"
+        description={`Möchten Sie wirklich alle ${pendingInvoices.length} Rechnungen verwerfen? Alle Dokumente werden gelöscht.`}
+        isDeleting={discardAllMutation.isPending}
       />
     </div>
   );
