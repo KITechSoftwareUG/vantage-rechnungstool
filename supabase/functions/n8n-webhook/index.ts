@@ -157,8 +157,12 @@ Deno.serve(async (req) => {
 
     const category = pathParts[1]?.toLowerCase();
     const year = parseInt(pathParts[2], 10);
-    const monthName = pathParts[3]?.toLowerCase();
-    const month = monthMap[monthName];
+    const monthRaw = pathParts[3]?.toLowerCase();
+    // Accept both German month names ("januar") and numbers ("1", "01")
+    const monthAsNumber = parseInt(monthRaw, 10);
+    const month = (!isNaN(monthAsNumber) && monthAsNumber >= 1 && monthAsNumber <= 12)
+      ? monthAsNumber
+      : monthMap[monthRaw];
 
     const userId = url.searchParams.get("user_id");
     const driveFileId = url.searchParams.get("drive_file_id");
