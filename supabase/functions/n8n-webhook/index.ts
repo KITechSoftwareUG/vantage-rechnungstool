@@ -92,15 +92,11 @@ function getOcrPrompt(docType: "invoice" | "statement"): string {
       * Wenn "Amount Due" oder "Fälliger Betrag" 0,00 ist, suche nach dem ursprünglichen Rechnungsbetrag (z.B. "Total", "Gesamtbetrag", "Invoice Total", "Subtotal" etc.)
       * Nimm immer den tatsächlichen Rechnungsbetrag, nicht den offenen Betrag
       * Betrag IMMER als positive Zahl angeben!
-    - type: SEHR WICHTIG - korrekte Unterscheidung:
-      * "outgoing" = EINGANGSRECHNUNG = Rechnung von einem anderen Unternehmen AN MICH = ICH muss bezahlen = Geld geht RAUS
-      * "incoming" = AUSGANGSRECHNUNG = Rechnung die ICH an einen Kunden stelle = Kunde bezahlt MIR = Geld kommt REIN
-      
-      REGEL: Wenn das Dokument eine Rechnung von einem bekannten Unternehmen (OpenAI, Google, Amazon, Adobe, Microsoft, etc.) ist, 
-      dann ist es IMMER "outgoing" (Eingangsrechnung), weil diese Unternehmen mir niemals Geld schulden würden.
+    
+    WICHTIG: Das Feld "type" wird NICHT benötigt - der Typ wird automatisch aus dem Ordner bestimmt.
     
     Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "type": "outgoing"}`;
+    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50}`;
   }
 
   return `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
@@ -435,7 +431,7 @@ Deno.serve(async (req) => {
           month: month,
           issuer: extractedData.issuer || "Unbekannt",
           amount: Math.abs(extractedData.amount || 0),
-          type: extractedData.type || (category === "eingang" ? "outgoing" : "incoming"),
+          type: category === "eingang" ? "outgoing" : category === "ausgang" ? "incoming" : (category === "provision" ? "incoming" : "outgoing"),
           payment_method: categoryToPayment[category] || "bank",
           invoice_number: extractedData.invoiceNumber || null,
           status: "processing",
