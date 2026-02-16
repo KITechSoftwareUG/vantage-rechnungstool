@@ -67,11 +67,13 @@ export default function InvoicesPage() {
 
   // Eingang = ich erhalte eine Rechnung und bezahle (Ausgabe)
   // Ausgang = ich stelle eine Rechnung und erhalte Geld (Einnahme)
+  // incoming = Ausgangsrechnung = Einnahme
   const totalIncoming = filteredInvoices
-    .filter(inv => inv.type === "outgoing")
-    .reduce((sum, inv) => sum + inv.amount, 0);
-  const totalOutgoing = filteredInvoices
     .filter(inv => inv.type === "incoming")
+    .reduce((sum, inv) => sum + inv.amount, 0);
+  // outgoing = Eingangsrechnung = Ausgabe
+  const totalOutgoing = filteredInvoices
+    .filter(inv => inv.type === "outgoing")
     .reduce((sum, inv) => sum + inv.amount, 0);
 
   if (isLoading) {
@@ -171,18 +173,18 @@ export default function InvoicesPage() {
               Alle
             </Button>
             <Button
-              variant={filterType === "incoming" ? "default" : "ghost"}
+              variant={filterType === "outgoing" ? "default" : "ghost"}
               size="sm"
-              onClick={() => setFilterType("incoming")}
+              onClick={() => setFilterType("outgoing")}
               className="gap-1"
             >
               <ArrowDownLeft className="h-3 w-3" />
               Eingang (Ausgaben)
             </Button>
             <Button
-              variant={filterType === "outgoing" ? "default" : "ghost"}
+              variant={filterType === "incoming" ? "default" : "ghost"}
               size="sm"
-              onClick={() => setFilterType("outgoing")}
+              onClick={() => setFilterType("incoming")}
               className="gap-1"
             >
               <ArrowUpRight className="h-3 w-3" />
@@ -225,7 +227,7 @@ export default function InvoicesPage() {
             </>
           )}
           renderRow={(invoice) => {
-            const isExpense = invoice.type === "incoming";
+            const isExpense = invoice.type === "outgoing";
             const handleTypeToggle = (isOutgoing: boolean) => {
               const newType = isOutgoing ? "outgoing" : "incoming";
               updateInvoice.mutate({ ...invoice, type: newType as "incoming" | "outgoing" });
