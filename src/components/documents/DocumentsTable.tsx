@@ -68,9 +68,9 @@ export function DocumentsTable({ documents, onView, onDelete }: DocumentsTablePr
               <TableCell>
                 <div className={cn(
                   "flex items-center gap-2 text-sm",
-                  doc.type === "incoming" ? "text-success" : "text-muted-foreground"
+                  doc.type === "outgoing" ? "text-muted-foreground" : "text-success"
                 )}>
-                  {doc.type === "incoming" ? (
+                  {doc.type === "outgoing" ? (
                     <>
                       <ArrowDownLeft className="h-4 w-4" />
                       <span>Eingang</span>

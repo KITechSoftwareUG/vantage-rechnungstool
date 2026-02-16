@@ -60,7 +60,8 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
 
   // Eingang = ich erhalte eine Rechnung und bezahle (Ausgabe)
   // Ausgang = ich stelle eine Rechnung und erhalte Geld (Einnahme)
-  const isExpense = document.type === "incoming";
+  // outgoing = Eingangsrechnung = ich bezahle = Ausgabe
+  const isExpense = document.type === "outgoing";
 
   return (
     <div 
@@ -134,26 +135,36 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
 
       {/* Content */}
       <div className="space-y-3">
-        {/* Type Toggle */}
-        <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 p-2">
-          <span className={cn(
-            "text-xs font-medium transition-colors",
-            isExpense ? "text-foreground" : "text-muted-foreground"
-          )}>
-            Eingang
-          </span>
-          <Switch
-            checked={document.type === "outgoing"}
-            onCheckedChange={handleTypeToggle}
-            className="data-[state=checked]:bg-success data-[state=unchecked]:bg-destructive/70"
-          />
-          <span className={cn(
-            "text-xs font-medium transition-colors",
-            !isExpense ? "text-success" : "text-muted-foreground"
-          )}>
-            Ausgang
-          </span>
-        </div>
+        {/* Type Toggle - only in edit mode */}
+        {isEditing ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 p-2">
+            <span className={cn(
+              "text-xs font-medium transition-colors",
+              isExpense ? "text-foreground" : "text-muted-foreground"
+            )}>
+              Eingang
+            </span>
+            <Switch
+              checked={document.type === "outgoing"}
+              onCheckedChange={handleTypeToggle}
+              className="data-[state=checked]:bg-success data-[state=unchecked]:bg-destructive/70"
+            />
+            <span className={cn(
+              "text-xs font-medium transition-colors",
+              !isExpense ? "text-success" : "text-muted-foreground"
+            )}>
+              Ausgang
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-sm">
+            {isExpense ? (
+              <span className="text-muted-foreground">Eingang</span>
+            ) : (
+              <span className="text-success">Ausgang</span>
+            )}
+          </div>
+        )}
 
         {/* Date */}
         <div className="flex items-center gap-3">
