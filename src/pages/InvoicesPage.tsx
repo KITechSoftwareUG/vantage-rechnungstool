@@ -1,15 +1,16 @@
-import { useState } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2 } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare } from "lucide-react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DocumentCard } from "@/components/documents/DocumentCard";
 import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
 import { GroupedListView } from "@/components/documents/GroupedListView";
 import { groupByYearAndMonth, InvoiceData } from "@/types/documents";
-import { useInvoices, useUpdateInvoice, useDeleteInvoice } from "@/hooks/useDocuments";
+import { useInvoices, useUpdateInvoice, useDeleteInvoice, useBulkDeleteInvoices } from "@/hooks/useDocuments";
 import { cn } from "@/lib/utils";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 
@@ -21,10 +22,13 @@ export default function InvoicesPage() {
   const [filterType, setFilterType] = useState<"all" | "incoming" | "outgoing">("all");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [invoiceToDelete, setInvoiceToDelete] = useState<InvoiceData | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
 
   const { data: invoices = [], isLoading } = useInvoices();
   const updateInvoice = useUpdateInvoice();
   const deleteInvoice = useDeleteInvoice();
+  const bulkDelete = useBulkDeleteInvoices();
 
   const filteredInvoices = invoices.filter(inv => {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -34,6 +38,29 @@ export default function InvoicesPage() {
   });
 
   const groupedInvoices = groupByYearAndMonth(filteredInvoices);
+
+  const isSelectMode = selectedIds.size > 0;
+
+  const allFilteredSelected = filteredInvoices.length > 0 && filteredInvoices.every(inv => selectedIds.has(inv.id));
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (allFilteredSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredInvoices.map(inv => inv.id)));
+    }
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
 
   const handleSave = (data: typeof invoices[0]) => {
     updateInvoice.mutate(data);
@@ -52,9 +79,17 @@ export default function InvoicesPage() {
     }
   };
 
+  const confirmBulkDelete = () => {
+    bulkDelete.mutate(Array.from(selectedIds), {
+      onSuccess: () => {
+        setSelectedIds(new Set());
+        setBulkDeleteDialogOpen(false);
+      },
+    });
+  };
+
   const handleView = (fileUrl: string | undefined) => {
     if (!fileUrl) return;
-    // fileUrl is already a full URL, open directly
     window.open(fileUrl, "_blank");
   };
 
@@ -65,13 +100,9 @@ export default function InvoicesPage() {
     }).format(amount);
   };
 
-  // Eingang = ich erhalte eine Rechnung und bezahle (Ausgabe)
-  // Ausgang = ich stelle eine Rechnung und erhalte Geld (Einnahme)
-  // incoming = Ausgangsrechnung = Einnahme
   const totalIncoming = filteredInvoices
     .filter(inv => inv.type === "incoming")
     .reduce((sum, inv) => sum + inv.amount, 0);
-  // outgoing = Eingangsrechnung = Ausgabe
   const totalOutgoing = filteredInvoices
     .filter(inv => inv.type === "outgoing")
     .reduce((sum, inv) => sum + inv.amount, 0);
@@ -125,6 +156,37 @@ export default function InvoicesPage() {
           </Button>
         </div>
       </div>
+
+      {/* Bulk Actions Bar */}
+      {isSelectMode && (
+        <div className="glass-card flex items-center justify-between p-3 animate-fade-in border-primary/30 border">
+          <div className="flex items-center gap-3">
+            <Button variant="outline" size="sm" onClick={selectAll}>
+              {allFilteredSelected ? (
+                <><XSquare className="mr-1.5 h-4 w-4" /> Alle abwählen</>
+              ) : (
+                <><CheckSquare className="mr-1.5 h-4 w-4" /> Alle auswählen ({filteredInvoices.length})</>
+              )}
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              {selectedIds.size} ausgewählt
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={clearSelection}>
+              Abbrechen
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setBulkDeleteDialogOpen(true)}
+            >
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              {selectedIds.size} löschen
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-3 animate-fade-in" style={{ animationDelay: "0.1s" }}>
@@ -190,6 +252,17 @@ export default function InvoicesPage() {
               <ArrowUpRight className="h-3 w-3" />
               Ausgang (Einnahmen)
             </Button>
+            {!isSelectMode && filteredInvoices.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => selectAll()}
+                className="ml-2 gap-1"
+              >
+                <CheckSquare className="h-3 w-3" />
+                Auswählen
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -199,16 +272,34 @@ export default function InvoicesPage() {
         <YearMonthAccordion
           data={groupedInvoices}
           renderDocument={(invoice, index) => (
-            <DocumentCard
-              key={invoice.id}
-              document={invoice}
-              onSave={handleSave}
-              onDelete={(id) => {
-                const inv = invoices.find(i => i.id === id);
-                if (inv) handleDelete(inv);
-              }}
-              index={index}
-            />
+            <div key={invoice.id} className="relative">
+              {isSelectMode && (
+                <div className="absolute top-2 left-2 z-10">
+                  <Checkbox
+                    checked={selectedIds.has(invoice.id)}
+                    onCheckedChange={() => toggleSelect(invoice.id)}
+                    className="h-5 w-5 bg-background/80 backdrop-blur-sm"
+                  />
+                </div>
+              )}
+              <div
+                className={cn(
+                  isSelectMode && "cursor-pointer",
+                  isSelectMode && selectedIds.has(invoice.id) && "ring-2 ring-primary rounded-xl"
+                )}
+                onClick={isSelectMode ? () => toggleSelect(invoice.id) : undefined}
+              >
+                <DocumentCard
+                  document={invoice}
+                  onSave={handleSave}
+                  onDelete={!isSelectMode ? (id) => {
+                    const inv = invoices.find(i => i.id === id);
+                    if (inv) handleDelete(inv);
+                  } : undefined}
+                  index={index}
+                />
+              </div>
+            </div>
           )}
           emptyMessage="Keine Rechnungen gefunden. Laden Sie Dokumente unter 'Upload' hoch."
         />
@@ -218,6 +309,14 @@ export default function InvoicesPage() {
           emptyMessage="Laden Sie Dokumente unter 'Upload' hoch."
           renderHeader={() => (
             <>
+              {isSelectMode && (
+                <th className="px-4 py-3 w-10">
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    onCheckedChange={selectAll}
+                  />
+                </th>
+              )}
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Datum</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Aussteller</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase text-muted-foreground">Dateiname</th>
@@ -235,8 +334,20 @@ export default function InvoicesPage() {
             return (
               <tr 
                 key={invoice.id} 
-                className="border-b border-border/50 transition-colors hover:bg-muted/30"
+                className={cn(
+                  "border-b border-border/50 transition-colors hover:bg-muted/30",
+                  isSelectMode && selectedIds.has(invoice.id) && "bg-primary/5"
+                )}
+                onClick={isSelectMode ? () => toggleSelect(invoice.id) : undefined}
               >
+                {isSelectMode && (
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selectedIds.has(invoice.id)}
+                      onCheckedChange={() => toggleSelect(invoice.id)}
+                    />
+                  </td>
+                )}
                 <td className="px-4 py-3 text-sm">
                   {format(new Date(invoice.date), "dd.MM.yyyy", { locale: de })}
                 </td>
@@ -276,21 +387,23 @@ export default function InvoicesPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => handleView(invoice.fileUrl)}
+                      onClick={(e) => { e.stopPropagation(); handleView(invoice.fileUrl); }}
                       disabled={!invoice.fileUrl}
                       title="Anzeigen"
                     >
                       <Eye className="h-4 w-4" />
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleDelete(invoice)}
-                      className="text-destructive hover:text-destructive"
-                      title="Löschen"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {!isSelectMode && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => { e.stopPropagation(); handleDelete(invoice); }}
+                        className="text-destructive hover:text-destructive"
+                        title="Löschen"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -300,16 +413,34 @@ export default function InvoicesPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredInvoices.map((invoice, index) => (
-            <DocumentCard
-              key={invoice.id}
-              document={invoice}
-              onSave={handleSave}
-              onDelete={(id) => {
-                const inv = invoices.find(i => i.id === id);
-                if (inv) handleDelete(inv);
-              }}
-              index={index}
-            />
+            <div key={invoice.id} className="relative">
+              {isSelectMode && (
+                <div className="absolute top-2 left-2 z-10">
+                  <Checkbox
+                    checked={selectedIds.has(invoice.id)}
+                    onCheckedChange={() => toggleSelect(invoice.id)}
+                    className="h-5 w-5 bg-background/80 backdrop-blur-sm"
+                  />
+                </div>
+              )}
+              <div
+                className={cn(
+                  isSelectMode && "cursor-pointer",
+                  isSelectMode && selectedIds.has(invoice.id) && "ring-2 ring-primary rounded-xl"
+                )}
+                onClick={isSelectMode ? () => toggleSelect(invoice.id) : undefined}
+              >
+                <DocumentCard
+                  document={invoice}
+                  onSave={handleSave}
+                  onDelete={!isSelectMode ? (id) => {
+                    const inv = invoices.find(i => i.id === id);
+                    if (inv) handleDelete(inv);
+                  } : undefined}
+                  index={index}
+                />
+              </div>
+            </div>
           ))}
         </div>
       )}
@@ -321,6 +452,15 @@ export default function InvoicesPage() {
         title="Rechnung löschen"
         description={invoiceToDelete ? `Möchten Sie die Rechnung "${invoiceToDelete.fileName}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.` : ""}
         isDeleting={deleteInvoice.isPending}
+      />
+
+      <DeleteConfirmationDialog
+        open={bulkDeleteDialogOpen}
+        onOpenChange={setBulkDeleteDialogOpen}
+        onConfirm={confirmBulkDelete}
+        title={`${selectedIds.size} Rechnungen löschen`}
+        description={`Möchten Sie wirklich ${selectedIds.size} Rechnungen löschen? Diese Aktion kann nicht rückgängig gemacht werden.`}
+        isDeleting={bulkDelete.isPending}
       />
     </div>
   );

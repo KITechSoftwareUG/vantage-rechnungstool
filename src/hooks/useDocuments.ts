@@ -149,6 +149,34 @@ export function useDeleteInvoice() {
   });
 }
 
+export function useBulkDeleteInvoices() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      // Delete in parallel batches
+      const promises = ids.map(id =>
+        supabase.from("invoices").delete().eq("id", id)
+      );
+      const results = await Promise.all(promises);
+      const errors = results.filter(r => r.error);
+      if (errors.length > 0) throw new Error(`${errors.length} Fehler beim Löschen`);
+    },
+    onSuccess: (_, ids) => {
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      toast({ title: `${ids.length} Rechnungen gelöscht` });
+    },
+    onError: (error) => {
+      toast({
+        title: "Fehler beim Löschen",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+}
+
 export function useDeleteBankStatement() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
