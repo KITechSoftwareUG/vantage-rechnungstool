@@ -129,15 +129,28 @@ export function IngestionTracker() {
 
   const groupedLogs = useMemo(() => {
     if (!logs) return [];
-    const groups: Record<string, { category: string; logs: IngestionLog[] }> = {};
+    const groups: Record<string, { category: string; months: { month: number; year: number; logs: IngestionLog[] }[]; allLogs: IngestionLog[] }> = {};
     for (const log of logs) {
       const key = log.endpoint_category;
       if (!groups[key]) {
-        groups[key] = { category: key, logs: [] };
+        groups[key] = { category: key, months: [], allLogs: [] };
       }
-      groups[key].logs.push(log);
+      groups[key].allLogs.push(log);
     }
-    // Sort categories by folder name order
+    // Sub-group by year-month
+    for (const group of Object.values(groups)) {
+      const monthMap: Record<string, { month: number; year: number; logs: IngestionLog[] }> = {};
+      for (const log of group.allLogs) {
+        const m = log.endpoint_month ?? 0;
+        const y = log.endpoint_year;
+        const mk = `${y}-${m}`;
+        if (!monthMap[mk]) {
+          monthMap[mk] = { month: m, year: y, logs: [] };
+        }
+        monthMap[mk].logs.push(log);
+      }
+      group.months = Object.values(monthMap).sort((a, b) => b.year - a.year || b.month - a.month);
+    }
     const order = ["eingang", "incoming", "ausgang", "outgoing", "provision", "commission", "vrbank", "volksbank", "amex", "kasse", "cash"];
     return Object.values(groups).sort((a, b) => {
       const ai = order.indexOf(a.category);
@@ -145,6 +158,11 @@ export function IngestionTracker() {
       return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
     });
   }, [logs]);
+
+  const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
+  const toggleMonth = (key: string) => {
+    setOpenMonths((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -346,7 +364,7 @@ export function IngestionTracker() {
             {groupedLogs.map((group) => {
               const Icon = CATEGORY_ICONS[group.category] || FileText;
               const label = CATEGORY_LABELS[group.category] || group.category;
-              const summary = getStatusSummary(group.logs);
+              const summary = getStatusSummary(group.allLogs);
               const isOpen = openCategories[group.category] !== false; // default open
 
               return (
@@ -376,8 +394,32 @@ export function IngestionTracker() {
                     </button>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <div className="ml-4 mt-1 space-y-1 border-l-2 border-muted pl-4">
-                      {group.logs.map((log) => {
+                    <div className="ml-4 mt-1 space-y-2 border-l-2 border-muted pl-4">
+                      {group.months.map((monthGroup) => {
+                        const monthKey = `${group.category}-${monthGroup.year}-${monthGroup.month}`;
+                        const isMonthOpen = openMonths[monthKey] !== false;
+                        const monthLabel = monthGroup.month > 0
+                          ? `${MONTH_NAMES[monthGroup.month - 1]} ${monthGroup.year}`
+                          : `${monthGroup.year}`;
+
+                        return (
+                          <Collapsible
+                            key={monthKey}
+                            open={isMonthOpen}
+                            onOpenChange={() => toggleMonth(monthKey)}
+                          >
+                            <CollapsibleTrigger asChild>
+                              <button className="flex w-full items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-muted">
+                                <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${isMonthOpen ? "rotate-90" : ""}`} />
+                                <span>{monthLabel}</span>
+                                <span className="ml-auto text-xs text-muted-foreground">
+                                  {monthGroup.logs.length} Dokument{monthGroup.logs.length !== 1 ? "e" : ""}
+                                </span>
+                              </button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="ml-2 mt-1 space-y-1 border-l border-muted pl-3">
+                                {monthGroup.logs.map((log) => {
                         const breadcrumb = getSourceBreadcrumb(log);
                         return (
                           <div
@@ -425,6 +467,11 @@ export function IngestionTracker() {
                               )}
                             </div>
                           </div>
+                        );
+                      })}
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
                         );
                       })}
                     </div>
