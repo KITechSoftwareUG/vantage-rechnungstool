@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Eye, Trash2 } from "lucide-react";
+import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Eye, Trash2, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -198,25 +198,41 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
           )}
         </div>
 
-        {/* Amount */}
+        {/* Amount & Currency */}
         <div className="flex items-center gap-3">
-          <Euro className="h-4 w-4 text-muted-foreground" />
+          {(document.currency || "EUR") === "EUR" ? (
+            <Euro className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          )}
           {isEditing ? (
-            <Input
-              type="number"
-              step="0.01"
-              value={editData.amount}
-              onChange={(e) => setEditData({ ...editData, amount: parseFloat(e.target.value) })}
-              className="h-8"
-              placeholder="Betrag"
-            />
+            <div className="flex gap-2 flex-1">
+              <Input
+                type="number"
+                step="0.01"
+                value={editData.amount}
+                onChange={(e) => setEditData({ ...editData, amount: parseFloat(e.target.value) })}
+                className="h-8"
+                placeholder="Betrag"
+              />
+              <select
+                value={editData.currency || "EUR"}
+                onChange={(e) => setEditData({ ...editData, currency: e.target.value })}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="EUR">EUR</option>
+                <option value="USD">USD</option>
+                <option value="GBP">GBP</option>
+                <option value="CHF">CHF</option>
+              </select>
+            </div>
           ) : (
             <span className={cn(
               "text-lg font-semibold",
               isExpense ? "text-foreground" : "text-success"
             )}>
               {isExpense ? "-" : "+"}
-              {document.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+              {document.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} {document.currency || "EUR"}
             </span>
           )}
         </div>

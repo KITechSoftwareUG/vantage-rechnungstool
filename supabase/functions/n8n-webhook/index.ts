@@ -92,11 +92,14 @@ function getOcrPrompt(docType: "invoice" | "statement"): string {
       * Wenn "Amount Due" oder "Fälliger Betrag" 0,00 ist, suche nach dem ursprünglichen Rechnungsbetrag (z.B. "Total", "Gesamtbetrag", "Invoice Total", "Subtotal" etc.)
       * Nimm immer den tatsächlichen Rechnungsbetrag, nicht den offenen Betrag
       * Betrag IMMER als positive Zahl angeben!
+    - currency: Die Währung der Rechnung als ISO 4217 Code (z.B. "EUR", "USD", "GBP", "CHF"). 
+      Suche nach Währungssymbolen (€, $, £, Fr.) oder Angaben wie "USD", "EUR" etc.
+      Wenn keine Währung erkennbar ist, verwende "EUR" als Standard.
     
     WICHTIG: Das Feld "type" wird NICHT benötigt - der Typ wird automatisch aus dem Ordner bestimmt.
     
     Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50}`;
+    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "currency": "USD"}`;
   }
 
   return `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
@@ -354,6 +357,7 @@ Deno.serve(async (req) => {
           date: `${year}-${String(month).padStart(2, "0")}-01`,
           issuer: "Unbekannt",
           amount: 0,
+          currency: "EUR",
           type: category === "eingang" ? "outgoing" : "incoming",
         };
       } else {
@@ -431,6 +435,7 @@ Deno.serve(async (req) => {
           month: month,
           issuer: extractedData.issuer || "Unbekannt",
           amount: Math.abs(extractedData.amount || 0),
+          currency: extractedData.currency || "EUR",
           type: category === "eingang" ? "outgoing" : category === "ausgang" ? "incoming" : (category === "provision" ? "incoming" : "outgoing"),
           payment_method: categoryToPayment[category] || "bank",
           invoice_number: extractedData.invoiceNumber || null,

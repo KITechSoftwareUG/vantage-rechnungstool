@@ -100,6 +100,9 @@ serve(async (req) => {
         * Wenn "Amount Due" oder "Fälliger Betrag" 0,00 ist, suche nach dem ursprünglichen Rechnungsbetrag (z.B. "Total", "Gesamtbetrag", "Invoice Total", "Subtotal" etc.)
         * Nimm immer den tatsächlichen Rechnungsbetrag, nicht den offenen Betrag
         * Betrag IMMER als positive Zahl angeben!
+      - currency: Die Währung der Rechnung als ISO 4217 Code (z.B. "EUR", "USD", "GBP", "CHF"). 
+        Suche nach Währungssymbolen (€, $, £, Fr.) oder Angaben wie "USD", "EUR" etc.
+        Wenn keine Währung erkennbar ist, verwende "EUR" als Standard.
       - type: SEHR WICHTIG - korrekte Unterscheidung:
         * "outgoing" = EINGANGSRECHNUNG = Rechnung von einem anderen Unternehmen AN MICH = ICH muss bezahlen = Geld geht RAUS
           Beispiele: Rechnungen von OpenAI, Google, Amazon, Lieferanten, Dienstleistern, Software-Abos etc.
@@ -110,7 +113,7 @@ serve(async (req) => {
         dann ist es IMMER "outgoing" (Eingangsrechnung), weil diese Unternehmen mir niemals Geld schulden würden.
       
       Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-      Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "type": "outgoing"}`;
+      Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "currency": "USD", "type": "outgoing"}`;
     } else {
       // Bank statement - extract BOTH summary AND individual transactions
       prompt = `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
@@ -240,6 +243,7 @@ serve(async (req) => {
           date: new Date().toISOString().split("T")[0],
           issuer: "Unbekannt",
           amount: 0,
+          currency: "EUR",
           type: "outgoing",
         };
       } else {

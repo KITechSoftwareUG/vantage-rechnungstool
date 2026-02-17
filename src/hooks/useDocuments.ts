@@ -30,6 +30,7 @@ export function useInvoices() {
         month: inv.month,
         issuer: inv.issuer,
         amount: Number(inv.amount),
+        currency: (inv as any).currency || "EUR",
         type: inv.type as "incoming" | "outgoing",
         status: inv.status as "processing" | "ready" | "saved",
         createdAt: inv.created_at,
@@ -59,6 +60,7 @@ export function useCreateInvoice() {
           month: invoice.month,
           issuer: invoice.issuer,
           amount: invoice.amount,
+          currency: invoice.currency || "EUR",
           type: invoice.type,
           status: invoice.status,
           payment_method: invoice.paymentMethod || "bank",
@@ -99,6 +101,7 @@ export function useUpdateInvoice() {
           month: invoice.month,
           issuer: invoice.issuer,
           amount: invoice.amount,
+          currency: invoice.currency || "EUR",
           type: invoice.type,
           status: invoice.status,
         })

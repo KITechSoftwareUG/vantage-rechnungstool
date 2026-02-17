@@ -4,6 +4,7 @@ export interface InvoiceData {
   date: string;
   issuer: string;
   amount: number;
+  currency: string;
   type: "incoming" | "outgoing";
   status: "processing" | "ready" | "saved";
   year: number;

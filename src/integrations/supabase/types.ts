@@ -210,6 +210,7 @@ export type Database = {
         Row: {
           amount: number
           created_at: string
+          currency: string
           date: string
           file_name: string
           file_url: string | null
@@ -228,6 +229,7 @@ export type Database = {
         Insert: {
           amount: number
           created_at?: string
+          currency?: string
           date: string
           file_name: string
           file_url?: string | null
@@ -246,6 +248,7 @@ export type Database = {
         Update: {
           amount?: number
           created_at?: string
+          currency?: string
           date?: string
           file_name?: string
           file_url?: string | null
