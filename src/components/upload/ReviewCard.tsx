@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Hash } from "lucide-react";
+import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Hash, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,7 @@ interface ReviewInvoice {
   date: string;
   issuer: string;
   amount: number;
+  currency: string;
   type: "incoming" | "outgoing";
   invoiceNumber: string | null;
   paymentMethod: string;
@@ -158,31 +159,47 @@ export function ReviewCard({ invoice, onConfirm, onDiscard, index = 0 }: ReviewC
               )}
             </div>
 
-            {/* Amount */}
+            {/* Amount & Currency */}
             <div className="flex items-center gap-3">
-              <Euro className="h-4 w-4 text-muted-foreground" />
+              {(editData.currency || "EUR") === "EUR" ? (
+                <Euro className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+              )}
               {isEditing ? (
-                <Input
-                  type="text" inputMode="decimal" value={amountInput}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    if (/^-?[\d]*[,.]?[\d]*$/.test(value) || value === "") {
-                      setAmountInput(value);
-                      const parsed = parseFloat(value.replace(",", "."));
-                      if (!isNaN(parsed)) setEditData({ ...editData, amount: parsed });
-                    }
-                  }}
-                  onBlur={() => {
-                    const parsed = parseFloat(amountInput.replace(",", "."));
-                    if (!isNaN(parsed)) { setAmountInput(parsed.toString().replace(".", ",")); setEditData({ ...editData, amount: parsed }); }
-                  }}
-                  className="h-9" placeholder="Betrag"
-                />
+                <div className="flex gap-2 flex-1">
+                  <Input
+                    type="text" inputMode="decimal" value={amountInput}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (/^-?[\d]*[,.]?[\d]*$/.test(value) || value === "") {
+                        setAmountInput(value);
+                        const parsed = parseFloat(value.replace(",", "."));
+                        if (!isNaN(parsed)) setEditData({ ...editData, amount: parsed });
+                      }
+                    }}
+                    onBlur={() => {
+                      const parsed = parseFloat(amountInput.replace(",", "."));
+                      if (!isNaN(parsed)) { setAmountInput(parsed.toString().replace(".", ",")); setEditData({ ...editData, amount: parsed }); }
+                    }}
+                    className="h-9" placeholder="Betrag"
+                  />
+                  <select
+                    value={editData.currency || "EUR"}
+                    onChange={(e) => setEditData({ ...editData, currency: e.target.value })}
+                    className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    <option value="EUR">EUR</option>
+                    <option value="USD">USD</option>
+                    <option value="GBP">GBP</option>
+                    <option value="CHF">CHF</option>
+                  </select>
+                </div>
               ) : (
                 <div className="flex-1 flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Betrag</span>
                   <span className={cn("text-lg font-bold", isExpense ? "text-foreground" : "text-primary")}>
-                    {isExpense ? "-" : "+"}{invoice.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+                    {isExpense ? "-" : "+"}{invoice.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} {invoice.currency || "EUR"}
                   </span>
                 </div>
               )}

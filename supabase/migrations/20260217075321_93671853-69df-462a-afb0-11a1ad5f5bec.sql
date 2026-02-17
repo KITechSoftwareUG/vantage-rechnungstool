@@ -1,0 +1,1 @@
+ALTER TABLE public.invoices ADD COLUMN currency text NOT NULL DEFAULT 'EUR';

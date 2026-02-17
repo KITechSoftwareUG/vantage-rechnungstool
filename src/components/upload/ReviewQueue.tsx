@@ -15,6 +15,7 @@ interface PendingInvoice {
   date: string;
   issuer: string;
   amount: number;
+  currency: string;
   type: "incoming" | "outgoing";
   invoiceNumber: string | null;
   paymentMethod: string;
@@ -47,6 +48,7 @@ export function ReviewQueue() {
         date: inv.date,
         issuer: inv.issuer,
         amount: Number(inv.amount),
+        currency: (inv as any).currency || "EUR",
         type: inv.type as "incoming" | "outgoing",
         invoiceNumber: inv.invoice_number,
         paymentMethod: inv.payment_method,
