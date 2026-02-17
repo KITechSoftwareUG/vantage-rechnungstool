@@ -72,10 +72,10 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
       style={{ animationDelay: `${index * 0.1}s` }}
     >
       {/* Header */}
-      <div className="mb-4 flex items-start justify-between">
-        <div className="flex items-center gap-3">
+      <div className="mb-4 flex items-start justify-between gap-2">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className={cn(
-            "flex h-10 w-10 items-center justify-center rounded-lg",
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
             isExpense
               ? "bg-destructive/10 text-destructive" 
               : "bg-success/10 text-success"
@@ -86,8 +86,8 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
               <ArrowUpRight className="h-5 w-5" />
             )}
           </div>
-          <div>
-            <p className="text-sm font-medium text-foreground line-clamp-1">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground truncate">
               {document.fileName}
             </p>
             <Badge variant="outline" className={cn("mt-1", statusColors[document.status])}>
@@ -96,7 +96,7 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
           </div>
         </div>
         
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           {document.fileUrl && (
             <Button
               variant="ghost"
