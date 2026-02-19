@@ -16,6 +16,7 @@ interface DeleteConfirmationDialogProps {
   title?: string;
   description?: string;
   isDeleting?: boolean;
+  confirmLabel?: string;
 }
 
 export function DeleteConfirmationDialog({
@@ -25,7 +26,11 @@ export function DeleteConfirmationDialog({
   title = "Löschen bestätigen",
   description = "Sind Sie sicher, dass Sie dieses Element löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.",
   isDeleting = false,
+  confirmLabel,
 }: DeleteConfirmationDialogProps) {
+  const label = confirmLabel || "Löschen";
+  const loadingLabel = confirmLabel ? `${confirmLabel}...` : "Löschen...";
+  const isDestructive = !confirmLabel;
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -38,9 +43,9 @@ export function DeleteConfirmationDialog({
           <AlertDialogAction
             onClick={onConfirm}
             disabled={isDeleting}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            className={isDestructive ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : ""}
           >
-            {isDeleting ? "Löschen..." : "Löschen"}
+            {isDeleting ? loadingLabel : label}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -3,7 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { ReviewCard } from "./ReviewCard";
-import { Loader2, Inbox, Trash2 } from "lucide-react";
+import { Loader2, Inbox, Trash2, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { useState } from "react";
@@ -29,6 +29,7 @@ export function ReviewQueue() {
   const queryClient = useQueryClient();
   const [discardId, setDiscardId] = useState<string | null>(null);
   const [discardAll, setDiscardAll] = useState(false);
+  const [confirmAll, setConfirmAll] = useState(false);
 
   const { data: pendingInvoices = [], isLoading } = useQuery({
     queryKey: ["pending-invoices", user?.id],
@@ -104,6 +105,39 @@ export function ReviewQueue() {
     },
   });
 
+  const confirmAllMutation = useMutation({
+    mutationFn: async () => {
+      const updates = pendingInvoices.map((inv) =>
+        supabase
+          .from("invoices")
+          .update({
+            date: inv.date,
+            year: inv.year,
+            month: inv.month,
+            issuer: inv.issuer,
+            amount: inv.amount,
+            type: inv.type,
+            invoice_number: inv.invoiceNumber,
+            status: "ready",
+          })
+          .eq("id", inv.id)
+      );
+      const results = await Promise.all(updates);
+      const failed = results.find((r) => r.error);
+      if (failed?.error) throw failed.error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      toast({ title: `${pendingInvoices.length} Rechnungen bestätigt` });
+      setConfirmAll(false);
+    },
+    onError: (error) => {
+      toast({ title: "Fehler", description: error.message, variant: "destructive" });
+      setConfirmAll(false);
+    },
+  });
+
   const discardAllMutation = useMutation({
     mutationFn: async () => {
       const ids = pendingInvoices.map((inv) => inv.id);
@@ -144,15 +178,25 @@ export function ReviewQueue() {
           </h2>
         </div>
         {pendingInvoices.length > 1 && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            onClick={() => setDiscardAll(true)}
-          >
-            <Trash2 className="h-4 w-4 mr-1" />
-            Alle verwerfen
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => setConfirmAll(true)}
+            >
+              <CheckCheck className="h-4 w-4 mr-1" />
+              Alle bestätigen
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setDiscardAll(true)}
+            >
+              <Trash2 className="h-4 w-4 mr-1" />
+              Alle verwerfen
+            </Button>
+          </div>
         )}
       </div>
       <div className="space-y-4">
@@ -181,6 +225,15 @@ export function ReviewQueue() {
         title="Alle Rechnungen verwerfen"
         description={`Möchten Sie wirklich alle ${pendingInvoices.length} Rechnungen verwerfen? Alle Dokumente werden gelöscht.`}
         isDeleting={discardAllMutation.isPending}
+      />
+      <DeleteConfirmationDialog
+        open={confirmAll}
+        onOpenChange={(open) => !open && setConfirmAll(false)}
+        onConfirm={() => confirmAllMutation.mutate()}
+        title="Alle Rechnungen bestätigen"
+        description={`Möchten Sie wirklich alle ${pendingInvoices.length} Rechnungen mit den aktuellen Daten bestätigen?`}
+        isDeleting={confirmAllMutation.isPending}
+        confirmLabel="Alle bestätigen"
       />
     </div>
   );
