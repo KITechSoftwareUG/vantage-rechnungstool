@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Outlet } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { AuthProvider } from "./hooks/useAuth";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
@@ -18,6 +18,16 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+function ProtectedLayout() {
+  return (
+    <ProtectedRoute>
+      <MainLayout>
+        <Outlet />
+      </MainLayout>
+    </ProtectedRoute>
+  );
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
@@ -28,66 +38,14 @@ const App = () => (
           <BrowserRouter>
             <Routes>
               <Route path="/auth" element={<AuthPage />} />
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <Index />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/upload"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <UploadPage />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/invoices"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <InvoicesPage />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/statements"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <StatementsPage />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/matching"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <MatchingPage />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/export"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <ExportPage />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
+              <Route element={<ProtectedLayout />}>
+                <Route path="/" element={<Index />} />
+                <Route path="/upload" element={<UploadPage />} />
+                <Route path="/invoices" element={<InvoicesPage />} />
+                <Route path="/statements" element={<StatementsPage />} />
+                <Route path="/matching" element={<MatchingPage />} />
+                <Route path="/export" element={<ExportPage />} />
+              </Route>
               <Route path="*" element={<NotFound />} />
             </Routes>
           </BrowserRouter>
