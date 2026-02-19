@@ -91,16 +91,24 @@ export function useUpdateInvoice() {
 
   return useMutation({
     mutationFn: async (invoice: InvoiceData) => {
+      // Regenerate standardized filename from metadata
+      const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9äöüÄÖÜß\-]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+      const currency = invoice.currency || "EUR";
+      const amount = Math.abs(invoice.amount).toFixed(2).replace(".", ",");
+      const issuer = sanitize(invoice.issuer || "Unbekannt");
+      const ext = invoice.fileName.split(".").pop() || "pdf";
+      const newFileName = `${invoice.date}_${issuer}_${amount}${currency}.${ext}`;
+
       const { data, error } = await supabase
         .from("invoices")
         .update({
-          file_name: invoice.fileName,
+          file_name: newFileName,
           date: invoice.date,
           year: invoice.year,
           month: invoice.month,
           issuer: invoice.issuer,
           amount: invoice.amount,
-          currency: invoice.currency || "EUR",
+          currency: currency,
           type: invoice.type,
           status: invoice.status,
         })
