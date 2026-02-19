@@ -383,7 +383,8 @@ Deno.serve(async (req) => {
       const issuer = sanitizeForFilename(extractedData.issuer || "Unbekannt");
       const date = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
       const amount = Math.abs(extractedData.amount || 0).toFixed(2).replace(".", ",");
-      finalFileName = `${date}_${issuer}_${amount}EUR.${extension}`;
+      const currency = sanitizeForFilename(extractedData.currency || "EUR");
+      finalFileName = `${date}_${issuer}_${amount}${currency}.${extension}`;
     } else {
       const summary = extractedData.summary || extractedData;
       const bank = sanitizeForFilename(summary.bank || "Bank");
