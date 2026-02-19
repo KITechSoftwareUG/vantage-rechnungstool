@@ -87,7 +87,7 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
             )}
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium text-foreground truncate">
+            <p className="text-sm font-medium text-foreground break-all leading-snug">
               {document.fileName}
             </p>
             <Badge variant="outline" className={cn("mt-1", statusColors[document.status])}>
