@@ -67,8 +67,13 @@ export default function ExportPage() {
         })
       );
 
+      const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
+      if (!webhookUrl) {
+        throw new Error("Webhook URL nicht konfiguriert");
+      }
+
       const response = await fetch(
-        "https://vantagepartners-u62899.vm.elestio.app/webhook-test/8b92590c-86fe-497e-9a31-784a740b0931",
+        webhookUrl,
         {
           method: "POST",
           headers: {

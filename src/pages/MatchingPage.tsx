@@ -1,180 +1,47 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState } from "react";
 import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useBankTransactions, useUpdateTransactionMatch } from "@/hooks/useMatching";
-import { useInvoices } from "@/hooks/useDocuments";
-import { useRecurringPatterns, matchesRecurringPattern } from "@/hooks/useRecurringPatterns";
+import { useInvoices } from "@/hooks/useInvoices";
+import { useFilteredTransactions } from "@/hooks/useFilteredTransactions";
 import { TransactionRow } from "@/components/matching/TransactionRow";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
 
-type FilterStatus = "all" | "unmatched" | "matched" | "confirmed";
-
-interface MonthGroup {
-  year: number;
-  month: number;
-  transactions: any[];
-}
-
 export default function MatchingPage() {
   const { toast } = useToast();
   const [isAutoMatching, setIsAutoMatching] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
-  const [recurringOpen, setRecurringOpen] = useState(false);
-  const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
-
-  // Alle Transaktionen ohne Filter laden
-  const { data: transactions = [], isLoading, refetch } = useBankTransactions();
   const { data: invoices = [] } = useInvoices();
-  const { data: recurringPatterns = [] } = useRecurringPatterns();
-  const updateMatch = useUpdateTransactionMatch();
 
-  // Auto-mark unmatched transactions that match recurring patterns
-  useEffect(() => {
-    const autoMarkRecurring = async () => {
-      const unmatchedTransactions = transactions.filter(
-        (t: any) => t.matchStatus === "unmatched"
-      );
+  const {
+    transactions,
+    isLoading,
+    refetch,
+    searchQuery,
+    setSearchQuery,
+    filterStatus,
+    setFilterStatus,
+    openMonths,
+    toggleMonth,
+    recurringOpen,
+    setRecurringOpen,
+    groupedByMonth,
+    recurringTransactions,
+    unmatchedCount,
+    matchedCount,
+    confirmedCount,
+    recurringCount,
+  } = useFilteredTransactions();
 
-      for (const transaction of unmatchedTransactions) {
-        if (matchesRecurringPattern(transaction.description, recurringPatterns)) {
-          try {
-            await updateMatch.mutateAsync({
-              transactionId: transaction.id,
-              invoiceId: null,
-              matchStatus: "recurring",
-            });
-          } catch (error) {
-            console.error("Error auto-marking recurring:", error);
-          }
-        }
-      }
-    };
-
-    if (recurringPatterns.length > 0 && transactions.length > 0) {
-      autoMarkRecurring();
-    }
-  }, [recurringPatterns, transactions.length]);
-
-  // Laufende Kosten separat halten
-  const recurringTransactions = useMemo(() => {
-    return transactions.filter((t: any) => t.matchStatus === "recurring");
-  }, [transactions]);
-
-  // Normale Transaktionen (ohne recurring) sortieren: Vorschläge zuerst
-  const sortedTransactions = useMemo(() => {
-    return [...transactions]
-      .filter((t: any) => t.matchStatus !== "recurring")
-      .sort((a: any, b: any) => {
-        const statusOrder: Record<string, number> = {
-          matched: 0,    // Vorschläge zuerst
-          unmatched: 1,  // Dann offen
-          no_match: 2,   // Dann keine Rechnung
-          confirmed: 3,  // Dann bestätigt
-        };
-        const orderA = statusOrder[a.matchStatus] ?? 4;
-        const orderB = statusOrder[b.matchStatus] ?? 4;
-        if (orderA !== orderB) return orderA - orderB;
-        // Bei gleichem Status nach Datum sortieren
-        return new Date(b.date).getTime() - new Date(a.date).getTime();
-      });
-  }, [transactions]);
-
-  // Filtern nach Status und Suchbegriff
-  const filteredTransactions = useMemo(() => {
-    let filtered = sortedTransactions;
-
-    // Status-Filter
-    if (filterStatus !== "all") {
-      filtered = filtered.filter((t: any) => t.matchStatus === filterStatus);
-    }
-
-    // Such-Filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
-      filtered = filtered.filter((t: any) => {
-        const description = (t.description || "").toLowerCase();
-        const amount = Math.abs(t.amount).toString();
-        const date = t.date || "";
-        const invoiceIssuer = (t.matchedInvoice?.issuer || "").toLowerCase();
-        
-        return (
-          description.includes(query) ||
-          amount.includes(query) ||
-          date.includes(query) ||
-          invoiceIssuer.includes(query)
-        );
-      });
-    }
-
-    return filtered;
-  }, [sortedTransactions, filterStatus, searchQuery]);
-
-  // Gruppiere nach Jahr und Monat
-  const groupedByMonth = useMemo(() => {
-    const groups: MonthGroup[] = [];
-    const groupMap = new Map<string, any[]>();
-
-    filteredTransactions.forEach((t: any) => {
-      const date = new Date(t.date);
-      const year = date.getFullYear();
-      const month = date.getMonth() + 1;
-      const key = `${year}-${month}`;
-      
-      if (!groupMap.has(key)) {
-        groupMap.set(key, []);
-      }
-      groupMap.get(key)!.push(t);
-    });
-
-    groupMap.forEach((transactions, key) => {
-      const [year, month] = key.split("-").map(Number);
-      groups.push({ year, month, transactions });
-    });
-
-    // Sortiere nach Jahr und Monat absteigend
-    return groups.sort((a, b) => {
-      if (a.year !== b.year) return b.year - a.year;
-      return b.month - a.month;
-    });
-  }, [filteredTransactions]);
-
-  const toggleMonth = (key: string) => {
-    setOpenMonths(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  };
-
-  // Automatisch erste Gruppe öffnen wenn noch keine offen
-  useMemo(() => {
-    if (groupedByMonth.length > 0 && openMonths.size === 0) {
-      const firstKey = `${groupedByMonth[0].year}-${groupedByMonth[0].month}`;
-      setOpenMonths(new Set([firstKey]));
-    }
-  }, [groupedByMonth.length]);
-
-  const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
-  const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
-  const confirmedCount = transactions.filter((t: any) => t.matchStatus === "confirmed").length;
-  const recurringCount = recurringTransactions.length;
   const invoiceCount = invoices.length;
 
   const handleAutoMatch = async () => {
     setIsAutoMatching(true);
     try {
       const { data, error } = await supabase.functions.invoke("auto-match-transactions");
-
       if (error) throw error;
 
       toast({
@@ -206,7 +73,6 @@ export default function MatchingPage() {
 
       {/* Controls */}
       <div className="flex flex-col gap-4 animate-fade-in sm:flex-row sm:items-center sm:justify-between">
-        {/* Stats */}
         <div className="flex gap-4">
           <div className="glass-card flex items-center gap-3 px-4 py-3">
             <FileText className="h-5 w-5 text-info" />
@@ -255,32 +121,20 @@ export default function MatchingPage() {
 
       {/* Filter Tabs */}
       <div className="animate-fade-in">
-        <Tabs value={filterStatus} onValueChange={(v) => setFilterStatus(v as FilterStatus)}>
+        <Tabs value={filterStatus} onValueChange={(v) => setFilterStatus(v as any)}>
           <TabsList className="glass-card h-auto p-1">
-            <TabsTrigger 
-              value="all" 
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-            >
+            <TabsTrigger value="all" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               Alle ({transactions.length})
             </TabsTrigger>
-            <TabsTrigger 
-              value="matched" 
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-            >
+            <TabsTrigger value="matched" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Sparkles className="mr-1 h-4 w-4" />
               Vorschläge ({matchedCount})
             </TabsTrigger>
-            <TabsTrigger 
-              value="unmatched" 
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-            >
+            <TabsTrigger value="unmatched" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <AlertCircle className="mr-1 h-4 w-4" />
               Offen ({unmatchedCount})
             </TabsTrigger>
-            <TabsTrigger 
-              value="confirmed" 
-              className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-            >
+            <TabsTrigger value="confirmed" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <CheckCircle className="mr-1 h-4 w-4" />
               Bestätigt ({confirmedCount})
             </TabsTrigger>
@@ -324,20 +178,18 @@ export default function MatchingPage() {
               {searchQuery ? "Keine Treffer gefunden" : "Keine Transaktionen vorhanden"}
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              {searchQuery 
+              {searchQuery
                 ? "Versuchen Sie einen anderen Suchbegriff"
-                : "Laden Sie Kontoauszüge hoch, um Transaktionen zu sehen"
-              }
+                : "Laden Sie Kontoauszüge hoch, um Transaktionen zu sehen"}
             </p>
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Monatsgruppen */}
             {groupedByMonth.map(({ year, month, transactions: monthTransactions }) => {
               const key = `${year}-${month}`;
               const isOpen = openMonths.has(key);
               const monthName = MONTH_NAMES[month - 1];
-              
+
               return (
                 <Collapsible key={key} open={isOpen} onOpenChange={() => toggleMonth(key)}>
                   <CollapsibleTrigger asChild>
@@ -355,7 +207,6 @@ export default function MatchingPage() {
                     </button>
                   </CollapsibleTrigger>
                   <CollapsibleContent className="mt-2 space-y-2 pl-4">
-                    {/* Header */}
                     <div className="flex items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground">
                       <div className="w-6"></div>
                       <div className="w-24">Datum</div>
@@ -372,7 +223,6 @@ export default function MatchingPage() {
               );
             })}
 
-            {/* Laufende Kosten - eingeklappt am Ende */}
             {filterStatus === "all" && recurringCount > 0 && (
               <Collapsible open={recurringOpen} onOpenChange={setRecurringOpen} className="mt-6">
                 <CollapsibleTrigger asChild>
