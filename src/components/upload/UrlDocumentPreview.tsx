@@ -102,4 +102,4 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
       </Dialog>
     </>
   );
-}
+});
