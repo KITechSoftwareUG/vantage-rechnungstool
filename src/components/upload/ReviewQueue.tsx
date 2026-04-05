@@ -31,9 +31,6 @@ export function ReviewQueue() {
   const [discardAll, setDiscardAll] = useState(false);
   const [confirmAll, setConfirmAll] = useState(false);
 
-  const handleConfirmOne = useCallback((data: PendingInvoice) => confirmMutation.mutate(data), []);
-  const handleDiscardOne = useCallback((id: string) => setDiscardId(id), []);
-
   const { data: pendingInvoices = [], isLoading } = useQuery({
     queryKey: ["pending-invoices", user?.id],
     queryFn: async (): Promise<PendingInvoice[]> => {
