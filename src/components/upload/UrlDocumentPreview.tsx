@@ -22,14 +22,27 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
   const isPdf = fileName.toLowerCase().endsWith(".pdf") || fileUrl.includes(".pdf");
   const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(fileName);
 
+  const resetScrollPosition = () => {
+    if (!scrollRef.current) return;
+    scrollRef.current.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  };
+
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = 0;
-    }
+    setZoom(100);
+    resetScrollPosition();
+
+    const timeoutId = window.setTimeout(() => {
+      resetScrollPosition();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [fileUrl]);
 
   const handleZoomIn = () => setZoom((z) => Math.min(z + 25, 200));
   const handleZoomOut = () => setZoom((z) => Math.max(z - 25, 50));
+  const pdfSrc = isPdf
+    ? `${fileUrl}#page=1&toolbar=0&navpanes=0&statusbar=0&messages=0`
+    : fileUrl;
 
   if (!fileUrl) {
     return (
@@ -77,9 +90,11 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
         >
           {isPdf ? (
             <iframe
-              src={`${fileUrl}#toolbar=0&navpanes=0`}
+              key={`${fileUrl}-${isFullscreen ? "fullscreen" : "inline"}`}
+              src={pdfSrc}
               className={cn("border-0 bg-white rounded shadow-sm", isFullscreen ? "w-full h-[80vh]" : "w-full h-[450px]")}
               title="PDF Vorschau"
+              onLoad={resetScrollPosition}
             />
           ) : isImage ? (
             <img src={fileUrl} alt="Dokumentvorschau" className="max-w-full rounded shadow-sm" />
