@@ -105,7 +105,9 @@ export function getStatusSummary(categoryLogs: IngestionLog[]) {
   const success = categoryLogs.filter((l) => l.status === "completed" || l.status === "success").length;
   const errors = categoryLogs.filter((l) => l.status === "error").length;
   const pending = categoryLogs.filter((l) => l.status === "processing" || l.status === "received").length;
-  return { success, errors, pending, total: categoryLogs.length };
+  const confirmed = categoryLogs.filter((l) => l.document_status === "ready").length;
+  const awaitingReview = categoryLogs.filter((l) => l.document_status === "processing").length;
+  return { success, errors, pending, confirmed, awaitingReview, total: categoryLogs.length };
 }
 
 // ---------- Hook ----------
