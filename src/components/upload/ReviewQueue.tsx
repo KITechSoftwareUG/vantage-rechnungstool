@@ -6,7 +6,7 @@ import { ReviewCard } from "./ReviewCard";
 import { Loader2, Inbox, Trash2, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 
 interface PendingInvoice {
   id: string;
