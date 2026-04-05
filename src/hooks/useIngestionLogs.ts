@@ -125,7 +125,7 @@ export function useIngestionLogs() {
         .from("document_ingestion_log")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(200);
       if (error) throw error;
 
       const rawLogs = data as IngestionLog[];
