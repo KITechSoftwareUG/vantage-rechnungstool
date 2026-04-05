@@ -15,7 +15,7 @@ interface UrlDocumentPreviewProps {
   className?: string;
 }
 
-export function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocumentPreviewProps) {
+export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocumentPreviewProps) {
   const [zoom, setZoom] = useState(100);
   const [fullscreen, setFullscreen] = useState(false);
   const isPdf = fileName.toLowerCase().endsWith(".pdf") || fileUrl.includes(".pdf");
