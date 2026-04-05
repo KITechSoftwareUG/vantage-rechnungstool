@@ -247,6 +247,9 @@ export function ReviewQueue() {
             invoice={invoice}
             onConfirm={handleConfirmOne}
             onDiscard={handleDiscardOne}
+            duplicates={duplicateMap.get(invoice.id) || []}
+            onMerge={handleMerge}
+            isMerging={mergeDuplicate.isPending}
             index={index}
           />
         ))}
