@@ -31,6 +31,28 @@ export default function InvoicesPage() {
   const updateInvoice = useUpdateInvoice();
   const deleteInvoice = useDeleteInvoice();
   const bulkDelete = useBulkDeleteInvoices();
+  const mergeDuplicate = useMergeDuplicate();
+
+  // Duplicate detection across all invoices
+  const duplicateCandidates = useMemo(() =>
+    invoices.map((inv) => ({
+      id: inv.id,
+      date: inv.date,
+      issuer: inv.issuer,
+      amount: inv.amount,
+      currency: inv.currency,
+      fileName: inv.fileName,
+      fileUrl: inv.fileUrl,
+      status: inv.status,
+    })),
+    [invoices]
+  );
+  const duplicateMap = useDuplicateDetection(duplicateCandidates);
+  const duplicateCount = useMemo(() => {
+    const seen = new Set<string>();
+    for (const [id] of duplicateMap) seen.add(id);
+    return seen.size;
+  }, [duplicateMap]);
 
   const filteredInvoices = invoices.filter(inv => {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
