@@ -204,8 +204,8 @@ export function ReviewQueue() {
           <ReviewCard
             key={invoice.id}
             invoice={invoice}
-            onConfirm={(data) => confirmMutation.mutate(data)}
-            onDiscard={(id) => setDiscardId(id)}
+            onConfirm={handleConfirmOne}
+            onDiscard={handleDiscardOne}
             index={index}
           />
         ))}
