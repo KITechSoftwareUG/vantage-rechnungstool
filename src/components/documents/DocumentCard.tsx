@@ -94,9 +94,20 @@ export function DocumentCard({ document, onSave, onDelete, duplicates = [], onMe
             <p className="text-sm font-medium text-foreground break-all leading-snug">
               {document.fileName}
             </p>
-            <Badge variant="outline" className={cn("mt-1", statusColors[document.status])}>
-              {statusLabels[document.status]}
-            </Badge>
+            <div className="flex items-center gap-2 mt-1">
+              <Badge variant="outline" className={cn(statusColors[document.status])}>
+                {statusLabels[document.status]}
+              </Badge>
+              {duplicates.length > 0 && onMerge && (
+                <DuplicateBadge
+                  currentId={document.id}
+                  duplicates={duplicates}
+                  onMerge={onMerge}
+                  isMerging={isMerging}
+                  compact
+                />
+              )}
+            </div>
           </div>
         </div>
         
