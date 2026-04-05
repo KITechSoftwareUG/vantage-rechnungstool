@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { UrlDocumentPreview } from "./UrlDocumentPreview";
+import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 
 interface ReviewInvoice {
   id: string;
@@ -25,6 +26,9 @@ interface ReviewCardProps {
   invoice: ReviewInvoice;
   onConfirm: (data: ReviewInvoice) => void;
   onDiscard: (id: string) => void;
+  duplicates?: Array<{ id: string; fileName: string; date: string; issuer: string; amount: number; currency?: string; status?: string; fileUrl?: string }>;
+  onMerge?: (keeperId: string, duplicateId: string) => void;
+  isMerging?: boolean;
   index?: number;
 }
 
