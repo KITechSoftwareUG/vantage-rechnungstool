@@ -18,7 +18,7 @@ interface DocumentCardProps {
   index?: number;
 }
 
-export function DocumentCard({ document, onSave, onDelete, index = 0 }: DocumentCardProps) {
+export function DocumentCard({ document, onSave, onDelete, duplicates = [], onMerge, isMerging, index = 0 }: DocumentCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(document);
 
