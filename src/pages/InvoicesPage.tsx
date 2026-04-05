@@ -329,6 +329,9 @@ export default function InvoicesPage() {
                     const inv = invoices.find(i => i.id === id);
                     if (inv) handleDelete(inv);
                   } : undefined}
+                  duplicates={duplicateMap.get(invoice.id) || []}
+                  onMerge={(keeperId, dupId) => mergeDuplicate.mutate({ keeperId, duplicateId: dupId })}
+                  isMerging={mergeDuplicate.isPending}
                   index={index}
                 />
               </div>
