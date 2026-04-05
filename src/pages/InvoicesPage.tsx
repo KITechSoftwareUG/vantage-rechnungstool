@@ -385,8 +385,19 @@ export default function InvoicesPage() {
                   {format(new Date(invoice.date), "dd.MM.yyyy", { locale: de })}
                 </td>
                 <td className="px-4 py-3 text-sm font-medium">{invoice.issuer}</td>
-                <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px] truncate">
-                  {invoice.fileName}
+                <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px]">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate">{invoice.fileName}</span>
+                    {(duplicateMap.get(invoice.id)?.length ?? 0) > 0 && (
+                      <DuplicateBadge
+                        currentId={invoice.id}
+                        duplicates={duplicateMap.get(invoice.id) || []}
+                        onMerge={(keeperId, dupId) => mergeDuplicate.mutate({ keeperId, duplicateId: dupId })}
+                        isMerging={mergeDuplicate.isPending}
+                        compact
+                      />
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
