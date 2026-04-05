@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare } from "lucide-react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare, Copy } from "lucide-react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
 import { GroupedListView } from "@/components/documents/GroupedListView";
 import { groupByYearAndMonth, InvoiceData } from "@/types/documents";
 import { useInvoices, useUpdateInvoice, useDeleteInvoice, useBulkDeleteInvoices } from "@/hooks/useDocuments";
+import { useDuplicateDetection, useMergeDuplicate } from "@/hooks/useDuplicateDetection";
+import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 import { cn } from "@/lib/utils";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 
