@@ -64,10 +64,13 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
           )}
         </div>
       </div>
-      <div className={cn(
-        "flex-1 overflow-auto p-2",
-        isFullscreen ? "min-h-0" : "min-h-[300px] max-h-[500px]"
-      )}>
+      <div
+        ref={!isFullscreen ? scrollRef : undefined}
+        className={cn(
+          "flex-1 overflow-auto p-2",
+          isFullscreen ? "min-h-0" : "min-h-[300px] max-h-[500px]"
+        )}
+      >
         <div
           className="flex items-start justify-center"
           style={{ transform: `scale(${zoom / 100})`, transformOrigin: "top center" }}
