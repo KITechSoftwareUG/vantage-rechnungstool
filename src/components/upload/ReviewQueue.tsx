@@ -33,6 +33,10 @@ export function ReviewQueue() {
   const [discardAll, setDiscardAll] = useState(false);
   const [confirmAll, setConfirmAll] = useState(false);
 
+  // Fetch all confirmed invoices for duplicate detection across pending + confirmed
+  const { data: confirmedInvoices = [] } = useInvoices();
+  const mergeDuplicate = useMergeDuplicate();
+
   const { data: pendingInvoices = [], isLoading } = useQuery({
     queryKey: ["pending-invoices", user?.id],
     queryFn: async (): Promise<PendingInvoice[]> => {
