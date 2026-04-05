@@ -32,7 +32,7 @@ interface ReviewCardProps {
   index?: number;
 }
 
-export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDiscard, index = 0 }: ReviewCardProps) {
+export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDiscard, duplicates = [], onMerge, isMerging, index = 0 }: ReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
   const [amountInput, setAmountInput] = useState(invoice.amount.toString().replace(".", ","));
