@@ -6,11 +6,15 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
+import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 
 interface DocumentCardProps {
   document: InvoiceData;
   onSave: (data: InvoiceData) => void;
   onDelete?: (id: string) => void;
+  duplicates?: Array<{ id: string; fileName: string; date: string; issuer: string; amount: number; currency?: string; status?: string; fileUrl?: string }>;
+  onMerge?: (keeperId: string, duplicateId: string) => void;
+  isMerging?: boolean;
   index?: number;
 }
 
