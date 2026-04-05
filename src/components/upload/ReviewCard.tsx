@@ -78,9 +78,19 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
               </div>
               <div>
                 <p className="text-sm font-medium text-foreground line-clamp-1">{invoice.fileName}</p>
-                <Badge variant="outline" className="mt-1 bg-primary/10 text-primary border-primary/20">
-                  Zur Überprüfung
-                </Badge>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
+                    Zur Überprüfung
+                  </Badge>
+                  {duplicates.length > 0 && onMerge && (
+                    <DuplicateBadge
+                      currentId={invoice.id}
+                      duplicates={duplicates}
+                      onMerge={onMerge}
+                      isMerging={isMerging}
+                    />
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-1">
