@@ -26,6 +26,8 @@ export interface IngestionLog {
   status: string;
   error_message: string | null;
   created_at: string;
+  /** Status of the linked document (invoice/statement) – e.g. "ready", "processing" */
+  document_status?: string | null;
 }
 
 export interface IngestionMonthGroup {
