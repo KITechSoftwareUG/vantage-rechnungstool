@@ -165,6 +165,38 @@ export function ReviewQueue() {
   const handleConfirmOne = useCallback((data: PendingInvoice) => confirmMutation.mutate(data), [confirmMutation]);
   const handleDiscardOne = useCallback((id: string) => setDiscardId(id), []);
 
+  // Combine pending + confirmed invoices for cross-status duplicate detection
+  const allInvoicesForDuplicateCheck = useMemo(() => {
+    const confirmed = confirmedInvoices.map((inv) => ({
+      id: inv.id,
+      date: inv.date,
+      issuer: inv.issuer,
+      amount: inv.amount,
+      currency: inv.currency,
+      fileName: inv.fileName,
+      fileUrl: inv.fileUrl,
+      status: inv.status,
+    }));
+    const pending = pendingInvoices.map((inv) => ({
+      id: inv.id,
+      date: inv.date,
+      issuer: inv.issuer,
+      amount: inv.amount,
+      currency: inv.currency,
+      fileName: inv.fileName,
+      fileUrl: inv.fileUrl,
+      status: "processing" as string,
+    }));
+    return [...pending, ...confirmed];
+  }, [pendingInvoices, confirmedInvoices]);
+
+  const duplicateMap = useDuplicateDetection(allInvoicesForDuplicateCheck);
+
+  const handleMerge = useCallback(
+    (keeperId: string, duplicateId: string) => mergeDuplicate.mutate({ keeperId, duplicateId }),
+    [mergeDuplicate]
+  );
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
