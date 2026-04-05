@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare } from "lucide-react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare, Copy } from "lucide-react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
 import { GroupedListView } from "@/components/documents/GroupedListView";
 import { groupByYearAndMonth, InvoiceData } from "@/types/documents";
 import { useInvoices, useUpdateInvoice, useDeleteInvoice, useBulkDeleteInvoices } from "@/hooks/useDocuments";
+import { useDuplicateDetection, useMergeDuplicate } from "@/hooks/useDuplicateDetection";
+import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 import { cn } from "@/lib/utils";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 
@@ -29,6 +31,28 @@ export default function InvoicesPage() {
   const updateInvoice = useUpdateInvoice();
   const deleteInvoice = useDeleteInvoice();
   const bulkDelete = useBulkDeleteInvoices();
+  const mergeDuplicate = useMergeDuplicate();
+
+  // Duplicate detection across all invoices
+  const duplicateCandidates = useMemo(() =>
+    invoices.map((inv) => ({
+      id: inv.id,
+      date: inv.date,
+      issuer: inv.issuer,
+      amount: inv.amount,
+      currency: inv.currency,
+      fileName: inv.fileName,
+      fileUrl: inv.fileUrl,
+      status: inv.status,
+    })),
+    [invoices]
+  );
+  const duplicateMap = useDuplicateDetection(duplicateCandidates);
+  const duplicateCount = useMemo(() => {
+    const seen = new Set<string>();
+    for (const [id] of duplicateMap) seen.add(id);
+    return seen.size;
+  }, [duplicateMap]);
 
   const filteredInvoices = invoices.filter(inv => {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -189,7 +213,7 @@ export default function InvoicesPage() {
       )}
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-3 animate-fade-in" style={{ animationDelay: "0.1s" }}>
+      <div className="grid gap-4 sm:grid-cols-4 animate-fade-in" style={{ animationDelay: "0.1s" }}>
         <div className="glass-card p-4">
           <p className="text-sm text-muted-foreground">Gesamt Einnahmen (Ausgang)</p>
           <p className="mt-1 text-2xl font-bold text-success">
@@ -210,6 +234,15 @@ export default function InvoicesPage() {
           )}>
             {totalIncoming - totalOutgoing >= 0 ? "+" : ""}
             {(totalIncoming - totalOutgoing).toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+          </p>
+        </div>
+        <div className={cn("glass-card p-4", duplicateCount > 0 && "border-warning/30 border")}>
+          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+            <Copy className="h-3.5 w-3.5" />
+            Mögliche Duplikate
+          </p>
+          <p className={cn("mt-1 text-2xl font-bold", duplicateCount > 0 ? "text-warning" : "text-muted-foreground")}>
+            {duplicateCount}
           </p>
         </div>
       </div>
@@ -296,6 +329,9 @@ export default function InvoicesPage() {
                     const inv = invoices.find(i => i.id === id);
                     if (inv) handleDelete(inv);
                   } : undefined}
+                  duplicates={duplicateMap.get(invoice.id) || []}
+                  onMerge={(keeperId, dupId) => mergeDuplicate.mutate({ keeperId, duplicateId: dupId })}
+                  isMerging={mergeDuplicate.isPending}
                   index={index}
                 />
               </div>
@@ -352,8 +388,19 @@ export default function InvoicesPage() {
                   {format(new Date(invoice.date), "dd.MM.yyyy", { locale: de })}
                 </td>
                 <td className="px-4 py-3 text-sm font-medium">{invoice.issuer}</td>
-                <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px] truncate">
-                  {invoice.fileName}
+                <td className="px-4 py-3 text-sm text-muted-foreground max-w-[200px]">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate">{invoice.fileName}</span>
+                    {(duplicateMap.get(invoice.id)?.length ?? 0) > 0 && (
+                      <DuplicateBadge
+                        currentId={invoice.id}
+                        duplicates={duplicateMap.get(invoice.id) || []}
+                        onMerge={(keeperId, dupId) => mergeDuplicate.mutate({ keeperId, duplicateId: dupId })}
+                        isMerging={mergeDuplicate.isPending}
+                        compact
+                      />
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
@@ -437,6 +484,9 @@ export default function InvoicesPage() {
                     const inv = invoices.find(i => i.id === id);
                     if (inv) handleDelete(inv);
                   } : undefined}
+                  duplicates={duplicateMap.get(invoice.id) || []}
+                  onMerge={(keeperId, dupId) => mergeDuplicate.mutate({ keeperId, duplicateId: dupId })}
+                  isMerging={mergeDuplicate.isPending}
                   index={index}
                 />
               </div>

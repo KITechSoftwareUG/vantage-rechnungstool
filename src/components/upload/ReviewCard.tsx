@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { UrlDocumentPreview } from "./UrlDocumentPreview";
+import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 
 interface ReviewInvoice {
   id: string;
@@ -25,10 +26,13 @@ interface ReviewCardProps {
   invoice: ReviewInvoice;
   onConfirm: (data: ReviewInvoice) => void;
   onDiscard: (id: string) => void;
+  duplicates?: Array<{ id: string; fileName: string; date: string; issuer: string; amount: number; currency?: string; status?: string; fileUrl?: string }>;
+  onMerge?: (keeperId: string, duplicateId: string) => void;
+  isMerging?: boolean;
   index?: number;
 }
 
-export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDiscard, index = 0 }: ReviewCardProps) {
+export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDiscard, duplicates = [], onMerge, isMerging, index = 0 }: ReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
   const [amountInput, setAmountInput] = useState(invoice.amount.toString().replace(".", ","));
@@ -74,9 +78,19 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
               </div>
               <div>
                 <p className="text-sm font-medium text-foreground line-clamp-1">{invoice.fileName}</p>
-                <Badge variant="outline" className="mt-1 bg-primary/10 text-primary border-primary/20">
-                  Zur Überprüfung
-                </Badge>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
+                    Zur Überprüfung
+                  </Badge>
+                  {duplicates.length > 0 && onMerge && (
+                    <DuplicateBadge
+                      currentId={invoice.id}
+                      duplicates={duplicates}
+                      onMerge={onMerge}
+                      isMerging={isMerging}
+                    />
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-1">
@@ -227,4 +241,4 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
       </div>
     </div>
   );
-}, (prev, next) => prev.invoice.id === next.invoice.id && prev.index === next.index);
+}, (prev, next) => prev.invoice.id === next.invoice.id && prev.index === next.index && prev.duplicates?.length === next.duplicates?.length && prev.isMerging === next.isMerging);

@@ -6,15 +6,19 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { InvoiceData } from "@/types/documents";
+import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 
 interface DocumentCardProps {
   document: InvoiceData;
   onSave: (data: InvoiceData) => void;
   onDelete?: (id: string) => void;
+  duplicates?: Array<{ id: string; fileName: string; date: string; issuer: string; amount: number; currency?: string; status?: string; fileUrl?: string }>;
+  onMerge?: (keeperId: string, duplicateId: string) => void;
+  isMerging?: boolean;
   index?: number;
 }
 
-export function DocumentCard({ document, onSave, onDelete, index = 0 }: DocumentCardProps) {
+export function DocumentCard({ document, onSave, onDelete, duplicates = [], onMerge, isMerging, index = 0 }: DocumentCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(document);
 
@@ -90,9 +94,20 @@ export function DocumentCard({ document, onSave, onDelete, index = 0 }: Document
             <p className="text-sm font-medium text-foreground break-all leading-snug">
               {document.fileName}
             </p>
-            <Badge variant="outline" className={cn("mt-1", statusColors[document.status])}>
-              {statusLabels[document.status]}
-            </Badge>
+            <div className="flex items-center gap-2 mt-1">
+              <Badge variant="outline" className={cn(statusColors[document.status])}>
+                {statusLabels[document.status]}
+              </Badge>
+              {duplicates.length > 0 && onMerge && (
+                <DuplicateBadge
+                  currentId={document.id}
+                  duplicates={duplicates}
+                  onMerge={onMerge}
+                  isMerging={isMerging}
+                  compact
+                />
+              )}
+            </div>
           </div>
         </div>
         

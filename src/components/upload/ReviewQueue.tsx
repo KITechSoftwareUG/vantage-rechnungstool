@@ -2,11 +2,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { useInvoices } from "@/hooks/useDocuments";
+import { useDuplicateDetection, useMergeDuplicate } from "@/hooks/useDuplicateDetection";
 import { ReviewCard } from "./ReviewCard";
 import { Loader2, Inbox, Trash2, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 
 interface PendingInvoice {
   id: string;
@@ -30,6 +32,10 @@ export function ReviewQueue() {
   const [discardId, setDiscardId] = useState<string | null>(null);
   const [discardAll, setDiscardAll] = useState(false);
   const [confirmAll, setConfirmAll] = useState(false);
+
+  // Fetch all confirmed invoices for duplicate detection across pending + confirmed
+  const { data: confirmedInvoices = [] } = useInvoices();
+  const mergeDuplicate = useMergeDuplicate();
 
   const { data: pendingInvoices = [], isLoading } = useQuery({
     queryKey: ["pending-invoices", user?.id],
@@ -159,6 +165,38 @@ export function ReviewQueue() {
   const handleConfirmOne = useCallback((data: PendingInvoice) => confirmMutation.mutate(data), [confirmMutation]);
   const handleDiscardOne = useCallback((id: string) => setDiscardId(id), []);
 
+  // Combine pending + confirmed invoices for cross-status duplicate detection
+  const allInvoicesForDuplicateCheck = useMemo(() => {
+    const confirmed = confirmedInvoices.map((inv) => ({
+      id: inv.id,
+      date: inv.date,
+      issuer: inv.issuer,
+      amount: inv.amount,
+      currency: inv.currency,
+      fileName: inv.fileName,
+      fileUrl: inv.fileUrl,
+      status: inv.status,
+    }));
+    const pending = pendingInvoices.map((inv) => ({
+      id: inv.id,
+      date: inv.date,
+      issuer: inv.issuer,
+      amount: inv.amount,
+      currency: inv.currency,
+      fileName: inv.fileName,
+      fileUrl: inv.fileUrl,
+      status: "processing" as string,
+    }));
+    return [...pending, ...confirmed];
+  }, [pendingInvoices, confirmedInvoices]);
+
+  const duplicateMap = useDuplicateDetection(allInvoicesForDuplicateCheck);
+
+  const handleMerge = useCallback(
+    (keeperId: string, duplicateId: string) => mergeDuplicate.mutate({ keeperId, duplicateId }),
+    [mergeDuplicate]
+  );
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -209,6 +247,9 @@ export function ReviewQueue() {
             invoice={invoice}
             onConfirm={handleConfirmOne}
             onDiscard={handleDiscardOne}
+            duplicates={duplicateMap.get(invoice.id) || []}
+            onMerge={handleMerge}
+            isMerging={mergeDuplicate.isPending}
             index={index}
           />
         ))}
