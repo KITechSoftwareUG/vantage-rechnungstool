@@ -227,4 +227,4 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
       </div>
     </div>
   );
-}
+}, (prev, next) => prev.invoice.id === next.invoice.id && prev.index === next.index);
