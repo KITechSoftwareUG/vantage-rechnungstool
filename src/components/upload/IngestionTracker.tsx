@@ -291,8 +291,10 @@ export function IngestionTracker() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold">{label}</p>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                             <span>{summary.total} Dokument{summary.total !== 1 ? "e" : ""}</span>
+                            {summary.confirmed > 0 && <span className="text-primary">✓ {summary.confirmed} bestätigt</span>}
+                            {summary.awaitingReview > 0 && <span className="text-amber-600 dark:text-amber-400">⏳ {summary.awaitingReview} zur Überprüfung</span>}
                             {summary.errors > 0 && <span className="text-destructive">{summary.errors} Fehler</span>}
                             {summary.pending > 0 && <span className="text-warning">{summary.pending} ausstehend</span>}
                           </div>
