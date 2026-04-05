@@ -213,7 +213,7 @@ export default function InvoicesPage() {
       )}
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-3 animate-fade-in" style={{ animationDelay: "0.1s" }}>
+      <div className="grid gap-4 sm:grid-cols-4 animate-fade-in" style={{ animationDelay: "0.1s" }}>
         <div className="glass-card p-4">
           <p className="text-sm text-muted-foreground">Gesamt Einnahmen (Ausgang)</p>
           <p className="mt-1 text-2xl font-bold text-success">
@@ -234,6 +234,15 @@ export default function InvoicesPage() {
           )}>
             {totalIncoming - totalOutgoing >= 0 ? "+" : ""}
             {(totalIncoming - totalOutgoing).toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+          </p>
+        </div>
+        <div className={cn("glass-card p-4", duplicateCount > 0 && "border-warning/30 border")}>
+          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+            <Copy className="h-3.5 w-3.5" />
+            Mögliche Duplikate
+          </p>
+          <p className={cn("mt-1 text-2xl font-bold", duplicateCount > 0 ? "text-warning" : "text-muted-foreground")}>
+            {duplicateCount}
           </p>
         </div>
       </div>
