@@ -2,11 +2,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { useInvoices } from "@/hooks/useDocuments";
+import { useDuplicateDetection, useMergeDuplicate } from "@/hooks/useDuplicateDetection";
 import { ReviewCard } from "./ReviewCard";
 import { Loader2, Inbox, Trash2, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 
 interface PendingInvoice {
   id: string;
