@@ -6,7 +6,7 @@ import { ReviewCard } from "./ReviewCard";
 import { Loader2, Inbox, Trash2, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 
 interface PendingInvoice {
   id: string;
@@ -156,6 +156,9 @@ export function ReviewQueue() {
     },
   });
 
+  const handleConfirmOne = useCallback((data: PendingInvoice) => confirmMutation.mutate(data), [confirmMutation]);
+  const handleDiscardOne = useCallback((id: string) => setDiscardId(id), []);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -204,8 +207,8 @@ export function ReviewQueue() {
           <ReviewCard
             key={invoice.id}
             invoice={invoice}
-            onConfirm={(data) => confirmMutation.mutate(data)}
-            onDiscard={(id) => setDiscardId(id)}
+            onConfirm={handleConfirmOne}
+            onDiscard={handleDiscardOne}
             index={index}
           />
         ))}

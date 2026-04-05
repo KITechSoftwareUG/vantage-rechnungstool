@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import { FileText, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -15,7 +15,7 @@ interface UrlDocumentPreviewProps {
   className?: string;
 }
 
-export function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocumentPreviewProps) {
+export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocumentPreviewProps) {
   const [zoom, setZoom] = useState(100);
   const [fullscreen, setFullscreen] = useState(false);
   const isPdf = fileName.toLowerCase().endsWith(".pdf") || fileUrl.includes(".pdf");
@@ -102,4 +102,4 @@ export function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocument
       </Dialog>
     </>
   );
-}
+});

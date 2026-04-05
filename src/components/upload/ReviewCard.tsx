@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import { Calendar, Building2, Euro, Edit2, Check, X, ArrowDownLeft, ArrowUpRight, Hash, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +28,7 @@ interface ReviewCardProps {
   index?: number;
 }
 
-export function ReviewCard({ invoice, onConfirm, onDiscard, index = 0 }: ReviewCardProps) {
+export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDiscard, index = 0 }: ReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
   const [amountInput, setAmountInput] = useState(invoice.amount.toString().replace(".", ","));
@@ -227,4 +227,4 @@ export function ReviewCard({ invoice, onConfirm, onDiscard, index = 0 }: ReviewC
       </div>
     </div>
   );
-}
+}, (prev, next) => prev.invoice.id === next.invoice.id && prev.index === next.index);
