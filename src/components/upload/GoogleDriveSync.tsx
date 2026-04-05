@@ -44,7 +44,7 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
   const [isPolling, setIsPolling] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [stats, setStats] = useState<{ total: number; processed: number } | null>(null);
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Handle OAuth callback
   useEffect(() => {

@@ -26,6 +26,8 @@ export interface IngestionLog {
   status: string;
   error_message: string | null;
   created_at: string;
+  /** Status of the linked document (invoice/statement) – e.g. "ready", "processing" */
+  document_status?: string | null;
 }
 
 export interface IngestionMonthGroup {
@@ -103,7 +105,9 @@ export function getStatusSummary(categoryLogs: IngestionLog[]) {
   const success = categoryLogs.filter((l) => l.status === "completed" || l.status === "success").length;
   const errors = categoryLogs.filter((l) => l.status === "error").length;
   const pending = categoryLogs.filter((l) => l.status === "processing" || l.status === "received").length;
-  return { success, errors, pending, total: categoryLogs.length };
+  const confirmed = categoryLogs.filter((l) => l.document_status === "ready").length;
+  const awaitingReview = categoryLogs.filter((l) => l.document_status === "processing").length;
+  return { success, errors, pending, confirmed, awaitingReview, total: categoryLogs.length };
 }
 
 // ---------- Hook ----------
@@ -123,7 +127,35 @@ export function useIngestionLogs() {
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;
-      return data as IngestionLog[];
+
+      const rawLogs = data as IngestionLog[];
+
+      // Enrich with linked document status
+      const invoiceIds = rawLogs.filter(l => l.document_id && l.document_type !== "bank_statement").map(l => l.document_id!);
+      const statementIds = rawLogs.filter(l => l.document_id && l.document_type === "bank_statement").map(l => l.document_id!);
+
+      const statusMap: Record<string, string> = {};
+
+      if (invoiceIds.length > 0) {
+        const { data: invoices } = await supabase
+          .from("invoices")
+          .select("id, status")
+          .in("id", invoiceIds);
+        invoices?.forEach(inv => { statusMap[inv.id] = inv.status; });
+      }
+
+      if (statementIds.length > 0) {
+        const { data: statements } = await supabase
+          .from("bank_statements")
+          .select("id, status")
+          .in("id", statementIds);
+        statements?.forEach(st => { statusMap[st.id] = st.status; });
+      }
+
+      return rawLogs.map(log => ({
+        ...log,
+        document_status: log.document_id ? (statusMap[log.document_id] ?? null) : null,
+      }));
     },
     refetchInterval: 10000,
   });

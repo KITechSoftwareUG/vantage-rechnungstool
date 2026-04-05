@@ -86,6 +86,28 @@ function IngestionLogRow({
   onDelete: () => void;
 }) {
   const breadcrumb = getSourceBreadcrumb(log);
+
+  function getDocStatusBadge(docStatus: string | null | undefined) {
+    if (!docStatus) return null;
+    if (docStatus === "ready") {
+      return (
+        <Badge variant="secondary" className="gap-1 bg-green-500/20 text-green-700 dark:text-green-400 text-xs">
+          <CheckCircle2 className="h-3 w-3" />
+          Bestätigt
+        </Badge>
+      );
+    }
+    if (docStatus === "processing") {
+      return (
+        <Badge variant="outline" className="gap-1 text-xs text-amber-600 dark:text-amber-400 border-amber-300">
+          <Clock className="h-3 w-3" />
+          Überprüfung
+        </Badge>
+      );
+    }
+    return null;
+  }
+
   return (
     <div className="flex items-start gap-3 rounded-md p-2.5 transition-colors hover:bg-muted/30">
       <Checkbox checked={isSelected} onCheckedChange={onToggleSelect} className="mt-0.5" />
@@ -93,6 +115,7 @@ function IngestionLogRow({
         <div className="flex items-start justify-between gap-2">
           <p className="truncate text-sm font-medium">{log.file_name}</p>
           <div className="flex items-center gap-1.5 shrink-0">
+            {getDocStatusBadge(log.document_status)}
             {getStatusBadge(log.status)}
             <Button
               variant="ghost"
@@ -268,8 +291,10 @@ export function IngestionTracker() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold">{label}</p>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                             <span>{summary.total} Dokument{summary.total !== 1 ? "e" : ""}</span>
+                            {summary.confirmed > 0 && <span className="text-primary">✓ {summary.confirmed} bestätigt</span>}
+                            {summary.awaitingReview > 0 && <span className="text-amber-600 dark:text-amber-400">⏳ {summary.awaitingReview} zur Überprüfung</span>}
                             {summary.errors > 0 && <span className="text-destructive">{summary.errors} Fehler</span>}
                             {summary.pending > 0 && <span className="text-warning">{summary.pending} ausstehend</span>}
                           </div>
