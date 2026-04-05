@@ -139,7 +139,9 @@ function getOcrPrompt(docType: "invoice" | "statement"): string {
 // Sanitize string for filename
 function sanitizeForFilename(str: string): string {
   return str
-    .replace(/[^a-zA-Z0-9äöüÄÖÜß\-_]/g, "_")
+    .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+    .replace(/Ä/g, "Ae").replace(/Ö/g, "Oe").replace(/Ü/g, "Ue")
+    .replace(/[^a-zA-Z0-9\-_]/g, "_")
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "")
     .substring(0, 40);

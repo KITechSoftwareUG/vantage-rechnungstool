@@ -1,4 +1,4 @@
-import { useState, memo } from "react";
+import { useState, memo, useRef, useEffect } from "react";
 import { FileText, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -18,8 +18,15 @@ interface UrlDocumentPreviewProps {
 export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocumentPreviewProps) {
   const [zoom, setZoom] = useState(100);
   const [fullscreen, setFullscreen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const isPdf = fileName.toLowerCase().endsWith(".pdf") || fileUrl.includes(".pdf");
   const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(fileName);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  }, [fileUrl]);
 
   const handleZoomIn = () => setZoom((z) => Math.min(z + 25, 200));
   const handleZoomOut = () => setZoom((z) => Math.max(z - 25, 50));
@@ -57,10 +64,13 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
           )}
         </div>
       </div>
-      <div className={cn(
-        "flex-1 overflow-auto p-2",
-        isFullscreen ? "min-h-0" : "min-h-[300px] max-h-[500px]"
-      )}>
+      <div
+        ref={!isFullscreen ? scrollRef : undefined}
+        className={cn(
+          "flex-1 overflow-auto p-2",
+          isFullscreen ? "min-h-0" : "min-h-[300px] max-h-[500px]"
+        )}
+      >
         <div
           className="flex items-start justify-center"
           style={{ transform: `scale(${zoom / 100})`, transformOrigin: "top center" }}
