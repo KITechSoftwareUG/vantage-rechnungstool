@@ -45,7 +45,7 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
-            <Routes>
+            <ScrollToTop />
               <Route path="/auth" element={<AuthPage />} />
               <Route element={<ProtectedLayout />}>
                 <Route path="/" element={<Index />} />
