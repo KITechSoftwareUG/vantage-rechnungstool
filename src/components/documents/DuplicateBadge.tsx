@@ -1,5 +1,4 @@
 import { Copy, Merge } from "lucide-react";
-import { UrlDocumentPreview } from "@/components/upload/UrlDocumentPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -73,7 +72,11 @@ export function DuplicateBadge({ currentId, currentDoc, duplicates, onMerge, isM
       </div>
       {doc.fileUrl && (
         <div className="rounded border border-border overflow-hidden" style={{ maxHeight: 280 }}>
-          <UrlDocumentPreview fileUrl={doc.fileUrl} fileName={doc.fileName} className="h-[260px]" />
+          <iframe
+            src={doc.fileUrl}
+            className="w-full h-[260px] border-0 bg-white"
+            title={`Vorschau: ${doc.fileName}`}
+          />
         </div>
       )}
       <p className="text-sm font-medium break-all leading-snug">{doc.fileName}</p>
