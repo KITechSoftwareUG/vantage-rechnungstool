@@ -71,6 +71,11 @@ export function DuplicateBadge({ currentId, currentDoc, duplicates, onMerge, isM
           {statusLabel(doc.status)}
         </Badge>
       </div>
+      {doc.fileUrl && (
+        <div className="rounded border border-border overflow-hidden" style={{ maxHeight: 280 }}>
+          <UrlDocumentPreview fileUrl={doc.fileUrl} fileName={doc.fileName} className="h-[260px]" />
+        </div>
+      )}
       <p className="text-sm font-medium break-all leading-snug">{doc.fileName}</p>
       <div className="space-y-1 text-xs text-muted-foreground">
         <div className="flex items-center gap-1.5">
@@ -86,17 +91,6 @@ export function DuplicateBadge({ currentId, currentDoc, duplicates, onMerge, isM
           <span>{doc.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} {doc.currency || "EUR"}</span>
         </div>
       </div>
-      {doc.fileUrl && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 text-xs w-full mt-1"
-          onClick={() => window.open(doc.fileUrl, "_blank")}
-        >
-          <Eye className="h-3 w-3 mr-1" />
-          Dokument ansehen
-        </Button>
-      )}
     </div>
   );
 
