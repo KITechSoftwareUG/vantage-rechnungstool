@@ -248,7 +248,13 @@ export default function InvoicesPage() {
             {(totalIncoming - totalOutgoing).toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
           </p>
         </div>
-        <div className={cn("glass-card p-4", duplicateCount > 0 && "border-warning/30 border")}>
+        <button
+          onClick={duplicateCount > 0 ? handleShowDuplicates : undefined}
+          className={cn(
+            "glass-card p-4 text-left transition-colors",
+            duplicateCount > 0 && "border-warning/30 border cursor-pointer hover:bg-warning/5"
+          )}
+        >
           <p className="text-sm text-muted-foreground flex items-center gap-1.5">
             <Copy className="h-3.5 w-3.5" />
             Mögliche Duplikate
@@ -256,8 +262,46 @@ export default function InvoicesPage() {
           <p className={cn("mt-1 text-2xl font-bold", duplicateCount > 0 ? "text-warning" : "text-muted-foreground")}>
             {duplicateCount}
           </p>
-        </div>
+        </button>
       </div>
+
+      {/* Duplicate Warning Banner */}
+      {duplicateCount > 0 && !showOnlyDuplicates && (
+        <button
+          onClick={handleShowDuplicates}
+          className="w-full flex items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-left hover:bg-warning/15 transition-colors animate-fade-in"
+        >
+          <AlertTriangle className="h-5 w-5 text-warning shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-warning">
+              {duplicateCount} mögliche Duplikat{duplicateCount > 1 ? "e" : ""} gefunden
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Klicke hier, um nur Duplikate anzuzeigen und sie zu überprüfen
+            </p>
+          </div>
+          <span className="text-xs text-warning font-medium shrink-0">Anzeigen →</span>
+        </button>
+      )}
+
+      {/* Duplicate Filter Active Indicator */}
+      {showOnlyDuplicates && (
+        <div className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 animate-fade-in">
+          <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+          <p className="text-sm font-medium text-warning flex-1">
+            Zeige nur Duplikate ({filteredInvoices.length} Rechnungen)
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setShowOnlyDuplicates(false)}
+          >
+            <X className="h-3 w-3 mr-1" />
+            Filter aufheben
+          </Button>
+        </div>
+      )
 
       {/* Filters */}
       <div className="glass-card p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
