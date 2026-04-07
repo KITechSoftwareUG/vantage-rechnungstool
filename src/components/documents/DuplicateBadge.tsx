@@ -114,7 +114,7 @@ export function DuplicateBadge({ currentId, currentDoc, duplicates, onMerge, isM
       </button>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <DialogContent className="max-w-5xl" onClick={(e) => e.stopPropagation()}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Copy className="h-5 w-5 text-warning" />
