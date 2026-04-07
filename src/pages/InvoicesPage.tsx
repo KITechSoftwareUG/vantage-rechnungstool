@@ -26,6 +26,8 @@ export default function InvoicesPage() {
   const [invoiceToDelete, setInvoiceToDelete] = useState<InvoiceData | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [showOnlyDuplicates, setShowOnlyDuplicates] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const { data: invoices = [], isLoading } = useInvoices();
   const updateInvoice = useUpdateInvoice();
