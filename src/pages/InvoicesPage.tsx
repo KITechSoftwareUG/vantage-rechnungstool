@@ -60,8 +60,18 @@ export default function InvoicesPage() {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           inv.issuer.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesType = filterType === "all" || inv.type === filterType;
-    return matchesSearch && matchesType;
+    const matchesDuplicateFilter = !showOnlyDuplicates || duplicateMap.has(inv.id);
+    return matchesSearch && matchesType && matchesDuplicateFilter;
   });
+
+  const handleShowDuplicates = () => {
+    setShowOnlyDuplicates(true);
+    setFilterType("all");
+    setSearchQuery("");
+    setTimeout(() => {
+      contentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  };
 
   const groupedInvoices = groupByYearAndMonth(filteredInvoices);
 
