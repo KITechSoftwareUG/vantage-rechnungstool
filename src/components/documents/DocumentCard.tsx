@@ -101,6 +101,16 @@ export function DocumentCard({ document, onSave, onDelete, duplicates = [], onMe
               {duplicates.length > 0 && onMerge && (
                 <DuplicateBadge
                   currentId={document.id}
+                  currentDoc={{
+                    id: document.id,
+                    fileName: document.fileName,
+                    date: document.date,
+                    issuer: document.issuer,
+                    amount: document.amount,
+                    currency: document.currency,
+                    status: document.status,
+                    fileUrl: document.fileUrl,
+                  }}
                   duplicates={duplicates}
                   onMerge={onMerge}
                   isMerging={isMerging}

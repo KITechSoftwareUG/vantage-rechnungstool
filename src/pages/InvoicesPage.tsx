@@ -394,6 +394,16 @@ export default function InvoicesPage() {
                     {(duplicateMap.get(invoice.id)?.length ?? 0) > 0 && (
                       <DuplicateBadge
                         currentId={invoice.id}
+                        currentDoc={{
+                          id: invoice.id,
+                          fileName: invoice.fileName,
+                          date: invoice.date,
+                          issuer: invoice.issuer,
+                          amount: invoice.amount,
+                          currency: invoice.currency,
+                          status: invoice.status,
+                          fileUrl: invoice.fileUrl,
+                        }}
                         duplicates={duplicateMap.get(invoice.id) || []}
                         onMerge={(keeperId, dupId) => mergeDuplicate.mutate({ keeperId, duplicateId: dupId })}
                         isMerging={mergeDuplicate.isPending}
