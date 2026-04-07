@@ -85,6 +85,16 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
                   {duplicates.length > 0 && onMerge && (
                     <DuplicateBadge
                       currentId={invoice.id}
+                      currentDoc={{
+                        id: invoice.id,
+                        fileName: invoice.fileName,
+                        date: invoice.date,
+                        issuer: invoice.issuer,
+                        amount: invoice.amount,
+                        currency: invoice.currency,
+                        status: "processing",
+                        fileUrl: invoice.fileUrl,
+                      }}
                       duplicates={duplicates}
                       onMerge={onMerge}
                       isMerging={isMerging}

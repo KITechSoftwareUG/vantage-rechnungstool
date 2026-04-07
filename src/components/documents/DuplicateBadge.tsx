@@ -23,15 +23,27 @@ interface DuplicateInfo {
   fileUrl?: string;
 }
 
+interface CurrentDocInfo {
+  id: string;
+  fileName: string;
+  date: string;
+  issuer: string;
+  amount: number;
+  currency?: string;
+  status?: string;
+  fileUrl?: string;
+}
+
 interface DuplicateBadgeProps {
   currentId: string;
+  currentDoc?: CurrentDocInfo;
   duplicates: DuplicateInfo[];
   onMerge: (keeperId: string, duplicateId: string) => void;
   isMerging?: boolean;
   compact?: boolean;
 }
 
-export function DuplicateBadge({ currentId, duplicates, onMerge, isMerging, compact }: DuplicateBadgeProps) {
+export function DuplicateBadge({ currentId, currentDoc, duplicates, onMerge, isMerging, compact }: DuplicateBadgeProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   if (duplicates.length === 0) return null;
@@ -44,6 +56,48 @@ export function DuplicateBadge({ currentId, duplicates, onMerge, isMerging, comp
       default: return status || "—";
     }
   };
+
+  const DocCard = ({ doc, label, highlight }: { doc: DuplicateInfo | CurrentDocInfo; label: string; highlight?: boolean }) => (
+    <div className={cn(
+      "flex-1 min-w-0 rounded-lg border p-3 space-y-2",
+      highlight ? "border-primary/40 bg-primary/5" : "border-border bg-muted/30"
+    )}>
+      <div className="flex items-center gap-2 mb-2">
+        <Badge variant={highlight ? "default" : "outline"} className="text-[10px] shrink-0">
+          {label}
+        </Badge>
+        <Badge variant="outline" className="text-[10px] shrink-0">
+          {statusLabel(doc.status)}
+        </Badge>
+      </div>
+      <p className="text-sm font-medium break-all leading-snug">{doc.fileName}</p>
+      <div className="space-y-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-foreground/70">Datum:</span>
+          <span>{new Date(doc.date).toLocaleDateString("de-DE")}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-foreground/70">Aussteller:</span>
+          <span>{doc.issuer}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-foreground/70">Betrag:</span>
+          <span>{doc.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} {doc.currency || "EUR"}</span>
+        </div>
+      </div>
+      {doc.fileUrl && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs w-full mt-1"
+          onClick={() => window.open(doc.fileUrl, "_blank")}
+        >
+          <Eye className="h-3 w-3 mr-1" />
+          Dokument ansehen
+        </Button>
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -65,53 +119,35 @@ export function DuplicateBadge({ currentId, duplicates, onMerge, isMerging, comp
       </button>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <DialogContent className="max-w-2xl" onClick={(e) => e.stopPropagation()}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Copy className="h-5 w-5 text-warning" />
               Mögliche Duplikate gefunden
             </DialogTitle>
             <DialogDescription>
-              Die folgenden Dokumente haben gleiches Datum, gleichen Aussteller und gleichen Betrag.
-              Du kannst ein Duplikat zusammenführen (löschen), wobei das aktuelle Dokument beibehalten wird.
+              Vergleiche die Dokumente nebeneinander. Du kannst das Duplikat zusammenführen (löschen), wobei das aktuelle Dokument beibehalten wird.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3 max-h-[300px] overflow-y-auto">
+          <div className="space-y-4 max-h-[400px] overflow-y-auto">
             {duplicates.map((dup) => (
-              <div
-                key={dup.id}
-                className="flex items-start justify-between gap-3 rounded-lg border border-border p-3 bg-muted/30"
-              >
-                <div className="min-w-0 flex-1 space-y-1">
-                  <p className="text-sm font-medium break-all leading-snug">{dup.fileName}</p>
-                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>{new Date(dup.date).toLocaleDateString("de-DE")}</span>
-                    <span>•</span>
-                    <span>{dup.issuer}</span>
-                    <span>•</span>
-                    <span>{dup.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} {dup.currency || "EUR"}</span>
-                  </div>
-                  <Badge variant="outline" className="text-[10px]">
-                    {statusLabel(dup.status)}
-                  </Badge>
-                </div>
-                <div className="flex flex-col gap-1 shrink-0">
-                  {dup.fileUrl && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => window.open(dup.fileUrl, "_blank")}
-                    >
-                      <Eye className="h-3 w-3 mr-1" />
-                      Ansehen
-                    </Button>
+              <div key={dup.id} className="space-y-2">
+                <div className="flex gap-3">
+                  {currentDoc ? (
+                    <DocCard doc={currentDoc} label="Aktuelles Dokument" highlight />
+                  ) : (
+                    <div className="flex-1 min-w-0 rounded-lg border border-primary/40 bg-primary/5 p-3 flex items-center justify-center text-xs text-muted-foreground">
+                      Aktuelles Dokument (ID: {currentId.slice(0, 8)}…)
+                    </div>
                   )}
+                  <DocCard doc={dup} label="Mögliches Duplikat" />
+                </div>
+                <div className="flex justify-end">
                   <Button
                     variant="default"
                     size="sm"
-                    className="h-7 text-xs bg-warning hover:bg-warning/90 text-warning-foreground"
+                    className="h-8 text-xs bg-warning hover:bg-warning/90 text-warning-foreground"
                     onClick={() => {
                       onMerge(currentId, dup.id);
                       setDialogOpen(false);
@@ -119,7 +155,7 @@ export function DuplicateBadge({ currentId, duplicates, onMerge, isMerging, comp
                     disabled={isMerging}
                   >
                     <Merge className="h-3 w-3 mr-1" />
-                    Zusammenführen
+                    Duplikat entfernen & zusammenführen
                   </Button>
                 </div>
               </div>
