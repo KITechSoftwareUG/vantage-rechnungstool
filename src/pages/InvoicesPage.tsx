@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare, Copy } from "lucide-react";
+import { useState, useMemo, useRef } from "react";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare, Copy, AlertTriangle, X } from "lucide-react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
