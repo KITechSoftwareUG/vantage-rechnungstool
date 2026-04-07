@@ -301,7 +301,7 @@ export default function InvoicesPage() {
             Filter aufheben
           </Button>
         </div>
-      )
+      )}
 
       {/* Filters */}
       <div className="glass-card p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
