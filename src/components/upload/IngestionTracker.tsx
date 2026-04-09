@@ -280,7 +280,7 @@ export function IngestionTracker() {
                 const Icon = CATEGORY_ICONS[group.category] || FileText;
                 const label = CATEGORY_LABELS[group.category] || group.category;
                 const summary = getStatusSummary(group.allLogs);
-                const isOpen = openCategories[group.category] !== false;
+                const isOpen = openCategories[group.category] === true;
 
                 return (
                   <Collapsible key={group.category} open={isOpen} onOpenChange={() => toggleCategory(group.category)}>
@@ -306,7 +306,7 @@ export function IngestionTracker() {
                       <div className="ml-4 mt-1 space-y-2 border-l-2 border-muted pl-4">
                         {group.months.map((monthGroup) => {
                           const monthKey = `${group.category}-${monthGroup.year}-${monthGroup.month}`;
-                          const isMonthOpen = openMonths[monthKey] !== false;
+                          const isMonthOpen = openMonths[monthKey] === true;
                           const monthLabel = monthGroup.month > 0
                             ? `${MONTH_NAMES[monthGroup.month - 1]} ${monthGroup.year}`
                             : `${monthGroup.year}`;
