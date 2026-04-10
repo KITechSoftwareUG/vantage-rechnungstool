@@ -1,12 +1,14 @@
-import { useState } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar } from "lucide-react";
+import { useState, useCallback, useMemo } from "react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, Check, X, Square, CheckSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useInvoices } from "@/hooks/useInvoices";
 import { useFilteredTransactions } from "@/hooks/useFilteredTransactions";
 import { TransactionRow } from "@/components/matching/TransactionRow";
+import { useBulkConfirmMatches, useBulkUnmatch } from "@/hooks/useBulkMatchActions";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
@@ -14,7 +16,10 @@ import { MONTH_NAMES } from "@/types/documents";
 export default function MatchingPage() {
   const { toast } = useToast();
   const [isAutoMatching, setIsAutoMatching] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { data: invoices = [] } = useInvoices();
+  const bulkConfirm = useBulkConfirmMatches();
+  const bulkUnmatch = useBulkUnmatch();
 
   const {
     transactions,
@@ -38,28 +43,109 @@ export default function MatchingPage() {
 
   const invoiceCount = invoices.length;
 
+  // All visible transaction IDs (for select all)
+  const visibleIds = useMemo(() => {
+    const ids: string[] = [];
+    groupedByMonth.forEach((g) => g.transactions.forEach((t: any) => ids.push(t.id)));
+    return ids;
+  }, [groupedByMonth]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(visibleIds));
+  }, [visibleIds]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const selectAllMatched = useCallback(() => {
+    const matchedIds = transactions
+      .filter((t: any) => t.matchStatus === "matched" && t.matchedInvoiceId)
+      .map((t: any) => t.id);
+    setSelectedIds(new Set(matchedIds));
+  }, [transactions]);
+
+  // Bulk actions
+  const selectedTransactions = useMemo(
+    () => transactions.filter((t: any) => selectedIds.has(t.id)),
+    [transactions, selectedIds]
+  );
+
+  const canBulkConfirm = selectedTransactions.some(
+    (t: any) => t.matchStatus === "matched" && t.matchedInvoiceId
+  );
+  const canBulkUnmatch = selectedTransactions.some(
+    (t: any) => t.matchStatus === "matched" || t.matchStatus === "confirmed"
+  );
+
+  const handleBulkConfirm = async () => {
+    const ids = selectedTransactions
+      .filter((t: any) => t.matchStatus === "matched" && t.matchedInvoiceId)
+      .map((t: any) => t.id);
+    if (ids.length === 0) return;
+    try {
+      await bulkConfirm.mutateAsync(ids);
+      toast({ title: `${ids.length} Zuordnungen bestätigt` });
+      clearSelection();
+    } catch (e: any) {
+      toast({ title: "Fehler", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const handleBulkUnmatch = async () => {
+    const ids = selectedTransactions
+      .filter((t: any) => t.matchStatus === "matched" || t.matchStatus === "confirmed")
+      .map((t: any) => t.id);
+    if (ids.length === 0) return;
+    try {
+      await bulkUnmatch.mutateAsync(ids);
+      toast({ title: `${ids.length} Zuordnungen aufgehoben` });
+      clearSelection();
+    } catch (e: any) {
+      toast({ title: "Fehler", description: e.message, variant: "destructive" });
+    }
+  };
+
   const handleAutoMatch = async () => {
     setIsAutoMatching(true);
     try {
       const { data, error } = await supabase.functions.invoke("auto-match-transactions");
       if (error) throw error;
-
       toast({
         title: "KI-Matching abgeschlossen",
         description: `${data.matchedCount} Transaktionen wurden zugeordnet`,
       });
-
       refetch();
     } catch (error: any) {
-      toast({
-        title: "Fehler beim Auto-Matching",
-        description: error.message,
-        variant: "destructive",
-      });
+      toast({ title: "Fehler beim Auto-Matching", description: error.message, variant: "destructive" });
     } finally {
       setIsAutoMatching(false);
     }
   };
+
+  // Select all in a specific month group
+  const toggleSelectMonth = useCallback((monthTransactions: any[]) => {
+    const monthIds = monthTransactions.map((t: any) => t.id);
+    const allSelected = monthIds.every((id) => selectedIds.has(id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        monthIds.forEach((id) => next.delete(id));
+      } else {
+        monthIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }, [selectedIds]);
 
   return (
     <div className="space-y-6">
@@ -119,6 +205,52 @@ export default function MatchingPage() {
         </Button>
       </div>
 
+      {/* Bulk Action Bar */}
+      {selectedIds.size > 0 && (
+        <div className="animate-fade-in flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3">
+          <span className="text-sm font-medium text-foreground">
+            {selectedIds.size} ausgewählt
+          </span>
+          <div className="flex gap-2 ml-auto">
+            {canBulkConfirm && (
+              <Button
+                size="sm"
+                variant="default"
+                className="gap-1"
+                onClick={handleBulkConfirm}
+                disabled={bulkConfirm.isPending}
+              >
+                {bulkConfirm.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Check className="h-4 w-4" />
+                )}
+                Alle bestätigen
+              </Button>
+            )}
+            {canBulkUnmatch && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1"
+                onClick={handleBulkUnmatch}
+                disabled={bulkUnmatch.isPending}
+              >
+                {bulkUnmatch.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <X className="h-4 w-4" />
+                )}
+                Zuordnung aufheben
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={clearSelection}>
+              Auswahl aufheben
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Filter Tabs */}
       <div className="animate-fade-in">
         <Tabs value={filterStatus} onValueChange={(v) => setFilterStatus(v as any)}>
@@ -142,16 +274,29 @@ export default function MatchingPage() {
         </Tabs>
       </div>
 
-      {/* Search & Legend */}
+      {/* Search & Quick Select & Legend */}
       <div className="flex flex-col gap-4 animate-fade-in sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-xs">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Suche nach Beschreibung, Betrag..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-          />
+        <div className="flex items-center gap-3">
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Suche nach Beschreibung, Betrag..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <div className="flex gap-1">
+            <Button size="sm" variant="outline" onClick={selectAll} className="text-xs">
+              Alle wählen
+            </Button>
+            {matchedCount > 0 && (
+              <Button size="sm" variant="outline" onClick={selectAllMatched} className="text-xs gap-1">
+                <Sparkles className="h-3 w-3" />
+                Vorschläge wählen
+              </Button>
+            )}
+          </div>
         </div>
         <div className="flex gap-4 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
@@ -189,6 +334,9 @@ export default function MatchingPage() {
               const key = `${year}-${month}`;
               const isOpen = openMonths.has(key);
               const monthName = MONTH_NAMES[month - 1];
+              const monthIds = monthTransactions.map((t: any) => t.id);
+              const allMonthSelected = monthIds.length > 0 && monthIds.every((id: string) => selectedIds.has(id));
+              const someMonthSelected = monthIds.some((id: string) => selectedIds.has(id));
 
               return (
                 <Collapsible key={key} open={isOpen} onOpenChange={() => toggleMonth(key)}>
@@ -199,6 +347,18 @@ export default function MatchingPage() {
                       ) : (
                         <ChevronRight className="h-4 w-4 text-muted-foreground" />
                       )}
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelectMonth(monthTransactions);
+                        }}
+                        className="flex-shrink-0"
+                      >
+                        <Checkbox
+                          checked={allMonthSelected}
+                          className={someMonthSelected && !allMonthSelected ? "opacity-50" : ""}
+                        />
+                      </div>
                       <Calendar className="h-4 w-4 text-primary" />
                       <span className="font-heading font-semibold text-foreground">{monthName} {year}</span>
                       <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
@@ -208,6 +368,7 @@ export default function MatchingPage() {
                   </CollapsibleTrigger>
                   <CollapsibleContent className="mt-2 space-y-2 pl-4">
                     <div className="flex items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground">
+                      <div className="w-4"></div>
                       <div className="w-6"></div>
                       <div className="w-24">Datum</div>
                       <div className="flex-1">Beschreibung</div>
@@ -216,7 +377,12 @@ export default function MatchingPage() {
                       <div className="w-32 text-right">Aktionen</div>
                     </div>
                     {monthTransactions.map((transaction: any) => (
-                      <TransactionRow key={transaction.id} transaction={transaction} />
+                      <TransactionRow
+                        key={transaction.id}
+                        transaction={transaction}
+                        selected={selectedIds.has(transaction.id)}
+                        onToggleSelect={toggleSelect}
+                      />
                     ))}
                   </CollapsibleContent>
                 </Collapsible>
