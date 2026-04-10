@@ -103,11 +103,17 @@ function getOcrPrompt(docType: "invoice" | "statement"): string {
     - currency: Die Währung der Rechnung als ISO 4217 Code (z.B. "EUR", "USD", "GBP", "CHF"). 
       Suche nach Währungssymbolen (€, $, £, Fr.) oder Angaben wie "USD", "EUR" etc.
       Wenn keine Währung erkennbar ist, verwende "EUR" als Standard.
+    - detectedCategory: Erkenne, was für ein Dokument das ist. Mögliche Werte:
+      * "eingang" - Eingangsrechnung (Rechnung die man bezahlen muss, Ausgabe)
+      * "ausgang" - Ausgangsrechnung (Rechnung die man gestellt hat, Einnahme)
+      * "provision" - Provisionsabrechnung (Abrechnung von Provisionen, Courtage, Vermittlungsgebühren)
+      * "kasse" - Kassenbeleg/Barzahlung (Quittung, Taxibeleg, Barrechnung)
+      Achte besonders auf Begriffe wie "Provisionsabrechnung", "Courtage", "Vermittlung" -> "provision"
     
     WICHTIG: Das Feld "type" wird NICHT benötigt - der Typ wird automatisch aus dem Ordner bestimmt.
     
     Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "currency": "USD"}`;
+    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "currency": "USD", "detectedCategory": "eingang"}`;
   }
 
   return `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
