@@ -191,7 +191,7 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
       <div
         ref={isFullscreen ? fullscreenScrollRef : inlineScrollRef}
         className={cn(
-          "flex-1 overflow-auto p-2",
+          "flex-1 overflow-auto p-0",
           isFullscreen ? "min-h-0" : "min-h-[300px] max-h-[500px]"
         )}
       >
