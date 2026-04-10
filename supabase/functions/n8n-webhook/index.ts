@@ -103,11 +103,17 @@ function getOcrPrompt(docType: "invoice" | "statement"): string {
     - currency: Die Währung der Rechnung als ISO 4217 Code (z.B. "EUR", "USD", "GBP", "CHF"). 
       Suche nach Währungssymbolen (€, $, £, Fr.) oder Angaben wie "USD", "EUR" etc.
       Wenn keine Währung erkennbar ist, verwende "EUR" als Standard.
+    - detectedCategory: Erkenne, was für ein Dokument das ist. Mögliche Werte:
+      * "eingang" - Eingangsrechnung (Rechnung die man bezahlen muss, Ausgabe)
+      * "ausgang" - Ausgangsrechnung (Rechnung die man gestellt hat, Einnahme)
+      * "provision" - Provisionsabrechnung (Abrechnung von Provisionen, Courtage, Vermittlungsgebühren)
+      * "kasse" - Kassenbeleg/Barzahlung (Quittung, Taxibeleg, Barrechnung)
+      Achte besonders auf Begriffe wie "Provisionsabrechnung", "Courtage", "Vermittlung" -> "provision"
     
     WICHTIG: Das Feld "type" wird NICHT benötigt - der Typ wird automatisch aus dem Ordner bestimmt.
     
     Antworte NUR mit dem JSON-Objekt, keine andere Erklärung.
-    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "currency": "USD"}`;
+    Beispiel: {"date": "2024-01-15", "issuer": "OpenAI", "invoiceNumber": "INV-2024-12345", "amount": 52.50, "currency": "USD", "detectedCategory": "eingang"}`;
   }
 
   return `Analysiere diesen Kontoauszug und extrahiere folgende Informationen im JSON-Format:
@@ -390,6 +396,44 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ===== CATEGORY MISMATCH DETECTION =====
+    let categoryMismatch: string | null = null;
+    if (docType === "invoice" && extractedData.detectedCategory) {
+      const detected = extractedData.detectedCategory;
+      // Check if OCR-detected category differs from source folder category
+      if (detected !== category) {
+        // Map categories to German labels for the warning message
+        const categoryLabels: Record<string, string> = {
+          eingang: "Eingangsrechnung",
+          ausgang: "Ausgangsrechnung",
+          provision: "Provisionsabrechnung",
+          kasse: "Kassenbeleg",
+        };
+        const sourceLabel = categoryLabels[category] || category;
+        const detectedLabel = categoryLabels[detected] || detected;
+        categoryMismatch = `Ordner: ${sourceLabel}, erkannt: ${detectedLabel}`;
+        console.log(`Category mismatch detected: folder=${category}, OCR=${detected}`);
+      }
+    }
+
+    // Also check if the OCR-detected date month differs from the endpoint month
+    let monthMismatch: string | null = null;
+    if (docType === "invoice" && extractedData.date) {
+      const detectedMonth = new Date(extractedData.date).getMonth() + 1;
+      if (detectedMonth !== month && !isNaN(detectedMonth)) {
+        const monthNames = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
+          "Juli", "August", "September", "Oktober", "November", "Dezember"];
+        monthMismatch = `Ordner: ${monthNames[month]}, Dokument: ${monthNames[detectedMonth]}`;
+        console.log(`Month mismatch detected: folder=${month}, document=${detectedMonth}`);
+      }
+    }
+
+    // Build combined warning message
+    const warnings: string[] = [];
+    if (categoryMismatch) warnings.push(categoryMismatch);
+    if (monthMismatch) warnings.push(monthMismatch);
+    const warningMessage = warnings.length > 0 ? warnings.join(" | ") : null;
+
     // ===== BUILD FINAL FILENAME & RENAME =====
     let finalFileName: string;
     let finalStoragePath: string;
@@ -479,6 +523,29 @@ Deno.serve(async (req) => {
       } else {
         documentId = invoice?.id || null;
         console.log("Invoice created:", documentId);
+
+        // For Kasse (cash) invoices, create a synthetic bank transaction that is already confirmed
+        if (category === "kasse" && documentId) {
+          const kasseDate = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
+          const { error: kasseTxError } = await supabase
+            .from("bank_transactions")
+            .insert({
+              user_id: userId,
+              date: kasseDate,
+              description: `Kasse: ${extractedData.issuer || "Barzahlung"}`,
+              amount: Math.abs(extractedData.amount || 0),
+              transaction_type: "debit",
+              matched_invoice_id: documentId,
+              match_status: "confirmed",
+              match_confidence: 100,
+            });
+
+          if (kasseTxError) {
+            console.error("Kasse synthetic transaction error:", kasseTxError);
+          } else {
+            console.log("Kasse synthetic transaction created for invoice:", documentId);
+          }
+        }
       }
     } else {
       // Bank statement
@@ -545,6 +612,7 @@ Deno.serve(async (req) => {
           document_id: documentId,
           file_name: finalFileName,
           error_message: documentId ? null : "Failed to create DB record",
+          warning_message: warningMessage,
         })
         .eq("id", logEntry.id);
     }

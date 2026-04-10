@@ -147,6 +147,7 @@ export type Database = {
           id: string
           status: string
           user_id: string
+          warning_message: string | null
         }
         Insert: {
           created_at?: string
@@ -160,6 +161,7 @@ export type Database = {
           id?: string
           status?: string
           user_id: string
+          warning_message?: string | null
         }
         Update: {
           created_at?: string
@@ -173,6 +175,7 @@ export type Database = {
           id?: string
           status?: string
           user_id?: string
+          warning_message?: string | null
         }
         Relationships: []
       }

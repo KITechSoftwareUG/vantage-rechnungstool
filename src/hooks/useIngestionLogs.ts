@@ -25,6 +25,7 @@ export interface IngestionLog {
   document_id: string | null;
   status: string;
   error_message: string | null;
+  warning_message?: string | null;
   created_at: string;
   /** Status of the linked document (invoice/statement) – e.g. "ready", "processing" */
   document_status?: string | null;
