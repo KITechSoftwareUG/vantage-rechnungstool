@@ -8,8 +8,18 @@ const corsHeaders = {
 
 // Map German month names to numbers
 const monthMap: Record<string, number> = {
-  januar: 1, februar: 2, maerz: 3, april: 4, mai: 5, juni: 6,
-  juli: 7, august: 8, september: 9, oktober: 10, november: 11, dezember: 12,
+  januar: 1,
+  februar: 2,
+  maerz: 3,
+  april: 4,
+  mai: 5,
+  juni: 6,
+  juli: 7,
+  august: 8,
+  september: 9,
+  oktober: 10,
+  november: 11,
+  dezember: 12,
 };
 
 // Map category to document type for OCR routing
@@ -51,12 +61,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 }
 
 // Retry fetch with exponential backoff
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit,
-  maxRetries = 3,
-  baseDelay = 2000
-): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3, baseDelay = 2000): Promise<Response> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -65,7 +70,7 @@ async function fetchWithRetry(
         console.log(`Attempt ${attempt + 1}: Got ${response.status}, retrying...`);
         lastError = new Error(`AI Gateway error: ${response.status}`);
         if (attempt < maxRetries - 1) {
-          await new Promise(resolve => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
+          await new Promise((resolve) => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
           continue;
         }
         throw lastError;
@@ -75,7 +80,7 @@ async function fetchWithRetry(
       console.log(`Attempt ${attempt + 1}: Network error, retrying...`, error);
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
+        await new Promise((resolve) => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
       }
     }
   }
@@ -142,8 +147,13 @@ function getOcrPrompt(docType: "invoice" | "statement"): string {
 // Sanitize string for filename
 function sanitizeForFilename(str: string): string {
   return str
-    .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
-    .replace(/Ä/g, "Ae").replace(/Ö/g, "Oe").replace(/Ü/g, "Ue")
+    .replace(/ä/g, "ae")
+    .replace(/ö/g, "oe")
+    .replace(/ü/g, "ue")
+    .replace(/ß/g, "ss")
+    .replace(/Ä/g, "Ae")
+    .replace(/Ö/g, "Oe")
+    .replace(/Ü/g, "Ue")
     .replace(/[^a-zA-Z0-9\-_]/g, "_")
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "")
@@ -164,9 +174,8 @@ Deno.serve(async (req) => {
     const monthRaw = pathParts[3]?.toLowerCase();
     // Accept both German month names ("januar") and numbers ("1", "01")
     const monthAsNumber = parseInt(monthRaw, 10);
-    const month = (!isNaN(monthAsNumber) && monthAsNumber >= 1 && monthAsNumber <= 12)
-      ? monthAsNumber
-      : monthMap[monthRaw];
+    const month =
+      !isNaN(monthAsNumber) && monthAsNumber >= 1 && monthAsNumber <= 12 ? monthAsNumber : monthMap[monthRaw];
 
     const userId = url.searchParams.get("user_id");
     const driveFileId = url.searchParams.get("drive_file_id");
@@ -179,25 +188,25 @@ Deno.serve(async (req) => {
 
     // Validate required parameters
     if (!userId) {
-      return new Response(
-        JSON.stringify({ success: false, error: "Missing user_id parameter" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: "Missing user_id parameter" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const docType = categoryToDocType[category];
     if (!docType) {
-      return new Response(
-        JSON.stringify({ success: false, error: `Invalid category: ${category}` }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: `Invalid category: ${category}` }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     if (!year || !month) {
-      return new Response(
-        JSON.stringify({ success: false, error: "Invalid year or month in path" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: "Invalid year or month in path" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Read the file from request body (n8n sends as raw binary)
@@ -205,10 +214,10 @@ Deno.serve(async (req) => {
     const fileSize = fileBuffer.byteLength;
 
     if (fileSize === 0) {
-      return new Response(
-        JSON.stringify({ success: false, error: "Empty file received" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: "Empty file received" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log("File size:", fileSize, "bytes, docType:", docType);
@@ -229,10 +238,10 @@ Deno.serve(async (req) => {
 
       if (existing) {
         console.log("Duplicate file detected:", driveFileId);
-        return new Response(
-          JSON.stringify({ success: true, message: "File already processed", duplicate: true }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ success: true, message: "File already processed", duplicate: true }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
     }
 
@@ -242,19 +251,17 @@ Deno.serve(async (req) => {
     const tempFileName = `n8n_${category}_${timestamp}.${extension}`;
     const tempStoragePath = `${userId}/${year}/${month}/${tempFileName}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from("documents")
-      .upload(tempStoragePath, fileBuffer, {
-        contentType: contentType || "application/pdf",
-        upsert: false,
-      });
+    const { error: uploadError } = await supabase.storage.from("documents").upload(tempStoragePath, fileBuffer, {
+      contentType: contentType || "application/pdf",
+      upsert: false,
+    });
 
     if (uploadError) {
       console.error("Upload error:", uploadError);
-      return new Response(
-        JSON.stringify({ success: false, error: `Upload failed: ${uploadError.message}` }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: `Upload failed: ${uploadError.message}` }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     console.log("File uploaded to temp path:", tempStoragePath);
@@ -266,7 +273,7 @@ Deno.serve(async (req) => {
       .insert({
         user_id: userId,
         file_name: displayFileName,
-        document_type: docType === "invoice" ? category : "vrbank",
+        document_type: docType === "invoice" ? category : "bank_statement",
         endpoint_category: category,
         endpoint_year: year,
         endpoint_month: month,
@@ -284,15 +291,18 @@ Deno.serve(async (req) => {
     if (!LOVABLE_API_KEY) {
       // Update log status
       if (logEntry) {
-        await supabase.from("document_ingestion_log").update({
-          status: "error",
-          error_message: "LOVABLE_API_KEY not configured",
-        }).eq("id", logEntry.id);
+        await supabase
+          .from("document_ingestion_log")
+          .update({
+            status: "error",
+            error_message: "LOVABLE_API_KEY not configured",
+          })
+          .eq("id", logEntry.id);
       }
-      return new Response(
-        JSON.stringify({ success: false, error: "OCR not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: "OCR not configured" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const base64 = arrayBufferToBase64(fileBuffer);
@@ -301,45 +311,45 @@ Deno.serve(async (req) => {
 
     console.log("Starting OCR for:", docType);
 
-    const aiResponse = await fetchWithRetry(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: prompt },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:${mimeType};base64,${base64}` },
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
+    const aiResponse = await fetchWithRetry("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              {
+                type: "image_url",
+                image_url: { url: `data:${mimeType};base64,${base64}` },
+              },
+            ],
+          },
+        ],
+      }),
+    });
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();
       console.error("AI Gateway error:", aiResponse.status, errorText);
       if (logEntry) {
-        await supabase.from("document_ingestion_log").update({
-          status: "error",
-          error_message: `OCR failed: ${aiResponse.status}`,
-        }).eq("id", logEntry.id);
+        await supabase
+          .from("document_ingestion_log")
+          .update({
+            status: "error",
+            error_message: `OCR failed: ${aiResponse.status}`,
+          })
+          .eq("id", logEntry.id);
       }
-      return new Response(
-        JSON.stringify({ success: false, error: `OCR failed: ${aiResponse.status}` }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: false, error: `OCR failed: ${aiResponse.status}` }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const aiData = await aiResponse.json();
@@ -388,7 +398,9 @@ Deno.serve(async (req) => {
       const issuer = sanitizeForFilename(extractedData.issuer || "Unbekannt");
       const date = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
       // Keep storage keys URL-safe and deterministic (no commas or locale separators).
-      const amount = Math.abs(extractedData.amount || 0).toFixed(2).replace(".", "_");
+      const amount = Math.abs(extractedData.amount || 0)
+        .toFixed(2)
+        .replace(".", "_");
       const currency = sanitizeForFilename(extractedData.currency || "EUR");
       finalFileName = `${date}_${issuer}_${amount}${currency}.${extension}`;
     } else {
@@ -401,18 +413,14 @@ Deno.serve(async (req) => {
     finalStoragePath = `${userId}/${year}/${month}/${finalFileName}`;
 
     // Copy file to new name then delete old
-    const { data: fileData } = await supabase.storage
-      .from("documents")
-      .download(tempStoragePath);
+    const { data: fileData } = await supabase.storage.from("documents").download(tempStoragePath);
 
     if (fileData) {
       const arrayBuf = await fileData.arrayBuffer();
-      const { error: finalUploadError } = await supabase.storage
-        .from("documents")
-        .upload(finalStoragePath, arrayBuf, {
-          contentType: contentType || "application/pdf",
-          upsert: true,
-        });
+      const { error: finalUploadError } = await supabase.storage.from("documents").upload(finalStoragePath, arrayBuf, {
+        contentType: contentType || "application/pdf",
+        upsert: true,
+      });
 
       if (finalUploadError) {
         console.error("Final rename upload failed, keeping temp path:", finalUploadError);
@@ -450,7 +458,14 @@ Deno.serve(async (req) => {
           issuer: extractedData.issuer || "Unbekannt",
           amount: Math.abs(extractedData.amount || 0),
           currency: extractedData.currency || "EUR",
-          type: category === "eingang" ? "outgoing" : category === "ausgang" ? "incoming" : (category === "provision" ? "incoming" : "outgoing"),
+          type:
+            category === "eingang"
+              ? "outgoing"
+              : category === "ausgang"
+                ? "incoming"
+                : category === "provision"
+                  ? "incoming"
+                  : "outgoing",
           payment_method: categoryToPayment[category] || "bank",
           invoice_number: extractedData.invoiceNumber || null,
           status: "processing",
@@ -510,9 +525,7 @@ Deno.serve(async (req) => {
             match_status: "unmatched",
           }));
 
-          const { error: txError } = await supabase
-            .from("bank_transactions")
-            .insert(txRows);
+          const { error: txError } = await supabase.from("bank_transactions").insert(txRows);
 
           if (txError) {
             console.error("Transactions insert error:", txError);
@@ -525,12 +538,15 @@ Deno.serve(async (req) => {
 
     // Update ingestion log with result
     if (logEntry) {
-      await supabase.from("document_ingestion_log").update({
-        status: documentId ? "completed" : "error",
-        document_id: documentId,
-        file_name: finalFileName,
-        error_message: documentId ? null : "Failed to create DB record",
-      }).eq("id", logEntry.id);
+      await supabase
+        .from("document_ingestion_log")
+        .update({
+          status: documentId ? "completed" : "error",
+          document_id: documentId,
+          file_name: finalFileName,
+          error_message: documentId ? null : "Failed to create DB record",
+        })
+        .eq("id", logEntry.id);
     }
 
     // Mark as processed if drive_file_id provided
@@ -553,13 +569,22 @@ Deno.serve(async (req) => {
         documentType: docType,
         fileName: finalFileName,
         fileSize: fileSize,
-        extractedData: docType === "invoice"
-          ? { date: extractedData.date, issuer: extractedData.issuer, amount: extractedData.amount, type: extractedData.type }
-          : { bank: extractedData.summary?.bank, date: extractedData.summary?.date, transactions: (extractedData.transactions || []).length },
+        extractedData:
+          docType === "invoice"
+            ? {
+                date: extractedData.date,
+                issuer: extractedData.issuer,
+                amount: extractedData.amount,
+                type: extractedData.type,
+              }
+            : {
+                bank: extractedData.summary?.bank,
+                date: extractedData.summary?.date,
+                transactions: (extractedData.transactions || []).length,
+              },
       }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-
   } catch (error) {
     console.error("Error:", error);
     return new Response(
@@ -567,7 +592,7 @@ Deno.serve(async (req) => {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error",
       }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });
