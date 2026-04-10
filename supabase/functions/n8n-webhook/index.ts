@@ -612,6 +612,7 @@ Deno.serve(async (req) => {
           document_id: documentId,
           file_name: finalFileName,
           error_message: documentId ? null : "Failed to create DB record",
+          warning_message: warningMessage,
         })
         .eq("id", logEntry.id);
     }
