@@ -479,6 +479,29 @@ Deno.serve(async (req) => {
       } else {
         documentId = invoice?.id || null;
         console.log("Invoice created:", documentId);
+
+        // For Kasse (cash) invoices, create a synthetic bank transaction that is already confirmed
+        if (category === "kasse" && documentId) {
+          const kasseDate = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
+          const { error: kasseTxError } = await supabase
+            .from("bank_transactions")
+            .insert({
+              user_id: userId,
+              date: kasseDate,
+              description: `Kasse: ${extractedData.issuer || "Barzahlung"}`,
+              amount: Math.abs(extractedData.amount || 0),
+              transaction_type: "debit",
+              matched_invoice_id: documentId,
+              match_status: "confirmed",
+              match_confidence: 100,
+            });
+
+          if (kasseTxError) {
+            console.error("Kasse synthetic transaction error:", kasseTxError);
+          } else {
+            console.log("Kasse synthetic transaction created for invoice:", documentId);
+          }
+        }
       }
     } else {
       // Bank statement
