@@ -62,7 +62,7 @@ function useMeasuredWidth<T extends HTMLElement>(dependencyKey: string) {
 }
 
 export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocumentPreviewProps) {
-  const [zoom, setZoom] = useState(200);
+  const [zoom, setZoom] = useState(250);
   const [fullscreen, setFullscreen] = useState(false);
   const [numPages, setNumPages] = useState(0);
   const inlineScrollRef = useRef<HTMLDivElement>(null);
@@ -80,7 +80,7 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
   };
 
   useEffect(() => {
-    setZoom(200);
+    setZoom(250);
     setNumPages(0);
     resetScrollPosition();
 
@@ -97,7 +97,7 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
     };
   }, [normalizedFileUrl, fullscreen]);
 
-  const handleZoomIn = () => setZoom((z) => Math.min(z + 25, 200));
+  const handleZoomIn = () => setZoom((z) => Math.min(z + 25, 350));
   const handleZoomOut = () => setZoom((z) => Math.max(z - 25, 50));
 
   if (!fileUrl) {
