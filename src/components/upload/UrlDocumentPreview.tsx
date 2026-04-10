@@ -62,7 +62,7 @@ function useMeasuredWidth<T extends HTMLElement>(dependencyKey: string) {
 }
 
 export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fileName, className }: UrlDocumentPreviewProps) {
-  const [zoom, setZoom] = useState(100);
+  const [zoom, setZoom] = useState(150);
   const [fullscreen, setFullscreen] = useState(false);
   const [numPages, setNumPages] = useState(0);
   const inlineScrollRef = useRef<HTMLDivElement>(null);
