@@ -80,7 +80,7 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
   };
 
   useEffect(() => {
-    setZoom(100);
+    setZoom(150);
     setNumPages(0);
     resetScrollPosition();
 
