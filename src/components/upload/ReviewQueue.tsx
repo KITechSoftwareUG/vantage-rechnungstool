@@ -9,6 +9,7 @@ import { Loader2, Inbox, Trash2, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { useState, useCallback, useMemo } from "react";
+import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 
 interface PendingInvoice {
   id: string;
@@ -24,6 +25,7 @@ interface PendingInvoice {
   year: number;
   month: number;
 }
+
 
 export function ReviewQueue() {
   const { user } = useAuth();
@@ -48,20 +50,34 @@ export function ReviewQueue() {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      return (data || []).map((inv) => ({
-        id: inv.id,
-        fileName: inv.file_name,
-        fileUrl: inv.file_url || "",
-        date: inv.date,
-        issuer: inv.issuer,
-        amount: Number(inv.amount),
-        currency: (inv as any).currency || "EUR",
-        type: inv.type as "incoming" | "outgoing",
-        invoiceNumber: inv.invoice_number,
-        paymentMethod: inv.payment_method,
-        year: inv.year,
-        month: inv.month,
-      }));
+      const invoices = await Promise.all(
+        (data || []).map(async (inv) => {
+          const resolvedFileUrl = await resolveStorageUrl(
+            user.id,
+            inv.year,
+            inv.month,
+            inv.file_name,
+            inv.file_url
+          );
+
+          return {
+            id: inv.id,
+            fileName: inv.file_name,
+            fileUrl: resolvedFileUrl,
+            date: inv.date,
+            issuer: inv.issuer,
+            amount: Number(inv.amount),
+            currency: (inv as any).currency || "EUR",
+            type: inv.type as "incoming" | "outgoing",
+            invoiceNumber: inv.invoice_number,
+            paymentMethod: inv.payment_method,
+            year: inv.year,
+            month: inv.month,
+          } as PendingInvoice;
+        })
+      );
+
+      return invoices;
     },
     enabled: !!user,
     refetchInterval: 10000,

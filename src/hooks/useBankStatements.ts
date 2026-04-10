@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { StatementData, ExtractedTransaction } from "@/types/documents";
 import { useToast } from "@/hooks/use-toast";
+import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 
 export function useBankStatements() {
   const { user } = useAuth();
@@ -19,21 +20,30 @@ export function useBankStatements() {
 
       if (error) throw error;
 
-      return (data || []).map((stmt) => ({
-        id: stmt.id,
-        fileName: stmt.file_name,
-        fileUrl: stmt.file_url || undefined,
-        bank: stmt.bank,
-        bankType: stmt.bank_type as "volksbank" | "amex",
-        accountNumber: stmt.account_number,
-        date: stmt.date,
-        year: stmt.year,
-        month: stmt.month,
-        openingBalance: Number(stmt.opening_balance),
-        closingBalance: Number(stmt.closing_balance),
-        status: stmt.status as "processing" | "ready" | "saved",
-        createdAt: stmt.created_at,
-      }));
+      const statements = await Promise.all(
+        (data || []).map(async (stmt) => {
+          const fileUrl = await resolveStorageUrl(
+            user.id, stmt.year, stmt.month, stmt.file_name, stmt.file_url
+          );
+          return {
+            id: stmt.id,
+            fileName: stmt.file_name,
+            fileUrl,
+            bank: stmt.bank,
+            bankType: stmt.bank_type as "volksbank" | "amex",
+            accountNumber: stmt.account_number,
+            date: stmt.date,
+            year: stmt.year,
+            month: stmt.month,
+            openingBalance: Number(stmt.opening_balance),
+            closingBalance: Number(stmt.closing_balance),
+            status: stmt.status as "processing" | "ready" | "saved",
+            createdAt: stmt.created_at,
+          } as StatementData;
+        })
+      );
+
+      return statements;
     },
     enabled: !!user,
   });

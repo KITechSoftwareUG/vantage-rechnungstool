@@ -384,7 +384,8 @@ Deno.serve(async (req) => {
     if (docType === "invoice") {
       const issuer = sanitizeForFilename(extractedData.issuer || "Unbekannt");
       const date = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
-      const amount = Math.abs(extractedData.amount || 0).toFixed(2).replace(".", ",");
+      // Keep storage keys URL-safe and deterministic (no commas or locale separators).
+      const amount = Math.abs(extractedData.amount || 0).toFixed(2).replace(".", "_");
       const currency = sanitizeForFilename(extractedData.currency || "EUR");
       finalFileName = `${date}_${issuer}_${amount}${currency}.${extension}`;
     } else {
@@ -403,14 +404,21 @@ Deno.serve(async (req) => {
 
     if (fileData) {
       const arrayBuf = await fileData.arrayBuffer();
-      await supabase.storage
+      const { error: finalUploadError } = await supabase.storage
         .from("documents")
         .upload(finalStoragePath, arrayBuf, {
           contentType: contentType || "application/pdf",
           upsert: true,
         });
-      await supabase.storage.from("documents").remove([tempStoragePath]);
-      console.log("File renamed to:", finalStoragePath);
+
+      if (finalUploadError) {
+        console.error("Final rename upload failed, keeping temp path:", finalUploadError);
+        finalFileName = tempFileName;
+        finalStoragePath = tempStoragePath;
+      } else {
+        await supabase.storage.from("documents").remove([tempStoragePath]);
+        console.log("File renamed to:", finalStoragePath);
+      }
     } else {
       // Fallback: keep temp name
       finalFileName = tempFileName;

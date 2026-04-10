@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { FileText, ZoomIn, ZoomOut, Maximize2, X } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { FileText, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -18,6 +18,7 @@ export function DocumentPreview({ file, className }: DocumentPreviewProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [zoom, setZoom] = useState(100);
   const [fullscreen, setFullscreen] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const isPdf = file.type === "application/pdf";
   const isImage = file.type.startsWith("image/");
 
@@ -31,6 +32,19 @@ export function DocumentPreview({ file, className }: DocumentPreviewProps) {
 
   const handleZoomIn = () => setZoom((z) => Math.min(z + 25, 200));
   const handleZoomOut = () => setZoom((z) => Math.max(z - 25, 50));
+
+  useEffect(() => {
+    setZoom(100);
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [file.name]);
+
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [fullscreen]);
 
   if (!previewUrl) {
     return (
@@ -90,17 +104,20 @@ export function DocumentPreview({ file, className }: DocumentPreviewProps) {
       </div>
 
       {/* Preview Area */}
-      <div className={cn(
+      <div
+        ref={scrollContainerRef}
+        className={cn(
         "flex-1 overflow-auto p-2",
         isFullscreen ? "min-h-0" : "min-h-[300px] max-h-[500px]"
-      )}>
+      )}
+      >
         <div
           className="flex items-start justify-center"
           style={{ transform: `scale(${zoom / 100})`, transformOrigin: "top center" }}
         >
           {isPdf ? (
             <iframe
-              src={`${previewUrl}#toolbar=0&navpanes=0`}
+              src={`${previewUrl}#page=1&view=FitH&toolbar=0&navpanes=0`}
               className={cn(
                 "border-0 bg-white rounded shadow-sm",
                 isFullscreen ? "w-full h-[80vh]" : "w-full h-[450px]"

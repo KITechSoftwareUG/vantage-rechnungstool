@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { InvoiceData } from "@/types/documents";
 import { useToast } from "@/hooks/use-toast";
+import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 
 export function useInvoices() {
   const { user } = useAuth();
@@ -20,20 +21,29 @@ export function useInvoices() {
 
       if (error) throw error;
 
-      return (data || []).map((inv) => ({
-        id: inv.id,
-        fileName: inv.file_name,
-        fileUrl: inv.file_url || undefined,
-        date: inv.date,
-        year: inv.year,
-        month: inv.month,
-        issuer: inv.issuer,
-        amount: Number(inv.amount),
-        currency: (inv as any).currency || "EUR",
-        type: inv.type as "incoming" | "outgoing",
-        status: inv.status as "processing" | "ready" | "saved",
-        createdAt: inv.created_at,
-      }));
+      const invoices = await Promise.all(
+        (data || []).map(async (inv) => {
+          const fileUrl = await resolveStorageUrl(
+            user.id, inv.year, inv.month, inv.file_name, inv.file_url
+          );
+          return {
+            id: inv.id,
+            fileName: inv.file_name,
+            fileUrl,
+            date: inv.date,
+            year: inv.year,
+            month: inv.month,
+            issuer: inv.issuer,
+            amount: Number(inv.amount),
+            currency: (inv as any).currency || "EUR",
+            type: inv.type as "incoming" | "outgoing",
+            status: inv.status as "processing" | "ready" | "saved",
+            createdAt: inv.created_at,
+          } as InvoiceData;
+        })
+      );
+
+      return invoices;
     },
     enabled: !!user,
   });

@@ -18,6 +18,7 @@ import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
+const routerBase = import.meta.env.BASE_URL || "/";
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -44,7 +45,7 @@ const App = () => (
         <TooltipProvider>
           <Toaster />
           <Sonner />
-          <BrowserRouter>
+          <BrowserRouter basename={routerBase}>
             <ScrollToTop />
             <Routes>
               <Route path="/auth" element={<AuthPage />} />
