@@ -64,7 +64,7 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
     >
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left: Document Preview */}
-        <UrlDocumentPreview fileUrl={invoice.fileUrl} fileName={invoice.fileName} className="h-[400px]" />
+        <UrlDocumentPreview fileUrl={invoice.fileUrl} fileName={invoice.fileName} className="h-[500px]" />
 
         {/* Right: Extracted Data */}
         <div className="flex flex-col">
