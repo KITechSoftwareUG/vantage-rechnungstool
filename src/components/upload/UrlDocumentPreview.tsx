@@ -138,6 +138,8 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
         onLoadSuccess={({ numPages: loadedPages }) => {
           setNumPages(loadedPages);
           resetScrollPosition();
+          window.requestAnimationFrame(resetScrollPosition);
+          window.setTimeout(resetScrollPosition, 100);
         }}
       >
         <div className="space-y-4">
