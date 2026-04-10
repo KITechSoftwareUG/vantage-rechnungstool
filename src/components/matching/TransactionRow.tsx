@@ -15,11 +15,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useUpdateTransactionMatch, useUnmatchedInvoices } from "@/hooks/useMatching";
 import { useAddRecurringPattern } from "@/hooks/useRecurringPatterns";
 import { useToast } from "@/hooks/use-toast";
 
 interface TransactionRowProps {
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
   transaction: {
     id: string;
     date: string;
@@ -42,7 +45,7 @@ interface TransactionRowProps {
   };
 }
 
-export function TransactionRow({ transaction }: TransactionRowProps) {
+export function TransactionRow({ transaction, selected, onToggleSelect }: TransactionRowProps) {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -143,7 +146,19 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
   const status = statusConfig[transaction.matchStatus as keyof typeof statusConfig] || statusConfig.unmatched;
 
   return (
-    <div className="flex items-center gap-4 rounded-lg border border-border/50 bg-card p-4 transition-colors hover:bg-muted/20">
+    <div className={cn(
+      "flex items-center gap-4 rounded-lg border border-border/50 bg-card p-4 transition-colors hover:bg-muted/20",
+      selected && "ring-2 ring-primary/50 bg-primary/5"
+    )}>
+      {/* Checkbox */}
+      {onToggleSelect && (
+        <Checkbox
+          checked={selected}
+          onCheckedChange={() => onToggleSelect(transaction.id)}
+          className="flex-shrink-0"
+        />
+      )}
+
       {/* Bank Indicator */}
       <div 
         className={cn(
