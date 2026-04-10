@@ -140,6 +140,12 @@ function IngestionLogRow({
         <p className="text-xs text-muted-foreground/70">
           {format(new Date(log.created_at), "dd. MMM yyyy, HH:mm", { locale: de })}
         </p>
+        {log.warning_message && (
+          <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            <span>{log.warning_message}</span>
+          </div>
+        )}
         {log.error_message && (
           <p className="text-xs text-destructive">{log.error_message}</p>
         )}
