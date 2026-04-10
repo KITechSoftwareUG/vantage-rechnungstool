@@ -121,7 +121,7 @@ export const UrlDocumentPreview = memo(function UrlDocumentPreview({ fileUrl, fi
 
   const renderPdf = (isFullscreen: boolean) => {
     const baseWidth = isFullscreen ? (fullscreenWidth || 960) : (inlineWidth || 620);
-    const pageWidth = Math.max(240, Math.floor((baseWidth - 16) * (zoom / 100)));
+    const pageWidth = Math.max(240, Math.floor(baseWidth * (zoom / 100)));
 
     return (
       <Document
