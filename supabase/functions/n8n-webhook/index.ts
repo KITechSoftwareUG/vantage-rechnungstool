@@ -396,6 +396,44 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ===== CATEGORY MISMATCH DETECTION =====
+    let categoryMismatch: string | null = null;
+    if (docType === "invoice" && extractedData.detectedCategory) {
+      const detected = extractedData.detectedCategory;
+      // Check if OCR-detected category differs from source folder category
+      if (detected !== category) {
+        // Map categories to German labels for the warning message
+        const categoryLabels: Record<string, string> = {
+          eingang: "Eingangsrechnung",
+          ausgang: "Ausgangsrechnung",
+          provision: "Provisionsabrechnung",
+          kasse: "Kassenbeleg",
+        };
+        const sourceLabel = categoryLabels[category] || category;
+        const detectedLabel = categoryLabels[detected] || detected;
+        categoryMismatch = `Ordner: ${sourceLabel}, erkannt: ${detectedLabel}`;
+        console.log(`Category mismatch detected: folder=${category}, OCR=${detected}`);
+      }
+    }
+
+    // Also check if the OCR-detected date month differs from the endpoint month
+    let monthMismatch: string | null = null;
+    if (docType === "invoice" && extractedData.date) {
+      const detectedMonth = new Date(extractedData.date).getMonth() + 1;
+      if (detectedMonth !== month && !isNaN(detectedMonth)) {
+        const monthNames = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
+          "Juli", "August", "September", "Oktober", "November", "Dezember"];
+        monthMismatch = `Ordner: ${monthNames[month]}, Dokument: ${monthNames[detectedMonth]}`;
+        console.log(`Month mismatch detected: folder=${month}, document=${detectedMonth}`);
+      }
+    }
+
+    // Build combined warning message
+    const warnings: string[] = [];
+    if (categoryMismatch) warnings.push(categoryMismatch);
+    if (monthMismatch) warnings.push(monthMismatch);
+    const warningMessage = warnings.length > 0 ? warnings.join(" | ") : null;
+
     // ===== BUILD FINAL FILENAME & RENAME =====
     let finalFileName: string;
     let finalStoragePath: string;
