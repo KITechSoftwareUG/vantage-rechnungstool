@@ -1,0 +1,1 @@
+ALTER TABLE public.document_ingestion_log ADD COLUMN IF NOT EXISTS warning_message text DEFAULT NULL;
