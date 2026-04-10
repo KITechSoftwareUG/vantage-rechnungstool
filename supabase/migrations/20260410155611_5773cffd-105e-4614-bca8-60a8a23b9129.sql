@@ -1,0 +1,1 @@
+DELETE FROM bank_transactions WHERE date >= '2025-12-01' AND date < '2026-01-01';
