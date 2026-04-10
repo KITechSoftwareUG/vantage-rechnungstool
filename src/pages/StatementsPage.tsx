@@ -3,8 +3,8 @@ import { Grid3X3, FolderTree, Search, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatementCard } from "@/components/documents/StatementCard";
-import { YearMonthAccordion } from "@/components/documents/YearMonthAccordion";
-import { groupByYearAndMonth } from "@/types/documents";
+import { YearAccordion } from "@/components/documents/YearAccordion";
+import { groupByYear } from "@/types/documents";
 import { useBankStatements, useUpdateBankStatement, useDeleteBankStatement } from "@/hooks/useDocuments";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
@@ -47,7 +47,7 @@ export default function StatementsPage() {
     stmt.accountNumber.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const groupedStatements = groupByYearAndMonth(filteredStatements);
+  const groupedStatements = groupByYear(filteredStatements);
 
   const handleSave = (data: typeof statements[0]) => {
     updateStatement.mutate(data);
@@ -82,7 +82,7 @@ export default function StatementsPage() {
             variant={viewMode === "timeline" ? "default" : "ghost"}
             size="icon"
             onClick={() => setViewMode("timeline")}
-            title="Nach Jahr/Monat"
+            title="Nach Jahr"
           >
             <FolderTree className="h-4 w-4" />
           </Button>
@@ -112,7 +112,7 @@ export default function StatementsPage() {
 
       {/* Content */}
       {viewMode === "timeline" ? (
-        <YearMonthAccordion
+        <YearAccordion
           data={groupedStatements}
           renderDocument={(statement, index) => (
             <StatementCard

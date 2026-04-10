@@ -17,6 +17,7 @@ const categoryToDocType: Record<string, "invoice" | "statement"> = {
   eingang: "invoice",
   ausgang: "invoice",
   vrbank: "statement",
+  amex: "statement",
   provision: "invoice",
   kasse: "invoice",
 };
@@ -26,6 +27,7 @@ const categoryToPayment: Record<string, string> = {
   eingang: "bank",
   ausgang: "bank",
   vrbank: "bank",
+  amex: "bank",
   provision: "bank",
   kasse: "cash",
 };
@@ -33,6 +35,7 @@ const categoryToPayment: Record<string, string> = {
 // Map category to bank type for statements
 const categoryToBankType: Record<string, string> = {
   vrbank: "volksbank",
+  amex: "amex",
 };
 
 // Convert ArrayBuffer to base64 in chunks to avoid stack overflow

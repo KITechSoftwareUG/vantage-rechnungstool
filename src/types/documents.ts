@@ -61,7 +61,7 @@ export function groupByYearAndMonth<T extends { year: number; month: number; dat
   const grouped = documents.reduce((acc, doc) => {
     const yearKey = doc.year;
     const monthKey = doc.month;
-    
+
     if (!acc[yearKey]) {
       acc[yearKey] = {};
     }
@@ -69,7 +69,7 @@ export function groupByYearAndMonth<T extends { year: number; month: number; dat
       acc[yearKey][monthKey] = [];
     }
     acc[yearKey][monthKey].push(doc);
-    
+
     return acc;
   }, {} as Record<number, Record<number, T[]>>);
 
@@ -79,11 +79,37 @@ export function groupByYearAndMonth<T extends { year: number; month: number; dat
       months: Object.entries(months)
         .map(([month, documents]) => ({
           month: parseInt(month),
-          documents: documents.sort((a, b) => 
+          documents: documents.sort((a, b) =>
             new Date(b.date || '').getTime() - new Date(a.date || '').getTime()
           ),
         }))
         .sort((a, b) => b.month - a.month),
+    }))
+    .sort((a, b) => b.year - a.year);
+}
+
+export interface YearOnlyGroup<T> {
+  year: number;
+  documents: T[];
+}
+
+export function groupByYear<T extends { year: number; date?: string }>(
+  documents: T[]
+): YearOnlyGroup<T>[] {
+  const grouped = documents.reduce((acc, doc) => {
+    if (!acc[doc.year]) {
+      acc[doc.year] = [];
+    }
+    acc[doc.year].push(doc);
+    return acc;
+  }, {} as Record<number, T[]>);
+
+  return Object.entries(grouped)
+    .map(([year, docs]) => ({
+      year: parseInt(year),
+      documents: docs.sort(
+        (a, b) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime()
+      ),
     }))
     .sort((a, b) => b.year - a.year);
 }
