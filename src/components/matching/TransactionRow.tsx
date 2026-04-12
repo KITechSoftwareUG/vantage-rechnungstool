@@ -327,7 +327,9 @@ export function TransactionRow({
       className={cn(
         "relative overflow-hidden rounded-lg border border-border/50 bg-card hover:bg-muted/20",
         selected && "ring-2 ring-primary/50 bg-primary/5",
-        isFocused && "ring-2 ring-primary bg-primary/10 shadow-md"
+        isFocused && "ring-2 ring-primary bg-primary/10 shadow-md",
+        (canSwipeLeft || canSwipeRight) && "cursor-grab",
+        isSwiping && "cursor-grabbing"
       )}
       style={{
         transform: animPhase === "slide-out" ? `translateX(${slideOutTarget})` : undefined,
