@@ -80,6 +80,7 @@ export type Database = {
           description: string
           id: string
           match_confidence: number | null
+          match_reason: string | null
           match_status: string
           matched_invoice_id: string | null
           original_currency: string | null
@@ -95,6 +96,7 @@ export type Database = {
           description: string
           id?: string
           match_confidence?: number | null
+          match_reason?: string | null
           match_status?: string
           matched_invoice_id?: string | null
           original_currency?: string | null
@@ -110,6 +112,7 @@ export type Database = {
           description?: string
           id?: string
           match_confidence?: number | null
+          match_reason?: string | null
           match_status?: string
           matched_invoice_id?: string | null
           original_currency?: string | null

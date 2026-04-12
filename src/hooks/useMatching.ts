@@ -31,6 +31,7 @@ export function useBankTransactions() {
         transactionType: t.transaction_type,
         matchedInvoiceId: t.matched_invoice_id,
         matchConfidence: t.match_confidence,
+        matchReason: t.match_reason ?? null,
         matchStatus: t.match_status,
         bankName: t.bank_statements?.bank,
         bankType: t.bank_statements?.bank_type,

@@ -68,7 +68,15 @@ serve(async (req) => {
     // Use Lovable AI Gateway for intelligent matching
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
+    // Confidence-Schwellen für die zweistufige Auto-Confirm-Logik:
+    // - >= AUTO_CONFIRM_THRESHOLD → direkt als bestätigt speichern (vollautomatisch)
+    // - >= SUGGEST_THRESHOLD       → als Vorschlag (matched) speichern, User bestätigt manuell
+    // - <  SUGGEST_THRESHOLD       → ignoriert (kein Match)
+    const AUTO_CONFIRM_THRESHOLD = 95;
+    const SUGGEST_THRESHOLD = 60;
+
     let matchedCount = 0;
+    let autoConfirmedCount = 0;
 
     // Helper function to extract original amount from original_currency field
     // Supports multiple formats:
@@ -220,39 +228,55 @@ serve(async (req) => {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "google/gemini-2.5-flash",
+              model: "google/gemini-2.5-pro",
               messages: [
                 {
                   role: "system",
-                  content: `Du bist ein Finanz-Matching-Assistent. Ordne Banktransaktionen zu Rechnungen zu basierend auf:
-                  
-                  1. NAMEN-MATCHING (HÖCHSTE PRIORITÄT):
-                     - Vergleiche den Aussteller der Rechnung mit dem Verwendungszweck der Transaktion
-                     - Firmen können leicht unterschiedliche Namen haben (z.B. "OpenAI" vs "OPENAI SAN FRANCISCO")
-                     - Auch Abkürzungen und verschiedene Schreibweisen berücksichtigen
-                  
-                  2. BETRAG (WICHTIG, ABER MIT TOLERANZ):
-                     - Beträge sollten ungefähr übereinstimmen
-                     - Bei Währungsumrechnungen kann es Abweichungen bis zu 10% geben
-                     - Exakte Betragsübereinstimmung ist ein gutes Zeichen, aber nicht zwingend erforderlich
-                  
-                  3. DATUM:
-                     - Rechnungsdatum sollte vor oder nahe am Transaktionsdatum liegen
-                  
-                  Antworte NUR mit einem JSON-Objekt: { "matchedInvoiceId": "id oder null", "confidence": 0-100, "reason": "kurze Begründung" }`,
+                  content: `Du bist ein präziser Finanz-Matching-Assistent. Du ordnest Banktransaktionen den richtigen Rechnungen zu.
+
+KRITERIEN (in dieser Reihenfolge gewichtet):
+
+1. AUSSTELLER vs. VERWENDUNGSZWECK (höchste Priorität):
+   - Der Aussteller-Name der Rechnung sollte im Verwendungszweck der Transaktion auftauchen.
+   - Firmennamen variieren stark: "OpenAI" → "OPENAI SAN FRANCISCO CA", "Google Cloud" → "GOOGLE CLOUD EMEA LTD", "Hetzner" → "HETZNER ONLINE GMBH NUERNBE".
+   - Abkürzungen, Standorte, Rechtsformen (GmbH, Ltd, Inc.) ignorieren.
+   - Wenn der Kern-Name übereinstimmt → starkes Signal.
+
+2. BETRAG MIT WÄHRUNGS-TOLERANZ:
+   - Idealfall: exakte Übereinstimmung (±0.01€).
+   - WICHTIG bei Fremdwährungen: Wenn die Rechnung z.B. in USD ist und der Betrag stimmt nahe mit dem Foreign Spend Amount der Transaktion überein, ist das ein sehr starker Treffer.
+   - Bei SEPA-Überweisungen einer USD-Rechnung kann der EUR-Betrag um den Wechselkurs abweichen — bis zu ~10% sind plausibel wenn die Currency-Conversion durch eine Bank lief.
+   - Reine Betrags-Matches OHNE Name-Match sind schwach (Confidence max. 70%).
+
+3. DATUM-PLAUSIBILITÄT:
+   - Rechnungsdatum liegt typischerweise 0-30 Tage VOR der Transaktion.
+   - Bei Abos/wiederkehrend kann es exakter Tag oder ±wenige Tage sein.
+   - Datum NACH der Transaktion ist verdächtig (außer bei Vorab-Rechnungen).
+
+CONFIDENCE-SKALA:
+- 95-100: Aussteller-Match perfekt + exakter Betrag (oder validierter USD/EUR-Match) + plausibles Datum
+- 80-94: Aussteller-Match klar + Betrag passt mit Currency-Toleranz, oder Aussteller-Match perfekt + Datum etwas off
+- 60-79: Aussteller-Match nur teilweise, oder reiner Betragstreffer ohne Name
+- < 60:  Unsicher / kein guter Match — gib null zurück
+
+WENN MEHRERE RECHNUNGEN PASSEN könnten: Wähle die mit der besten Aussteller-Übereinstimmung. Wenn keine eindeutig besser ist, wähle die mit Datum am nächsten zur Transaktion.
+
+ANTWORT-FORMAT (NUR JSON, sonst nichts):
+{ "matchedInvoiceId": "uuid oder null", "confidence": 0-100, "reason": "knappe Begründung in einem Satz" }`,
                 },
                 {
                   role: "user",
                   content: `Ordne diese Transaktion der besten Rechnung zu:
-                  
-                  Transaktion:
-                  - Datum: ${transaction.date}
-                  - Verwendungszweck: ${transaction.description}
-                  - Betrag: ${matchAmount} EUR
-                  ${transaction.original_currency ? `- Originalwährung: ${transaction.original_currency}` : ''}
-                  
-                  Mögliche Rechnungen:
-                  ${potentialMatches.map((inv: any) => `- ID: ${inv.id}, Aussteller: ${inv.issuer}, Betrag: ${inv.amount} EUR, Datum: ${inv.date}`).join("\n")}`,
+
+Transaktion:
+- Datum: ${transaction.date}
+- Verwendungszweck: ${transaction.description}
+- Betrag (zur Match-Prüfung): ${matchAmount}${isAmexWithCurrencyConversion ? " (Foreign Spend Amount aus AMEX-Umrechnung)" : " EUR"}
+- EUR-Betrag laut Bank: ${transactionAmount} EUR
+${transaction.original_currency ? `- Original-Currency-Info: ${transaction.original_currency}` : ""}
+
+Mögliche Rechnungen (vorgefiltert nach Name/Betrag):
+${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer} | Betrag: ${inv.amount} ${inv.currency || "EUR"} | Datum: ${inv.date}`).join("\n")}`,
                 },
               ],
             }),
@@ -267,19 +291,28 @@ serve(async (req) => {
                 const jsonMatch = content.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                   const result = JSON.parse(jsonMatch[0]);
-                  
-                  if (result.matchedInvoiceId && result.confidence >= 60) {
+
+                  if (result.matchedInvoiceId && result.confidence >= SUGGEST_THRESHOLD) {
+                    // Hohe Confidence → automatisch als bestätigt setzen.
+                    // Niedrigere Confidence → nur als Vorschlag, User bestätigt manuell.
+                    const isAutoConfirm = result.confidence >= AUTO_CONFIRM_THRESHOLD;
+                    const newStatus = isAutoConfirm ? "confirmed" : "matched";
+
                     await supabaseClient
                       .from("bank_transactions")
                       .update({
                         matched_invoice_id: result.matchedInvoiceId,
-                        match_status: "matched",
+                        match_status: newStatus,
                         match_confidence: result.confidence,
+                        match_reason: result.reason ?? null,
                       })
                       .eq("id", transaction.id);
 
-                    console.log(`Matched transaction ${transaction.id} to invoice ${result.matchedInvoiceId} with ${result.confidence}% confidence: ${result.reason}`);
+                    console.log(
+                      `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${result.matchedInvoiceId} (${result.confidence}%): ${result.reason}`
+                    );
                     matchedCount++;
+                    if (isAutoConfirm) autoConfirmedCount++;
                     continue;
                   }
                 }
@@ -293,7 +326,8 @@ serve(async (req) => {
         }
       }
 
-      // Fallback: If only one match with exact amount, use it
+      // Fallback: Wenn KI nicht erreichbar war oder kein Match liefert,
+      // und es genau EINEN Treffer mit exaktem Betrag gibt, gilt das als auto-bestätigt.
       const exactMatches = invoices.filter((inv: any) => Math.abs(matchAmount - inv.amount) < 0.01);
       if (exactMatches.length === 1) {
         const match = exactMatches[0];
@@ -301,18 +335,20 @@ serve(async (req) => {
         await supabaseClient
           .from("bank_transactions")
           .update({
-          matched_invoice_id: match.id,
-          match_status: "matched",
-          match_confidence: 100,
+            matched_invoice_id: match.id,
+            match_status: "confirmed",
+            match_confidence: 100,
+            match_reason: "Exakter Betragstreffer (eindeutig)",
           })
           .eq("id", transaction.id);
 
         matchedCount++;
+        autoConfirmedCount++;
       }
     }
 
     return new Response(
-      JSON.stringify({ success: true, matchedCount }),
+      JSON.stringify({ success: true, matchedCount, autoConfirmedCount }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: unknown) {

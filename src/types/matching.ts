@@ -8,7 +8,8 @@ export interface BankTransaction {
   transactionType: "debit" | "credit";
   matchedInvoiceId: string | null;
   matchConfidence: number | null;
-  matchStatus: "unmatched" | "matched" | "confirmed" | "no_match";
+  matchReason: string | null;
+  matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring";
   createdAt?: string;
   updatedAt?: string;
 }

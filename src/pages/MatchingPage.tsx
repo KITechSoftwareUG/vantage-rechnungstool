@@ -1,14 +1,28 @@
-import { useState, useCallback, useMemo } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, Check, X, Square, CheckSquare } from "lucide-react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, Check, X, Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useInvoices } from "@/hooks/useInvoices";
 import { useFilteredTransactions } from "@/hooks/useFilteredTransactions";
 import { TransactionRow } from "@/components/matching/TransactionRow";
-import { useBulkConfirmMatches, useBulkUnmatch } from "@/hooks/useBulkMatchActions";
+import {
+  useBulkConfirmMatches,
+  useBulkUnmatch,
+  useRestoreMatchSnapshots,
+  type TransactionMatchSnapshot,
+} from "@/hooks/useBulkMatchActions";
+import { ToastAction } from "@/components/ui/toast";
+import { useUpdateTransactionMatch } from "@/hooks/useMatching";
+import { useKeyboardNavigation } from "@/hooks/useKeyboardNavigation";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
@@ -20,6 +34,32 @@ export default function MatchingPage() {
   const { data: invoices = [] } = useInvoices();
   const bulkConfirm = useBulkConfirmMatches();
   const bulkUnmatch = useBulkUnmatch();
+  const restoreSnapshots = useRestoreMatchSnapshots();
+
+  // Helper: nimmt einen Snapshot der Match-Felder einer Transaktion
+  // (vor einer destruktiven Bulk-Aktion). Wird vom Undo-Toast genutzt.
+  const snapshotTransactions = useCallback(
+    (txs: any[]): TransactionMatchSnapshot[] =>
+      txs.map((t) => ({
+        id: t.id,
+        match_status: t.matchStatus,
+        matched_invoice_id: t.matchedInvoiceId,
+        match_confidence: t.matchConfidence,
+      })),
+    []
+  );
+
+  const handleUndo = useCallback(
+    async (snapshots: TransactionMatchSnapshot[]) => {
+      try {
+        await restoreSnapshots.mutateAsync(snapshots);
+        toast({ title: "Aktion rückgängig gemacht", description: `${snapshots.length} Zuordnungen wiederhergestellt` });
+      } catch (e: any) {
+        toast({ title: "Undo fehlgeschlagen", description: e.message, variant: "destructive" });
+      }
+    },
+    [restoreSnapshots, toast]
+  );
 
   const {
     transactions,
@@ -41,14 +81,95 @@ export default function MatchingPage() {
     recurringCount,
   } = useFilteredTransactions();
 
+  const updateMatch = useUpdateTransactionMatch();
   const invoiceCount = invoices.length;
 
-  // All visible transaction IDs (for select all)
+  // All visible transaction IDs (for select all + keyboard navigation)
   const visibleIds = useMemo(() => {
     const ids: string[] = [];
     groupedByMonth.forEach((g) => g.transactions.forEach((t: any) => ids.push(t.id)));
+    if (filterStatus === "all") {
+      recurringTransactions.forEach((t: any) => ids.push(t.id));
+    }
     return ids;
-  }, [groupedByMonth]);
+  }, [groupedByMonth, recurringTransactions, filterStatus]);
+
+  // Keyboard navigation: J/K → next/prev, Enter → confirm focused, u → unmatch, n → no_match
+  const keyboardCallbacks = useMemo(
+    () => ({
+      onConfirm: async (id: string) => {
+        const tx = transactions.find((t: any) => t.id === id);
+        if (!tx || !tx.matchedInvoiceId || tx.matchStatus !== "matched") return;
+        try {
+          await updateMatch.mutateAsync({
+            transactionId: id,
+            invoiceId: tx.matchedInvoiceId,
+            matchStatus: "confirmed",
+            matchConfidence: 100,
+          });
+          toast({ title: "Zuordnung bestätigt" });
+        } catch (e: any) {
+          toast({ title: "Fehler", description: e.message, variant: "destructive" });
+        }
+      },
+      onUnmatch: async (id: string) => {
+        const tx = transactions.find((t: any) => t.id === id);
+        if (!tx || (tx.matchStatus !== "matched" && tx.matchStatus !== "confirmed")) return;
+        try {
+          await updateMatch.mutateAsync({
+            transactionId: id,
+            invoiceId: null,
+            matchStatus: "unmatched",
+          });
+          toast({ title: "Zuordnung aufgehoben" });
+        } catch (e: any) {
+          toast({ title: "Fehler", description: e.message, variant: "destructive" });
+        }
+      },
+      onMarkNoMatch: async (id: string) => {
+        try {
+          await updateMatch.mutateAsync({
+            transactionId: id,
+            invoiceId: null,
+            matchStatus: "no_match",
+          });
+          toast({ title: "Als 'Keine Rechnung' markiert" });
+        } catch (e: any) {
+          toast({ title: "Fehler", description: e.message, variant: "destructive" });
+        }
+      },
+    }),
+    [transactions, updateMatch, toast]
+  );
+
+  const { focusedId, setFocusedId } = useKeyboardNavigation(visibleIds, keyboardCallbacks);
+
+  // Wenn ein Item per Keyboard fokussiert wird, soll es ins Sichtfeld scrollen.
+  const transactionRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  useEffect(() => {
+    if (!focusedId) return;
+    const node = transactionRowRefs.current.get(focusedId);
+    if (node) {
+      node.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [focusedId]);
+
+  // Fokus für Suchfeld via "/" Shortcut
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "/") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -88,13 +209,22 @@ export default function MatchingPage() {
   );
 
   const handleBulkConfirm = async () => {
-    const ids = selectedTransactions
-      .filter((t: any) => t.matchStatus === "matched" && t.matchedInvoiceId)
-      .map((t: any) => t.id);
-    if (ids.length === 0) return;
+    const targets = selectedTransactions.filter(
+      (t: any) => t.matchStatus === "matched" && t.matchedInvoiceId
+    );
+    if (targets.length === 0) return;
+    const snapshots = snapshotTransactions(targets);
+    const ids = targets.map((t: any) => t.id);
     try {
       await bulkConfirm.mutateAsync(ids);
-      toast({ title: `${ids.length} Zuordnungen bestätigt` });
+      toast({
+        title: `${ids.length} Zuordnungen bestätigt`,
+        action: (
+          <ToastAction altText="Rückgängig machen" onClick={() => handleUndo(snapshots)}>
+            Rückgängig
+          </ToastAction>
+        ),
+      });
       clearSelection();
     } catch (e: any) {
       toast({ title: "Fehler", description: e.message, variant: "destructive" });
@@ -102,13 +232,22 @@ export default function MatchingPage() {
   };
 
   const handleBulkUnmatch = async () => {
-    const ids = selectedTransactions
-      .filter((t: any) => t.matchStatus === "matched" || t.matchStatus === "confirmed")
-      .map((t: any) => t.id);
-    if (ids.length === 0) return;
+    const targets = selectedTransactions.filter(
+      (t: any) => t.matchStatus === "matched" || t.matchStatus === "confirmed"
+    );
+    if (targets.length === 0) return;
+    const snapshots = snapshotTransactions(targets);
+    const ids = targets.map((t: any) => t.id);
     try {
       await bulkUnmatch.mutateAsync(ids);
-      toast({ title: `${ids.length} Zuordnungen aufgehoben` });
+      toast({
+        title: `${ids.length} Zuordnungen aufgehoben`,
+        action: (
+          <ToastAction altText="Rückgängig machen" onClick={() => handleUndo(snapshots)}>
+            Rückgängig
+          </ToastAction>
+        ),
+      });
       clearSelection();
     } catch (e: any) {
       toast({ title: "Fehler", description: e.message, variant: "destructive" });
@@ -120,9 +259,15 @@ export default function MatchingPage() {
     try {
       const { data, error } = await supabase.functions.invoke("auto-match-transactions");
       if (error) throw error;
+      const total = data?.matchedCount ?? 0;
+      const autoConfirmed = data?.autoConfirmedCount ?? 0;
+      const suggested = Math.max(0, total - autoConfirmed);
       toast({
         title: "KI-Matching abgeschlossen",
-        description: `${data.matchedCount} Transaktionen wurden zugeordnet`,
+        description:
+          total === 0
+            ? "Keine neuen Treffer gefunden"
+            : `${autoConfirmed} automatisch bestätigt (≥95% Confidence) · ${suggested} als Vorschlag`,
       });
       refetch();
     } catch (error: any) {
@@ -280,12 +425,34 @@ export default function MatchingPage() {
           <div className="relative w-full sm:w-64">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Suche nach Beschreibung, Betrag..."
+              ref={searchInputRef}
+              placeholder="Suche... (Taste: / )"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9"
             />
           </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button size="icon" variant="ghost" className="h-9 w-9" title="Tastatur-Shortcuts">
+                  <Keyboard className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                <p className="text-xs font-semibold">Tastatur-Shortcuts</p>
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  <li><kbd>J</kbd> / <kbd>↓</kbd> &mdash; Nächste Transaktion</li>
+                  <li><kbd>K</kbd> / <kbd>↑</kbd> &mdash; Vorige Transaktion</li>
+                  <li><kbd>Enter</kbd> oder <kbd>Y</kbd> &mdash; Vorschlag bestätigen</li>
+                  <li><kbd>U</kbd> / <kbd>Backspace</kbd> &mdash; Zuordnung aufheben</li>
+                  <li><kbd>N</kbd> &mdash; "Keine Rechnung"</li>
+                  <li><kbd>/</kbd> &mdash; Suche fokussieren</li>
+                  <li><kbd>Esc</kbd> &mdash; Fokus aufheben</li>
+                </ul>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <div className="flex gap-1">
             <Button size="sm" variant="outline" onClick={selectAll} className="text-xs">
               Alle wählen
@@ -382,6 +549,12 @@ export default function MatchingPage() {
                         transaction={transaction}
                         selected={selectedIds.has(transaction.id)}
                         onToggleSelect={toggleSelect}
+                        isFocused={focusedId === transaction.id}
+                        onFocus={() => setFocusedId(transaction.id)}
+                        registerRef={(node) => {
+                          if (node) transactionRowRefs.current.set(transaction.id, node);
+                          else transactionRowRefs.current.delete(transaction.id);
+                        }}
                       />
                     ))}
                   </CollapsibleContent>
@@ -406,7 +579,15 @@ export default function MatchingPage() {
                 <CollapsibleContent className="mt-2 space-y-2">
                   {recurringTransactions.map((transaction: any) => (
                     <div key={transaction.id} className="opacity-60">
-                      <TransactionRow transaction={transaction} />
+                      <TransactionRow
+                        transaction={transaction}
+                        isFocused={focusedId === transaction.id}
+                        onFocus={() => setFocusedId(transaction.id)}
+                        registerRef={(node) => {
+                          if (node) transactionRowRefs.current.set(transaction.id, node);
+                          else transactionRowRefs.current.delete(transaction.id);
+                        }}
+                      />
                     </div>
                   ))}
                 </CollapsibleContent>
