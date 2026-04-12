@@ -578,17 +578,16 @@ export default function MatchingPage() {
                 </CollapsibleTrigger>
                 <CollapsibleContent className="mt-2 space-y-2">
                   {recurringTransactions.map((transaction: any) => (
-                    <div key={transaction.id} className="opacity-60">
-                      <TransactionRow
-                        transaction={transaction}
-                        isFocused={focusedId === transaction.id}
-                        onFocus={() => setFocusedId(transaction.id)}
-                        registerRef={(node) => {
-                          if (node) transactionRowRefs.current.set(transaction.id, node);
-                          else transactionRowRefs.current.delete(transaction.id);
-                        }}
-                      />
-                    </div>
+                    <TransactionRow
+                      key={transaction.id}
+                      transaction={transaction}
+                      isFocused={focusedId === transaction.id}
+                      onFocus={() => setFocusedId(transaction.id)}
+                      registerRef={(node) => {
+                        if (node) transactionRowRefs.current.set(transaction.id, node);
+                        else transactionRowRefs.current.delete(transaction.id);
+                      }}
+                    />
                   ))}
                 </CollapsibleContent>
               </Collapsible>

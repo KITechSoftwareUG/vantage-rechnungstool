@@ -1,22 +1,30 @@
 import { useCallback, useRef, useState } from "react";
 
 interface UseSwipeActionOptions {
-  /** Minimale Pixel die gezogen werden müssen, damit die Aktion auslöst (default: 120) */
+  /** Minimale Pixel bevor die Aktion auslöst (default: 120) */
   threshold?: number;
-  /** Callback wenn der Swipe die Schwelle überschreitet und losgelassen wird */
+  /** Callback bei Swipe nach links (z.B. "als Laufende Kosten markieren") */
   onSwipeLeft?: () => void;
-  /** Verhindert den Swipe (z.B. wenn die Zeile gerade bearbeitet wird) */
-  disabled?: boolean;
+  /** Callback bei Swipe nach rechts (z.B. "zurück auf offen setzen") */
+  onSwipeRight?: () => void;
+  /** Swipe nach links deaktivieren */
+  disableLeft?: boolean;
+  /** Swipe nach rechts deaktivieren */
+  disableRight?: boolean;
 }
 
 interface UseSwipeActionResult {
-  /** CSS-translateX-Offset in Pixeln (immer ≤ 0) */
+  /** CSS-translateX-Offset in Pixeln (negativ = links, positiv = rechts) */
   offset: number;
   /** True solange der User aktiv zieht */
   isSwiping: boolean;
-  /** True wenn der Swipe die Schwelle überschritten hat (für visuelles Feedback) */
+  /** True wenn der Swipe die Schwelle überschritten hat */
   isPastThreshold: boolean;
-  /** Event-Handler — an das äußere Container-Element binden */
+  /** Richtung des aktuellen Swipes */
+  direction: "left" | "right" | null;
+  /** Fortschritt 0→1 bis zur Schwelle (für Animationen) */
+  progress: number;
+  /** Event-Handler — an das Container-Element binden */
   handlers: {
     onTouchStart: (e: React.TouchEvent) => void;
     onTouchMove: (e: React.TouchEvent) => void;
@@ -26,19 +34,18 @@ interface UseSwipeActionResult {
 }
 
 /**
- * Hook für eine Swipe-nach-links-Geste auf einem Element.
+ * Bidirektionaler Swipe-Hook für Listen-Items.
  *
- * Touch: touchstart/touchmove/touchend
- * Mouse: mousedown → globale mousemove/mouseup (damit man außerhalb des Elements loslassen kann)
- *
- * Der Offset ist immer ≤ 0 (nur nach links ziehen).
- * Beim Loslassen: wenn |offset| ≥ threshold → onSwipeLeft() aufrufen.
- * Sonst: animiert zurück auf 0 (über CSS transition im Consumer).
+ * Links-Swipe und Rechts-Swipe können unabhängig aktiviert werden.
+ * Der Hook liefert `offset`, `progress` (0→1) und `isPastThreshold`
+ * für granulare visuelle Animationen im Consumer.
  */
 export function useSwipeAction({
   threshold = 120,
   onSwipeLeft,
-  disabled = false,
+  onSwipeRight,
+  disableLeft = false,
+  disableRight = false,
 }: UseSwipeActionOptions = {}): UseSwipeActionResult {
   const [offset, setOffset] = useState(0);
   const [isSwiping, setIsSwiping] = useState(false);
@@ -46,50 +53,69 @@ export function useSwipeAction({
   const startX = useRef(0);
   const currentX = useRef(0);
 
-  // --- Touch handlers ---
+  const clampOffset = useCallback(
+    (raw: number): number => {
+      if (raw < 0 && disableLeft) return 0;
+      if (raw > 0 && disableRight) return 0;
+      return raw;
+    },
+    [disableLeft, disableRight]
+  );
+
+  const resolveSwipe = useCallback(
+    (finalOffset: number) => {
+      const abs = Math.abs(finalOffset);
+      if (abs >= threshold) {
+        if (finalOffset < 0 && onSwipeLeft && !disableLeft) {
+          onSwipeLeft();
+        } else if (finalOffset > 0 && onSwipeRight && !disableRight) {
+          onSwipeRight();
+        }
+      }
+    },
+    [threshold, onSwipeLeft, onSwipeRight, disableLeft, disableRight]
+  );
+
+  // --- Touch ---
 
   const onTouchStart = useCallback(
     (e: React.TouchEvent) => {
-      if (disabled) return;
+      if (disableLeft && disableRight) return;
       startX.current = e.touches[0].clientX;
       currentX.current = startX.current;
       setIsSwiping(true);
     },
-    [disabled]
+    [disableLeft, disableRight]
   );
 
   const onTouchMove = useCallback(
     (e: React.TouchEvent) => {
-      if (!isSwiping || disabled) return;
+      if (!isSwiping) return;
       currentX.current = e.touches[0].clientX;
-      const delta = Math.min(0, currentX.current - startX.current);
-      setOffset(delta);
+      const raw = currentX.current - startX.current;
+      setOffset(clampOffset(raw));
     },
-    [isSwiping, disabled]
+    [isSwiping, clampOffset]
   );
 
-  const finishSwipe = useCallback(() => {
-    setIsSwiping(false);
-    if (Math.abs(offset) >= threshold && onSwipeLeft) {
-      onSwipeLeft();
-    }
-    setOffset(0);
-  }, [offset, threshold, onSwipeLeft]);
-
   const onTouchEnd = useCallback(() => {
-    finishSwipe();
-  }, [finishSwipe]);
+    setIsSwiping(false);
+    resolveSwipe(offset);
+    setOffset(0);
+  }, [offset, resolveSwipe]);
 
-  // --- Mouse handlers ---
+  // --- Mouse ---
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (disabled) return;
-      // Nur linke Maustaste
+      if (disableLeft && disableRight) return;
       if (e.button !== 0) return;
-      // Nicht auslösen wenn auf einem interaktiven Element geklickt (Button, Input, etc.)
       const target = e.target as HTMLElement;
-      if (target.closest("button, input, select, textarea, [role=menuitem], [role=option], [data-radix-collection-item]")) {
+      if (
+        target.closest(
+          "button, input, select, textarea, a, [role=menuitem], [role=option], [data-radix-collection-item]"
+        )
+      ) {
         return;
       }
 
@@ -99,37 +125,35 @@ export function useSwipeAction({
 
       const handleMouseMove = (me: MouseEvent) => {
         currentX.current = me.clientX;
-        const delta = Math.min(0, currentX.current - startX.current);
-        setOffset(delta);
+        const raw = currentX.current - startX.current;
+        setOffset(clampOffset(raw));
       };
 
       const handleMouseUp = () => {
         document.removeEventListener("mousemove", handleMouseMove);
         document.removeEventListener("mouseup", handleMouseUp);
-        // finishSwipe() braucht den aktuellen offset — den lesen wir aus der Ref
-        const finalDelta = Math.abs(Math.min(0, currentX.current - startX.current));
+        const finalOffset = clampOffset(currentX.current - startX.current);
         setIsSwiping(false);
-        if (finalDelta >= threshold && onSwipeLeft) {
-          onSwipeLeft();
-        }
+        resolveSwipe(finalOffset);
         setOffset(0);
       };
 
       document.addEventListener("mousemove", handleMouseMove);
       document.addEventListener("mouseup", handleMouseUp);
     },
-    [disabled, threshold, onSwipeLeft]
+    [disableLeft, disableRight, clampOffset, resolveSwipe]
   );
+
+  const absOffset = Math.abs(offset);
+  const direction: "left" | "right" | null =
+    offset < -5 ? "left" : offset > 5 ? "right" : null;
 
   return {
     offset,
     isSwiping,
-    isPastThreshold: Math.abs(offset) >= threshold,
-    handlers: {
-      onTouchStart,
-      onTouchMove,
-      onTouchEnd,
-      onMouseDown,
-    },
+    isPastThreshold: absOffset >= threshold,
+    direction,
+    progress: Math.min(1, absOffset / threshold),
+    handlers: { onTouchStart, onTouchMove, onTouchEnd, onMouseDown },
   };
 }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, X, Link, Unlink, ChevronDown, Sparkles, Eye, EyeOff, RefreshCw, Maximize2 } from "lucide-react";
+import { Check, X, Link, Unlink, ChevronDown, Sparkles, Eye, EyeOff, RefreshCw, Maximize2, Undo2 } from "lucide-react";
 import { UrlDocumentPreview } from "@/components/upload/UrlDocumentPreview";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -127,12 +127,22 @@ export function TransactionRow({
   const addRecurringPattern = useAddRecurringPattern();
   const { data: invoices = [] } = useUnmatchedInvoices();
 
-  // Swipe-nach-links → als "Laufende Kosten" markieren (Kontoführungskosten etc.)
-  const canSwipe = transaction.matchStatus === "unmatched" || transaction.matchStatus === "no_match";
-  const { offset, isSwiping, isPastThreshold, handlers: swipeHandlers } = useSwipeAction({
-    threshold: 120,
-    disabled: !canSwipe,
+  // Swipe links → "Laufende Kosten", Swipe rechts → zurück auf "Offen"
+  const canSwipeLeft = transaction.matchStatus === "unmatched" || transaction.matchStatus === "no_match";
+  const canSwipeRight = transaction.matchStatus === "recurring";
+  const {
+    offset,
+    isSwiping,
+    isPastThreshold,
+    direction: swipeDirection,
+    progress: swipeProgress,
+    handlers: swipeHandlers,
+  } = useSwipeAction({
+    threshold: 100,
+    disableLeft: !canSwipeLeft,
+    disableRight: !canSwipeRight,
     onSwipeLeft: () => handleRecurring(),
+    onSwipeRight: () => handleUnmatch(),
   });
 
   // Bestimme Bank-Typ basierend auf bankType oder bankName
@@ -250,29 +260,78 @@ export function TransactionRow({
       )}
       {...swipeHandlers}
     >
-      {/* Swipe-Hintergrund — wird sichtbar wenn die Zeile nach links gezogen wird */}
-      {canSwipe && offset < 0 && (
+      {/* Swipe-Hintergrund LINKS → "Laufende Kosten" (info-blau) */}
+      {swipeDirection === "left" && (
         <div
-          className={cn(
-            "absolute inset-y-0 right-0 flex items-center justify-center gap-2 px-6 text-sm font-medium text-white transition-colors",
-            isPastThreshold ? "bg-info" : "bg-info/60"
-          )}
-          style={{ width: Math.abs(offset) }}
+          className="absolute inset-y-0 right-0 flex items-center justify-end overflow-hidden rounded-r-lg"
+          style={{
+            width: Math.abs(offset),
+            background: isPastThreshold
+              ? "linear-gradient(90deg, rgba(59,130,246,0.7) 0%, rgba(59,130,246,0.95) 100%)"
+              : "linear-gradient(90deg, rgba(59,130,246,0.2) 0%, rgba(59,130,246,0.5) 100%)",
+          }}
         >
-          {Math.abs(offset) > 60 && (
-            <>
-              <RefreshCw className={cn("h-5 w-5", isPastThreshold && "animate-spin")} />
-              {Math.abs(offset) > 100 && <span>Laufende Kosten</span>}
-            </>
-          )}
+          <div
+            className="flex items-center gap-2 px-5 text-white"
+            style={{
+              opacity: Math.min(1, swipeProgress * 1.5),
+              transform: `scale(${0.6 + swipeProgress * 0.4})`,
+              transition: isSwiping ? "none" : "all 0.2s ease-out",
+            }}
+          >
+            <RefreshCw
+              className={cn("h-5 w-5 shrink-0", isPastThreshold && "animate-spin")}
+            />
+            {swipeProgress > 0.6 && (
+              <span className="text-sm font-semibold whitespace-nowrap">
+                Laufende Kosten
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Swipe-Hintergrund RECHTS → "Zurück auf Offen" (amber/warning) */}
+      {swipeDirection === "right" && (
+        <div
+          className="absolute inset-y-0 left-0 flex items-center justify-start overflow-hidden rounded-l-lg"
+          style={{
+            width: Math.abs(offset),
+            background: isPastThreshold
+              ? "linear-gradient(270deg, rgba(245,158,11,0.7) 0%, rgba(245,158,11,0.95) 100%)"
+              : "linear-gradient(270deg, rgba(245,158,11,0.2) 0%, rgba(245,158,11,0.5) 100%)",
+          }}
+        >
+          <div
+            className="flex items-center gap-2 px-5 text-white"
+            style={{
+              opacity: Math.min(1, swipeProgress * 1.5),
+              transform: `scale(${0.6 + swipeProgress * 0.4})`,
+              transition: isSwiping ? "none" : "all 0.2s ease-out",
+            }}
+          >
+            {swipeProgress > 0.6 && (
+              <span className="text-sm font-semibold whitespace-nowrap">
+                Zurück auf Offen
+              </span>
+            )}
+            <Undo2
+              className="h-5 w-5 shrink-0"
+              style={{
+                transform: isPastThreshold ? "rotate(-45deg)" : "none",
+                transition: "transform 0.2s ease-out",
+              }}
+            />
+          </div>
         </div>
       )}
 
     <div
-      className="flex items-center gap-4 p-4"
+      className="flex items-center gap-4 p-4 bg-card"
       style={{
-        transform: offset < 0 ? `translateX(${offset}px)` : undefined,
-        transition: isSwiping ? "none" : "transform 0.3s ease-out",
+        transform: offset !== 0 ? `translateX(${offset}px)` : undefined,
+        transition: isSwiping ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+        opacity: offset !== 0 ? 1 - swipeProgress * 0.15 : 1,
       }}
     >
       {/* Checkbox */}
@@ -479,8 +538,8 @@ export function TransactionRow({
       <div
         className="border-t border-border/50 bg-muted/20 p-4"
         style={{
-          transform: offset < 0 ? `translateX(${offset}px)` : undefined,
-          transition: isSwiping ? "none" : "transform 0.3s ease-out",
+          transform: offset !== 0 ? `translateX(${offset}px)` : undefined,
+          transition: isSwiping ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
         }}
       >
         <UrlDocumentPreview
