@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useUpdateTransactionMatch, useUnmatchedInvoices } from "@/hooks/useMatching";
 import { useAddRecurringPattern } from "@/hooks/useRecurringPatterns";
+import { useSwipeAction } from "@/hooks/useSwipeAction";
 import { useToast } from "@/hooks/use-toast";
 
 interface TransactionRowProps {
@@ -125,6 +126,14 @@ export function TransactionRow({
   const updateMatch = useUpdateTransactionMatch();
   const addRecurringPattern = useAddRecurringPattern();
   const { data: invoices = [] } = useUnmatchedInvoices();
+
+  // Swipe-nach-links → als "Laufende Kosten" markieren (Kontoführungskosten etc.)
+  const canSwipe = transaction.matchStatus === "unmatched" || transaction.matchStatus === "no_match";
+  const { offset, isSwiping, isPastThreshold, handlers: swipeHandlers } = useSwipeAction({
+    threshold: 120,
+    disabled: !canSwipe,
+    onSwipeLeft: () => handleRecurring(),
+  });
 
   // Bestimme Bank-Typ basierend auf bankType oder bankName
   const isAmex =
@@ -235,12 +244,37 @@ export function TransactionRow({
       ref={registerRef}
       onClick={() => onFocus?.()}
       className={cn(
-        "rounded-lg border border-border/50 bg-card transition-colors hover:bg-muted/20",
+        "relative overflow-hidden rounded-lg border border-border/50 bg-card hover:bg-muted/20",
         selected && "ring-2 ring-primary/50 bg-primary/5",
         isFocused && "ring-2 ring-primary bg-primary/10 shadow-md"
       )}
+      {...swipeHandlers}
     >
-    <div className="flex items-center gap-4 p-4">
+      {/* Swipe-Hintergrund — wird sichtbar wenn die Zeile nach links gezogen wird */}
+      {canSwipe && offset < 0 && (
+        <div
+          className={cn(
+            "absolute inset-y-0 right-0 flex items-center justify-center gap-2 px-6 text-sm font-medium text-white transition-colors",
+            isPastThreshold ? "bg-info" : "bg-info/60"
+          )}
+          style={{ width: Math.abs(offset) }}
+        >
+          {Math.abs(offset) > 60 && (
+            <>
+              <RefreshCw className={cn("h-5 w-5", isPastThreshold && "animate-spin")} />
+              {Math.abs(offset) > 100 && <span>Laufende Kosten</span>}
+            </>
+          )}
+        </div>
+      )}
+
+    <div
+      className="flex items-center gap-4 p-4"
+      style={{
+        transform: offset < 0 ? `translateX(${offset}px)` : undefined,
+        transition: isSwiping ? "none" : "transform 0.3s ease-out",
+      }}
+    >
       {/* Checkbox */}
       {onToggleSelect && (
         <Checkbox
@@ -442,7 +476,13 @@ export function TransactionRow({
 
     {/* Inline PDF-Preview - nur gerendert wenn aufgeklappt */}
     {inlinePreviewOpen && transaction.matchedInvoice?.file_url && (
-      <div className="border-t border-border/50 bg-muted/20 p-4">
+      <div
+        className="border-t border-border/50 bg-muted/20 p-4"
+        style={{
+          transform: offset < 0 ? `translateX(${offset}px)` : undefined,
+          transition: isSwiping ? "none" : "transform 0.3s ease-out",
+        }}
+      >
         <UrlDocumentPreview
           fileUrl={transaction.matchedInvoice.file_url}
           fileName={transaction.matchedInvoice.file_name}
