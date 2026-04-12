@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, X, Link, Unlink, ChevronDown, Sparkles, Eye, EyeOff, RefreshCw, Maximize2, Undo2 } from "lucide-react";
 import { UrlDocumentPreview } from "@/components/upload/UrlDocumentPreview";
 import { Button } from "@/components/ui/button";
@@ -136,14 +136,48 @@ export function TransactionRow({
     isPastThreshold,
     direction: swipeDirection,
     progress: swipeProgress,
+    dismissing,
+    confirmDismiss,
     handlers: swipeHandlers,
   } = useSwipeAction({
     threshold: 100,
     disableLeft: !canSwipeLeft,
     disableRight: !canSwipeRight,
-    onSwipeLeft: () => handleRecurring(),
-    onSwipeRight: () => handleUnmatch(),
   });
+
+  // --- Dismiss-Animation: slide-out → collapse → DB-update ---
+  const [animPhase, setAnimPhase] = useState<"idle" | "slide-out" | "collapse">("idle");
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [rowHeight, setRowHeight] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (dismissing && animPhase === "idle") {
+      // Phase 1: Höhe messen und Slide-Out starten
+      if (rowRef.current) {
+        setRowHeight(rowRef.current.offsetHeight);
+      }
+      setAnimPhase("slide-out");
+    }
+  }, [dismissing, animPhase]);
+
+  const handleSlideOutEnd = useCallback(() => {
+    if (animPhase !== "slide-out") return;
+    // Phase 2: Höhe auf 0 kollabieren
+    setAnimPhase("collapse");
+  }, [animPhase]);
+
+  const handleCollapseEnd = useCallback(async () => {
+    if (animPhase !== "collapse") return;
+    // Phase 3: DB-Update ausführen
+    if (dismissing === "left") {
+      await handleRecurring();
+    } else if (dismissing === "right") {
+      await handleUnmatch();
+    }
+    setAnimPhase("idle");
+    setRowHeight(undefined);
+    confirmDismiss();
+  }, [animPhase, dismissing, confirmDismiss]);
 
   // Bestimme Bank-Typ basierend auf bankType oder bankName
   const isAmex =
@@ -249,15 +283,61 @@ export function TransactionRow({
 
   const status = statusConfig[transaction.matchStatus as keyof typeof statusConfig] || statusConfig.unmatched;
 
+  // Berechne den effektiven translateX: beim Dismiss gleitet die Zeile komplett raus
+  const slideOutTarget = dismissing === "left" ? "-110%" : "110%";
+  const isAnimatingDismiss = animPhase === "slide-out" || animPhase === "collapse";
+  const effectiveTransform =
+    animPhase === "slide-out"
+      ? `translateX(${slideOutTarget})`
+      : animPhase === "collapse"
+        ? `translateX(${slideOutTarget})`
+        : offset !== 0
+          ? `translateX(${offset}px)`
+          : undefined;
+
   return (
     <div
-      ref={registerRef}
+      ref={(node) => {
+        // Kombi-Ref: für registerRef (scroll-into-view) und rowRef (Höhe messen)
+        (rowRef as any).current = node;
+        registerRef?.(node);
+      }}
       onClick={() => onFocus?.()}
+      className={cn(
+        "overflow-hidden transition-all",
+        animPhase === "collapse" && "border-transparent"
+      )}
+      style={{
+        // Collapse-Phase: Höhe von gemessener Höhe auf 0 + margins weg
+        height: animPhase === "collapse" ? 0 : rowHeight ?? "auto",
+        marginBottom: animPhase === "collapse" ? 0 : undefined,
+        opacity: animPhase === "collapse" ? 0 : 1,
+        transition:
+          animPhase === "collapse"
+            ? "height 0.3s ease-out, opacity 0.3s ease-out, margin 0.3s ease-out"
+            : undefined,
+      }}
+      onTransitionEnd={(e) => {
+        if (e.propertyName === "height" && animPhase === "collapse") {
+          handleCollapseEnd();
+        }
+      }}
+    >
+    <div
       className={cn(
         "relative overflow-hidden rounded-lg border border-border/50 bg-card hover:bg-muted/20",
         selected && "ring-2 ring-primary/50 bg-primary/5",
         isFocused && "ring-2 ring-primary bg-primary/10 shadow-md"
       )}
+      style={{
+        transform: animPhase === "slide-out" ? `translateX(${slideOutTarget})` : undefined,
+        transition: animPhase === "slide-out" ? "transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)" : undefined,
+      }}
+      onTransitionEnd={(e) => {
+        if (e.propertyName === "transform" && animPhase === "slide-out") {
+          handleSlideOutEnd();
+        }
+      }}
       {...swipeHandlers}
     >
       {/* Swipe-Hintergrund LINKS → "Laufende Kosten" (info-blau) */}
@@ -329,9 +409,9 @@ export function TransactionRow({
     <div
       className="flex items-center gap-4 p-4 bg-card"
       style={{
-        transform: offset !== 0 ? `translateX(${offset}px)` : undefined,
+        transform: !isAnimatingDismiss && offset !== 0 ? `translateX(${offset}px)` : undefined,
         transition: isSwiping ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
-        opacity: offset !== 0 ? 1 - swipeProgress * 0.15 : 1,
+        opacity: !isAnimatingDismiss && offset !== 0 ? 1 - swipeProgress * 0.15 : 1,
       }}
     >
       {/* Checkbox */}
@@ -538,7 +618,7 @@ export function TransactionRow({
       <div
         className="border-t border-border/50 bg-muted/20 p-4"
         style={{
-          transform: offset !== 0 ? `translateX(${offset}px)` : undefined,
+          transform: !isAnimatingDismiss && offset !== 0 ? `translateX(${offset}px)` : undefined,
           transition: isSwiping ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
         }}
       >
@@ -603,6 +683,7 @@ export function TransactionRow({
           </div>
         </DialogContent>
       </Dialog>
+    </div>
     </div>
   );
 }

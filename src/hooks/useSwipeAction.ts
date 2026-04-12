@@ -1,17 +1,15 @@
 import { useCallback, useRef, useState } from "react";
 
 interface UseSwipeActionOptions {
-  /** Minimale Pixel bevor die Aktion auslöst (default: 120) */
+  /** Minimale Pixel bevor die Aktion auslöst (default: 100) */
   threshold?: number;
-  /** Callback bei Swipe nach links (z.B. "als Laufende Kosten markieren") */
-  onSwipeLeft?: () => void;
-  /** Callback bei Swipe nach rechts (z.B. "zurück auf offen setzen") */
-  onSwipeRight?: () => void;
   /** Swipe nach links deaktivieren */
   disableLeft?: boolean;
   /** Swipe nach rechts deaktivieren */
   disableRight?: boolean;
 }
+
+export type SwipeDismissDirection = "left" | "right";
 
 interface UseSwipeActionResult {
   /** CSS-translateX-Offset in Pixeln (negativ = links, positiv = rechts) */
@@ -24,6 +22,14 @@ interface UseSwipeActionResult {
   direction: "left" | "right" | null;
   /** Fortschritt 0→1 bis zur Schwelle (für Animationen) */
   progress: number;
+  /**
+   * Wenn nicht null, wurde der Swipe losgelassen und die Dismiss-Richtung steht fest.
+   * Die Komponente sollte jetzt die Slide-Out + Collapse-Animation abspielen
+   * und am Ende `confirmDismiss()` aufrufen.
+   */
+  dismissing: SwipeDismissDirection | null;
+  /** Aufrufen nach der Animation, um den State zurückzusetzen */
+  confirmDismiss: () => void;
   /** Event-Handler — an das Container-Element binden */
   handlers: {
     onTouchStart: (e: React.TouchEvent) => void;
@@ -34,21 +40,20 @@ interface UseSwipeActionResult {
 }
 
 /**
- * Bidirektionaler Swipe-Hook für Listen-Items.
+ * Bidirektionaler Swipe-Hook mit mehrstufiger Dismiss-Animation.
  *
- * Links-Swipe und Rechts-Swipe können unabhängig aktiviert werden.
- * Der Hook liefert `offset`, `progress` (0→1) und `isPastThreshold`
- * für granulare visuelle Animationen im Consumer.
+ * Nach Schwellen-Überschreitung wird `dismissing` gesetzt statt sofort
+ * einen Callback auszuführen. Die Komponente spielt die Animation ab
+ * und ruft am Ende `confirmDismiss()` auf → dort passiert das DB-Update.
  */
 export function useSwipeAction({
-  threshold = 120,
-  onSwipeLeft,
-  onSwipeRight,
+  threshold = 100,
   disableLeft = false,
   disableRight = false,
 }: UseSwipeActionOptions = {}): UseSwipeActionResult {
   const [offset, setOffset] = useState(0);
   const [isSwiping, setIsSwiping] = useState(false);
+  const [dismissing, setDismissing] = useState<SwipeDismissDirection | null>(null);
 
   const startX = useRef(0);
   const currentX = useRef(0);
@@ -66,58 +71,62 @@ export function useSwipeAction({
     (finalOffset: number) => {
       const abs = Math.abs(finalOffset);
       if (abs >= threshold) {
-        if (finalOffset < 0 && onSwipeLeft && !disableLeft) {
-          onSwipeLeft();
-        } else if (finalOffset > 0 && onSwipeRight && !disableRight) {
-          onSwipeRight();
+        if (finalOffset < 0 && !disableLeft) {
+          setDismissing("left");
+          return; // NICHT offset zurücksetzen — die Komponente animiert weiter
+        }
+        if (finalOffset > 0 && !disableRight) {
+          setDismissing("right");
+          return;
         }
       }
+      setOffset(0);
     },
-    [threshold, onSwipeLeft, onSwipeRight, disableLeft, disableRight]
+    [threshold, disableLeft, disableRight]
   );
 
-  // --- Touch ---
+  const confirmDismiss = useCallback(() => {
+    setDismissing(null);
+    setOffset(0);
+  }, []);
 
+  // --- Touch ---
   const onTouchStart = useCallback(
     (e: React.TouchEvent) => {
-      if (disableLeft && disableRight) return;
+      if ((disableLeft && disableRight) || dismissing) return;
       startX.current = e.touches[0].clientX;
       currentX.current = startX.current;
       setIsSwiping(true);
     },
-    [disableLeft, disableRight]
+    [disableLeft, disableRight, dismissing]
   );
 
   const onTouchMove = useCallback(
     (e: React.TouchEvent) => {
-      if (!isSwiping) return;
+      if (!isSwiping || dismissing) return;
       currentX.current = e.touches[0].clientX;
-      const raw = currentX.current - startX.current;
-      setOffset(clampOffset(raw));
+      setOffset(clampOffset(currentX.current - startX.current));
     },
-    [isSwiping, clampOffset]
+    [isSwiping, clampOffset, dismissing]
   );
 
   const onTouchEnd = useCallback(() => {
+    if (dismissing) return;
     setIsSwiping(false);
     resolveSwipe(offset);
-    setOffset(0);
-  }, [offset, resolveSwipe]);
+  }, [offset, resolveSwipe, dismissing]);
 
   // --- Mouse ---
-
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (disableLeft && disableRight) return;
+      if ((disableLeft && disableRight) || dismissing) return;
       if (e.button !== 0) return;
       const target = e.target as HTMLElement;
       if (
         target.closest(
           "button, input, select, textarea, a, [role=menuitem], [role=option], [data-radix-collection-item]"
         )
-      ) {
-        return;
-      }
+      ) return;
 
       startX.current = e.clientX;
       currentX.current = e.clientX;
@@ -125,8 +134,7 @@ export function useSwipeAction({
 
       const handleMouseMove = (me: MouseEvent) => {
         currentX.current = me.clientX;
-        const raw = currentX.current - startX.current;
-        setOffset(clampOffset(raw));
+        setOffset(clampOffset(currentX.current - startX.current));
       };
 
       const handleMouseUp = () => {
@@ -135,13 +143,12 @@ export function useSwipeAction({
         const finalOffset = clampOffset(currentX.current - startX.current);
         setIsSwiping(false);
         resolveSwipe(finalOffset);
-        setOffset(0);
       };
 
       document.addEventListener("mousemove", handleMouseMove);
       document.addEventListener("mouseup", handleMouseUp);
     },
-    [disableLeft, disableRight, clampOffset, resolveSwipe]
+    [disableLeft, disableRight, clampOffset, resolveSwipe, dismissing]
   );
 
   const absOffset = Math.abs(offset);
@@ -154,6 +161,8 @@ export function useSwipeAction({
     isPastThreshold: absOffset >= threshold,
     direction,
     progress: Math.min(1, absOffset / threshold),
+    dismissing,
+    confirmDismiss,
     handlers: { onTouchStart, onTouchMove, onTouchEnd, onMouseDown },
   };
 }
