@@ -23,12 +23,12 @@ const monthMap: Record<string, number> = {
 };
 
 // Map category to document type for OCR routing
-const categoryToDocType: Record<string, "invoice" | "statement"> = {
+const categoryToDocType: Record<string, "invoice" | "statement" | "commission"> = {
   eingang: "invoice",
   ausgang: "invoice",
   vrbank: "statement",
   amex: "statement",
-  provision: "invoice",
+  provision: "commission",
   kasse: "invoice",
 };
 
@@ -88,7 +88,39 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3,
 }
 
 // Build OCR prompt based on document type
-function getOcrPrompt(docType: "invoice" | "statement"): string {
+function getOcrPrompt(docType: "invoice" | "statement" | "commission"): string {
+  if (docType === "commission") {
+    return `Du analysierst eine PROVISIONSABRECHNUNG (Courtage-/Vermittlungsabrechnung).
+Diese Dokumente sind oft MEHRSEITIG mit VIELEN Zahlen, Einzelpositionen und Zwischensummen.
+Deine wichtigste Aufgabe: den korrekten GESAMT-AUSZAHLUNGSBETRAG finden — NICHT eine Zwischensumme, NICHT eine Einzelprovision.
+
+Gib JSON mit exakt diesen Feldern zurück:
+- date: Abrechnungsdatum im Format YYYY-MM-DD (Datum der Abrechnung, nicht einzelner Positionen)
+- issuer: Name des ausstellenden Unternehmens (Pool/Versicherer/Vermittler, der die Provision AUSZAHLT)
+- invoiceNumber: Abrechnungsnummer / Provisionsnummer / Beleg-Nr. (oft oben rechts); sonst null
+- amount: GESAMT-AUSZAHLUNGSBETRAG als POSITIVE Zahl, ohne Währungssymbol.
+    SO GEHST DU VOR:
+    * Suche die LETZTE Seite zuerst — dort steht meist die Endsumme.
+    * Bevorzuge Felder mit Labels: "Auszahlungsbetrag", "Gesamtsumme", "Summe Auszahlung", "Überweisungsbetrag",
+      "Endbetrag", "Zu zahlen", "Nettoauszahlung", "Gesamtbetrag", "Total".
+    * IGNORIERE: Einzelprovisionen pro Vertrag, Stornos einzelner Positionen, Zwischensummen pro Produktgruppe,
+      Bestandsprovisionen separat, MwSt-Beträge einzeln, Kontostände, Vorjahreswerte.
+    * Wenn mehrere Summen vorkommen, nimm die am WEITESTEN UNTEN / am ENDE des Dokuments stehende Gesamtsumme.
+    * Negativer Auszahlungsbetrag (Rückforderung): trotzdem POSITIV angeben, dafür "type": "outgoing" setzen.
+- currency: ISO-4217-Code (meist "EUR"). Default: "EUR".
+- type: "incoming" wenn Geld an UNS fließt (Standardfall bei Provisionsabrechnung),
+        "outgoing" wenn das Dokument per Saldo eine Rückforderung an uns ist.
+- detectedCategory: immer "provision" für Provisionsabrechnungen.
+
+Doppelcheck vor der Antwort:
+  1. Ist "amount" wirklich die Endsumme und nicht eine Einzelposition? Prüfe, ob es die größte plausible Summe am Dokumentende ist.
+  2. Ist "issuer" der AUSZAHLER (nicht der Empfänger / nicht der Endkunde aus einer Einzelposition)?
+  3. Ist "date" das Abrechnungsdatum (Kopfzeile/Fußzeile), nicht ein Vertragsdatum aus einer Einzelposition?
+
+Antworte NUR mit dem JSON-Objekt, keine Erklärung, kein Markdown.
+Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-03-00123","amount":4238.17,"currency":"EUR","type":"incoming","detectedCategory":"provision"}`;
+  }
+
   if (docType === "invoice") {
     return `Analysiere dieses Dokument als Rechnung und extrahiere folgende Informationen im JSON-Format:
     - date: Rechnungsdatum im Format YYYY-MM-DD
@@ -279,7 +311,7 @@ Deno.serve(async (req) => {
       .insert({
         user_id: userId,
         file_name: displayFileName,
-        document_type: docType === "invoice" ? category : "bank_statement",
+        document_type: docType !== "statement" ? category : "bank_statement",
         endpoint_category: category,
         endpoint_year: year,
         endpoint_month: month,
@@ -324,7 +356,7 @@ Deno.serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: "google/gemini-2.5-pro",
         messages: [
           {
             role: "user",
@@ -373,7 +405,7 @@ Deno.serve(async (req) => {
       }
     } catch (parseError) {
       console.error("Failed to parse OCR response:", parseError);
-      if (docType === "invoice") {
+      if (docType !== "statement") {
         extractedData = {
           date: `${year}-${String(month).padStart(2, "0")}-01`,
           issuer: "Unbekannt",
@@ -398,7 +430,7 @@ Deno.serve(async (req) => {
 
     // ===== CATEGORY MISMATCH DETECTION =====
     let categoryMismatch: string | null = null;
-    if (docType === "invoice" && extractedData.detectedCategory) {
+    if (docType !== "statement" && extractedData.detectedCategory) {
       const detected = extractedData.detectedCategory;
       // Check if OCR-detected category differs from source folder category
       if (detected !== category) {
@@ -418,11 +450,24 @@ Deno.serve(async (req) => {
 
     // Also check if the OCR-detected date month differs from the endpoint month
     let monthMismatch: string | null = null;
-    if (docType === "invoice" && extractedData.date) {
+    if (docType !== "statement" && extractedData.date) {
       const detectedMonth = new Date(extractedData.date).getMonth() + 1;
       if (detectedMonth !== month && !isNaN(detectedMonth)) {
-        const monthNames = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
-          "Juli", "August", "September", "Oktober", "November", "Dezember"];
+        const monthNames = [
+          "",
+          "Januar",
+          "Februar",
+          "März",
+          "April",
+          "Mai",
+          "Juni",
+          "Juli",
+          "August",
+          "September",
+          "Oktober",
+          "November",
+          "Dezember",
+        ];
         monthMismatch = `Ordner: ${monthNames[month]}, Dokument: ${monthNames[detectedMonth]}`;
         console.log(`Month mismatch detected: folder=${month}, document=${detectedMonth}`);
       }
@@ -438,7 +483,7 @@ Deno.serve(async (req) => {
     let finalFileName: string;
     let finalStoragePath: string;
 
-    if (docType === "invoice") {
+    if (docType !== "statement") {
       const issuer = sanitizeForFilename(extractedData.issuer || "Unbekannt");
       const date = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
       // Keep storage keys URL-safe and deterministic (no commas or locale separators).
@@ -488,7 +533,7 @@ Deno.serve(async (req) => {
     // ===== CREATE DATABASE RECORD =====
     let documentId: string | null = null;
 
-    if (docType === "invoice") {
+    if (docType !== "statement") {
       const invoiceDate = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
       const { data: invoice, error: invoiceError } = await supabase
         .from("invoices")
@@ -527,18 +572,16 @@ Deno.serve(async (req) => {
         // For Kasse (cash) invoices, create a synthetic bank transaction that is already confirmed
         if (category === "kasse" && documentId) {
           const kasseDate = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
-          const { error: kasseTxError } = await supabase
-            .from("bank_transactions")
-            .insert({
-              user_id: userId,
-              date: kasseDate,
-              description: `Kasse: ${extractedData.issuer || "Barzahlung"}`,
-              amount: Math.abs(extractedData.amount || 0),
-              transaction_type: "debit",
-              matched_invoice_id: documentId,
-              match_status: "confirmed",
-              match_confidence: 100,
-            });
+          const { error: kasseTxError } = await supabase.from("bank_transactions").insert({
+            user_id: userId,
+            date: kasseDate,
+            description: `Kasse: ${extractedData.issuer || "Barzahlung"}`,
+            amount: Math.abs(extractedData.amount || 0),
+            transaction_type: "debit",
+            matched_invoice_id: documentId,
+            match_status: "confirmed",
+            match_confidence: 100,
+          });
 
           if (kasseTxError) {
             console.error("Kasse synthetic transaction error:", kasseTxError);
@@ -638,7 +681,7 @@ Deno.serve(async (req) => {
         fileName: finalFileName,
         fileSize: fileSize,
         extractedData:
-          docType === "invoice"
+          docType !== "statement"
             ? {
                 date: extractedData.date,
                 issuer: extractedData.issuer,
