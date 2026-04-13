@@ -8,56 +8,51 @@ const corsHeaders = {
 // Convert ArrayBuffer to base64 in chunks to avoid stack overflow
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
-  let binary = '';
+  let binary = "";
   const chunkSize = 0x8000; // 32KB chunks
-  
+
   for (let i = 0; i < bytes.length; i += chunkSize) {
     const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
     binary += String.fromCharCode.apply(null, Array.from(chunk));
   }
-  
+
   return btoa(binary);
 }
 
 // Retry fetch with exponential backoff
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit,
-  maxRetries = 3,
-  baseDelay = 1000
-): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3, baseDelay = 1000): Promise<Response> {
   let lastError: Error | null = null;
-  
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const response = await fetch(url, options);
-      
+
       // Retry on 502, 503, 504 errors - DON'T consume the body, just check status
       if (response.status === 502 || response.status === 503 || response.status === 504) {
         console.log(`Attempt ${attempt + 1}: Got ${response.status}, retrying...`);
         lastError = new Error(`AI Gateway error: ${response.status}`);
-        
+
         if (attempt < maxRetries - 1) {
           const delay = baseDelay * Math.pow(2, attempt);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, delay));
           continue;
         }
         // Last attempt failed with gateway error - throw error instead of returning consumed response
         throw lastError;
       }
-      
+
       return response;
     } catch (error) {
       console.log(`Attempt ${attempt + 1}: Network error, retrying...`, error);
       lastError = error instanceof Error ? error : new Error(String(error));
-      
+
       if (attempt < maxRetries - 1) {
         const delay = baseDelay * Math.pow(2, attempt);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
-  
+
   throw lastError || new Error("Max retries exceeded");
 }
 
@@ -69,13 +64,13 @@ serve(async (req) => {
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File;
-    const documentType = formData.get("type") as string; // "invoice" or "statement"
+    const documentType = formData.get("type") as string; // "invoice" | "statement" | "commission"
 
     if (!file) {
-      return new Response(
-        JSON.stringify({ error: "No file provided" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "No file provided" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
@@ -89,7 +84,28 @@ serve(async (req) => {
     const mimeType = file.type || "application/pdf";
 
     let prompt = "";
-    if (documentType === "invoice") {
+    if (documentType === "commission") {
+      prompt = `Du analysierst eine PROVISIONSABRECHNUNG (Courtage-/Vermittlungsabrechnung).
+Diese Dokumente sind oft MEHRSEITIG mit VIELEN Zahlen, Einzelpositionen und Zwischensummen.
+Deine wichtigste Aufgabe: den korrekten GESAMT-AUSZAHLUNGSBETRAG finden — NICHT eine Zwischensumme, NICHT eine Einzelprovision.
+
+Gib JSON mit exakt diesen Feldern zurück:
+- date: Abrechnungsdatum im Format YYYY-MM-DD
+- issuer: Name des ausstellenden Unternehmens (Pool/Versicherer, der auszahlt)
+- invoiceNumber: Abrechnungsnummer / Provisionsnummer; sonst null
+- amount: GESAMT-AUSZAHLUNGSBETRAG als POSITIVE Zahl, ohne Währungssymbol.
+    SO GEHST DU VOR:
+    * Suche die LETZTE Seite zuerst — dort steht meist die Endsumme.
+    * Bevorzuge Labels: "Auszahlungsbetrag", "Gesamtsumme", "Summe Auszahlung", "Überweisungsbetrag",
+      "Endbetrag", "Zu zahlen", "Nettoauszahlung", "Gesamtbetrag", "Total".
+    * IGNORIERE Einzelprovisionen, Stornos einzelner Positionen, Zwischensummen pro Produktgruppe, MwSt-Beträge einzeln.
+    * Wenn mehrere Summen vorkommen, nimm die am WEITESTEN UNTEN stehende Gesamtsumme.
+- currency: ISO-4217-Code (meist "EUR"). Default: "EUR".
+- type: "incoming" (Standard bei Provisionsabrechnung), "outgoing" nur bei Rückforderung.
+
+Antworte NUR mit dem JSON-Objekt, keine Erklärung, kein Markdown.
+Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-03-00123","amount":4238.17,"currency":"EUR","type":"incoming"}`;
+    } else if (documentType === "invoice") {
       prompt = `Analysiere dieses Dokument als Rechnung und extrahiere folgende Informationen im JSON-Format:
       - date: Rechnungsdatum im Format YYYY-MM-DD
       - issuer: Name des Ausstellers/Unternehmens (wer hat die Rechnung ausgestellt)
@@ -179,7 +195,7 @@ serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
+          model: "google/gemini-2.5-pro",
           messages: [
             {
               role: "user",
@@ -197,32 +213,32 @@ serve(async (req) => {
         }),
       },
       3, // max retries
-      2000 // base delay 2 seconds
+      2000, // base delay 2 seconds
     );
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error("AI Gateway error:", response.status, errorText);
-      
+
       if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again later." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
       if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "Payment required. Please add credits." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "Payment required. Please add credits." }), {
+          status: 402,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
-      
+
       throw new Error(`AI Gateway error: ${response.status}`);
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || "";
-    
+
     console.log("AI Response:", content);
 
     // Parse JSON from response
@@ -238,13 +254,13 @@ serve(async (req) => {
     } catch (parseError) {
       console.error("Failed to parse AI response:", parseError);
       // Return default values if parsing fails
-      if (documentType === "invoice") {
+      if (documentType !== "statement") {
         extractedData = {
           date: new Date().toISOString().split("T")[0],
           issuer: "Unbekannt",
           amount: 0,
           currency: "EUR",
-          type: "outgoing",
+          type: documentType === "commission" ? "incoming" : "outgoing",
         };
       } else {
         extractedData = {
@@ -276,15 +292,14 @@ serve(async (req) => {
       };
     }
 
-    return new Response(
-      JSON.stringify({ success: true, data: extractedData }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ success: true, data: extractedData }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (error) {
     console.error("OCR processing error:", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "OCR processing failed" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "OCR processing failed" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
