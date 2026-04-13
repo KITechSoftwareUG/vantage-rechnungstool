@@ -160,6 +160,99 @@ export function useDeleteBankStatement() {
   });
 }
 
+export interface StatementTransaction {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  transactionType: "debit" | "credit";
+  matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring";
+  matchedInvoiceId: string | null;
+  originalCurrency: string | null;
+}
+
+export function useBankStatementTransactions(statementId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["bank_transactions", "by_statement", statementId],
+    queryFn: async (): Promise<StatementTransaction[]> => {
+      const { data, error } = await supabase
+        .from("bank_transactions")
+        .select("id, date, description, amount, transaction_type, match_status, matched_invoice_id, original_currency")
+        .eq("bank_statement_id", statementId)
+        .order("date", { ascending: true });
+
+      if (error) throw error;
+
+      return (data || []).map((t: any) => ({
+        id: t.id,
+        date: t.date,
+        description: t.description,
+        amount: Number(t.amount),
+        transactionType: t.transaction_type,
+        matchStatus: t.match_status,
+        matchedInvoiceId: t.matched_invoice_id,
+        originalCurrency: t.original_currency,
+      }));
+    },
+    enabled: enabled && !!statementId,
+  });
+}
+
+export function useUpdateBankTransaction() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (tx: Pick<StatementTransaction, "id" | "date" | "description" | "amount" | "transactionType">) => {
+      const { error } = await supabase
+        .from("bank_transactions")
+        .update({
+          date: tx.date,
+          description: tx.description,
+          amount: tx.amount,
+          transaction_type: tx.transactionType,
+        })
+        .eq("id", tx.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
+      toast({ title: "Transaktion aktualisiert" });
+    },
+    onError: (error) => {
+      toast({
+        title: "Fehler beim Aktualisieren",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+}
+
+export function useDeleteBankTransaction() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("bank_transactions").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["transaction_counts"] });
+      toast({ title: "Transaktion gelöscht" });
+    },
+    onError: (error) => {
+      toast({
+        title: "Fehler beim Löschen",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+}
+
 export async function checkDuplicateTransactions(
   userId: string,
   transactions: ExtractedTransaction[],

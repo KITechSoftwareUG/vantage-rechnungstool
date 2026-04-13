@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Building, Calendar, CreditCard, Edit2, Check, X, RefreshCw, Loader2, Eye, Trash2 } from "lucide-react";
+import { Building, Calendar, CreditCard, Edit2, Check, X, RefreshCw, Loader2, Eye, Trash2, ChevronDown, ChevronUp, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { StatementData } from "@/types/documents";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
+import { StatementTransactionsList } from "./StatementTransactionsList";
 
 interface StatementCardProps {
   statement: StatementData;
@@ -29,6 +30,7 @@ export function StatementCard({
 }: StatementCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showTransactions, setShowTransactions] = useState(false);
   const [editData, setEditData] = useState(statement);
 
   const handleSave = () => {
@@ -269,6 +271,36 @@ export function StatementCard({
           )}
         </div>
       </div>
+
+      {/* Transactions toggle */}
+      {!isEditing && transactionCount !== undefined && transactionCount > 0 && (
+        <div className="mt-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full justify-between"
+            onClick={() => setShowTransactions((v) => !v)}
+          >
+            <span className="flex items-center gap-2">
+              <ListOrdered className="h-4 w-4" />
+              Transaktionen ({transactionCount})
+            </span>
+            {showTransactions ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </Button>
+          {showTransactions && (
+            <div className="mt-3">
+              <StatementTransactionsList
+                statementId={statement.id}
+                expectedDiff={balanceDiff}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Actions */}
       {isEditing ? (
