@@ -3,14 +3,12 @@ import { supabase } from "@/integrations/supabase/client";
 export async function uploadDocument(
   file: File,
   userId: string,
-  documentType: "invoices" | "statements"
+  documentType: "invoices" | "statements",
 ): Promise<string> {
   const fileExt = file.name.split(".").pop();
   const fileName = `${userId}/${documentType}/${Date.now()}.${fileExt}`;
 
-  const { error: uploadError } = await supabase.storage
-    .from("documents")
-    .upload(fileName, file);
+  const { error: uploadError } = await supabase.storage.from("documents").upload(fileName, file);
 
   if (uploadError) throw uploadError;
 
@@ -18,10 +16,7 @@ export async function uploadDocument(
   return data.publicUrl;
 }
 
-export async function processDocumentOCR(
-  file: File,
-  documentType: "invoice" | "statement"
-) {
+export async function processDocumentOCR(file: File, documentType: "invoice" | "statement" | "commission") {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("type", documentType);
