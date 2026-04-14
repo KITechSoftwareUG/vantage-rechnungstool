@@ -427,7 +427,7 @@ export default function MatchingPage() {
         <Tabs value={filterStatus} onValueChange={(v) => setFilterStatus(v as any)}>
           <TabsList className="glass-card h-auto p-1">
             <TabsTrigger value="all" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              Alle ({transactions.length})
+              Alle Transaktionen ({transactions.length})
             </TabsTrigger>
             <TabsTrigger value="matched" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Sparkles className="mr-1 h-4 w-4" />
