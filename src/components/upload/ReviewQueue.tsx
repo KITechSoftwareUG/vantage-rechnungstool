@@ -80,7 +80,9 @@ export function ReviewQueue() {
       return invoices;
     },
     enabled: !!user,
-    refetchInterval: 10000,
+    // 3 s statt 10 s: OCR-Pipeline braucht mit Flash typischerweise 3-8 s,
+    // ein schnellerer Refetch verkürzt die gefühlte Upload→Sichtbar-Latenz.
+    refetchInterval: 3000,
   });
 
   const confirmMutation = useMutation({

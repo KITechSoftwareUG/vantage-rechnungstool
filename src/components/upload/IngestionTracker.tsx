@@ -63,6 +63,13 @@ function getStatusBadge(status: string) {
           Empfangen
         </Badge>
       );
+    case "duplicate":
+      return (
+        <Badge variant="outline" className="gap-1 text-xs text-amber-600 dark:text-amber-400 border-amber-300">
+          <XCircle className="h-3 w-3" />
+          Duplikat
+        </Badge>
+      );
     default:
       return (
         <Badge variant="outline" className="gap-1 text-xs">

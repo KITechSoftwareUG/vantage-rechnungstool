@@ -158,7 +158,7 @@ export function useIngestionLogs() {
         document_status: log.document_id ? (statusMap[log.document_id] ?? null) : null,
       }));
     },
-    refetchInterval: 10000,
+    refetchInterval: 3000,
   });
 
   const groupedLogs = useMemo((): IngestionCategoryGroup[] => {
