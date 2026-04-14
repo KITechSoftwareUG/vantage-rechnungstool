@@ -107,7 +107,12 @@ export function getStatusSummary(categoryLogs: IngestionLog[]) {
   const errors = categoryLogs.filter((l) => l.status === "error").length;
   const pending = categoryLogs.filter((l) => l.status === "processing" || l.status === "received").length;
   const confirmed = categoryLogs.filter((l) => l.document_status === "ready" || l.document_status === "saved").length;
-  const awaitingReview = categoryLogs.filter((l) => l.document_status === "processing").length;
+  // Kontoauszüge werden automatisch übernommen (zweiter OCR-Pass im Webhook),
+  // es gibt keine manuelle Review-UI dafür. Sie dürfen nicht als
+  // "zur Überprüfung" gezählt werden, auch nicht bei Altdaten mit status="processing".
+  const awaitingReview = categoryLogs.filter(
+    (l) => l.document_status === "processing" && l.document_type !== "bank_statement"
+  ).length;
   return { success, errors, pending, confirmed, awaitingReview, total: categoryLogs.length };
 }
 

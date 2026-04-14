@@ -178,18 +178,42 @@ export default function MatchingPage() {
 
   const handleAutoMatch = async () => {
     setIsAutoMatching(true);
+    // Edge Function verarbeitet aus Wall-Clock-Gründen nur N Transaktionen
+    // pro Aufruf. Wir loopen, bis sie `remaining: 0` meldet. Safety-Cap
+    // verhindert eine Endlosschleife bei einem fehlerhaften Backend.
+    const MAX_BATCHES = 50;
+    let totalMatched = 0;
+    let totalAutoConfirmed = 0;
+    let totalProcessed = 0;
+    let initialBacklog: number | null = null;
+
     try {
-      const { data, error } = await supabase.functions.invoke("auto-match-transactions");
-      if (error) throw error;
-      const total = data?.matchedCount ?? 0;
-      const autoConfirmed = data?.autoConfirmedCount ?? 0;
-      const suggested = Math.max(0, total - autoConfirmed);
+      for (let batch = 0; batch < MAX_BATCHES; batch++) {
+        const { data, error } = await supabase.functions.invoke("auto-match-transactions");
+        if (error) throw error;
+
+        totalMatched += data?.matchedCount ?? 0;
+        totalAutoConfirmed += data?.autoConfirmedCount ?? 0;
+        totalProcessed += data?.processedCount ?? 0;
+
+        const remaining: number = data?.remaining ?? 0;
+        if (initialBacklog === null) {
+          initialBacklog = (data?.totalUnmatched ?? 0) as number;
+        }
+
+        // Zwischenstand-Refetch, damit der User Fortschritt sieht.
+        refetch();
+
+        if (remaining === 0 || (data?.processedCount ?? 0) === 0) break;
+      }
+
+      const suggested = Math.max(0, totalMatched - totalAutoConfirmed);
       toast({
         title: "KI-Matching abgeschlossen",
         description:
-          total === 0
-            ? "Keine neuen Treffer gefunden"
-            : `${autoConfirmed} automatisch bestätigt (≥95% Confidence) · ${suggested} als Vorschlag`,
+          totalMatched === 0
+            ? `Keine neuen Treffer gefunden${initialBacklog ? ` (${initialBacklog} Transaktionen geprüft)` : ""}`
+            : `${totalAutoConfirmed} automatisch bestätigt (≥95% Confidence) · ${suggested} als Vorschlag · ${totalProcessed} Transaktionen geprüft`,
       });
       refetch();
     } catch (error: any) {

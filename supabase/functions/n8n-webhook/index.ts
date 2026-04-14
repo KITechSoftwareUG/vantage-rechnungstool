@@ -495,6 +495,87 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ===== VERIFICATION PASS (Kontoauszüge) =====
+    // Zweiter OCR-Lauf: Die im ersten Pass extrahierten Transaktionen werden
+    // Zeile für Zeile gegen das PDF geprüft. Output: korrigierte Liste in der
+    // Reihenfolge, in der die Buchungen im Auszug stehen. Diskrepanzen landen
+    // als warning_message am Ingestion-Log, damit Alex sie prüfen kann.
+    let verificationWarning: string | null = null;
+    if (docType === "statement") {
+      const initialTx = Array.isArray(extractedData.transactions) ? extractedData.transactions : [];
+
+      const verifyPrompt = `Du hast diesen Kontoauszug bereits einmal extrahiert. Hier ist die Liste der erkannten Transaktionen:
+
+${JSON.stringify(initialTx, null, 2)}
+
+Prüfe die Liste SEHR SORGFÄLTIG gegen das PDF und liefere eine korrigierte, vollständige Liste.
+
+DEINE AUFGABEN:
+1. Vergleiche jede erkannte Zeile mit dem PDF. Stimmen Datum, Beschreibung, Betrag und Typ (credit/debit)?
+2. Ergänze FEHLENDE Transaktionen, die im ersten Pass übersehen wurden.
+3. Entferne DUPLIKATE oder Zeilen, die keine echte Transaktion sind (Zwischensummen, Salden, Überschriften).
+4. Korrigiere falsche Beträge, Vorzeichen oder Buchungstypen.
+5. WICHTIG: Gib die Transaktionen in EXAKT DER REIHENFOLGE zurück, in der sie im PDF untereinander stehen — NICHT nach Datum sortiert, NICHT nach Betrag sortiert. Die Reihenfolge im Auszug ist die Wahrheit.
+
+Antworte mit JSON in diesem Format:
+{
+  "transactions": [
+    {"date": "YYYY-MM-DD", "description": "...", "amount": 123.45, "type": "credit"|"debit", "originalCurrency": null}
+  ],
+  "discrepancies": ["Kurzer Hinweis pro gefundenem Unterschied zum ersten Pass, max. 5 Einträge"]
+}
+
+Jede Transaktion MUSS enthalten: date, description, amount (positive Zahl), type ("credit" oder "debit").
+originalCurrency nur bei Fremdwährung, sonst null.
+Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
+
+      try {
+        const verifyResponse = await fetchWithRetry("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            // Zweiter Pass: Pro-Modell, weil hier Vollständigkeit + Reihenfolge
+            // über Einzelheiten entscheiden, nicht Geschwindigkeit.
+            model: "google/gemini-2.5-pro",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: verifyPrompt },
+                  { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+                ],
+              },
+            ],
+          }),
+        });
+
+        if (verifyResponse.ok) {
+          const verifyData = await verifyResponse.json();
+          const verifyContent = verifyData.choices?.[0]?.message?.content || "";
+          const jsonMatch = verifyContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (Array.isArray(parsed.transactions)) {
+              extractedData.transactions = parsed.transactions;
+              console.log(`Verification pass: ${initialTx.length} → ${parsed.transactions.length} transactions`);
+            }
+            if (Array.isArray(parsed.discrepancies) && parsed.discrepancies.length > 0) {
+              verificationWarning = `Verifikation: ${parsed.discrepancies.slice(0, 5).join("; ")}`;
+            }
+          }
+        } else {
+          console.error("Verification pass failed:", verifyResponse.status);
+          verificationWarning = "Verifikationslauf nicht möglich — nur erster OCR-Pass verwendet.";
+        }
+      } catch (verifyError) {
+        console.error("Verification pass error:", verifyError);
+        verificationWarning = "Verifikationslauf fehlgeschlagen — nur erster OCR-Pass verwendet.";
+      }
+    }
+
     // ===== CATEGORY MISMATCH DETECTION =====
     let categoryMismatch: string | null = null;
     if (docType !== "statement" && extractedData.detectedCategory) {
@@ -544,6 +625,7 @@ Deno.serve(async (req) => {
     const warnings: string[] = [];
     if (categoryMismatch) warnings.push(categoryMismatch);
     if (monthMismatch) warnings.push(monthMismatch);
+    if (verificationWarning) warnings.push(verificationWarning);
     const warningMessage = warnings.length > 0 ? warnings.join(" | ") : null;
 
     // ===== BUILD FINAL FILENAME & RENAME =====
@@ -668,7 +750,10 @@ Deno.serve(async (req) => {
           account_number: summary.accountNumber || "Unbekannt",
           opening_balance: summary.openingBalance || 0,
           closing_balance: summary.closingBalance || 0,
-          status: "processing",
+          // Kontoauszüge werden nicht manuell bestätigt — der zweite OCR-Pass
+          // oben hat die Transaktionen bereits gegengeprüft. Direkt auf "ready",
+          // damit sie nicht im "Zur Überprüfung"-Zähler hängen bleiben.
+          status: "ready",
           source_endpoint: `n8n/${category}`,
         })
         .select("id")
@@ -683,7 +768,7 @@ Deno.serve(async (req) => {
         // Insert transactions if available
         const transactions = extractedData.transactions || [];
         if (transactions.length > 0 && documentId) {
-          const txRows = transactions.map((tx: any) => ({
+          const txRows = transactions.map((tx: any, idx: number) => ({
             user_id: userId,
             bank_statement_id: documentId,
             date: tx.date || statementDate,
@@ -692,6 +777,9 @@ Deno.serve(async (req) => {
             transaction_type: tx.type || "debit",
             original_currency: tx.originalCurrency || null,
             match_status: "unmatched",
+            // Reihenfolge aus dem Kontoauszug (Verifikations-Pass): exakt so
+            // wie die Zeilen im PDF untereinander stehen.
+            statement_order: idx,
           }));
 
           const { error: txError } = await supabase.from("bank_transactions").insert(txRows);

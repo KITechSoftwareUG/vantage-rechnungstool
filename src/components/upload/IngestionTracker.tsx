@@ -106,6 +106,8 @@ function IngestionLogRow({
       );
     }
     if (docStatus === "processing") {
+      // Kontoauszüge werden nicht manuell überprüft — daher kein Review-Badge.
+      if (log.document_type === "bank_statement") return null;
       return (
         <Badge variant="outline" className="gap-1 text-xs text-amber-600 dark:text-amber-400 border-amber-300">
           <Clock className="h-3 w-3" />

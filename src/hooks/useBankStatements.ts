@@ -177,8 +177,11 @@ export function useBankStatementTransactions(statementId: string, enabled = true
     queryFn: async (): Promise<StatementTransaction[]> => {
       const { data, error } = await supabase
         .from("bank_transactions")
-        .select("id, date, description, amount, transaction_type, match_status, matched_invoice_id, original_currency")
+        .select("id, date, description, amount, transaction_type, match_status, matched_invoice_id, original_currency, statement_order")
         .eq("bank_statement_id", statementId)
+        // Reihenfolge wie im Auszug: primär statement_order (aus Verifikations-
+        // Pass), NULLS LAST fängt Altdaten ab. Sekundär date als Fallback.
+        .order("statement_order", { ascending: true, nullsFirst: false })
         .order("date", { ascending: true });
 
       if (error) throw error;
@@ -294,7 +297,7 @@ export async function createBankTransactions(
 ): Promise<number> {
   if (transactions.length === 0) return 0;
 
-  const transactionsToInsert = transactions.map((tx) => ({
+  const transactionsToInsert = transactions.map((tx, idx) => ({
     user_id: userId,
     bank_statement_id: bankStatementId,
     date: tx.date,
@@ -303,6 +306,7 @@ export async function createBankTransactions(
     transaction_type: tx.type,
     match_status: "unmatched",
     original_currency: tx.originalCurrency || null,
+    statement_order: idx,
   }));
 
   const { error } = await supabase

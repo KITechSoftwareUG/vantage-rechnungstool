@@ -275,14 +275,7 @@ export function DocumentCard({ document, onSave, onDelete, duplicates = [], onMe
             Speichern
           </Button>
         </div>
-      ) : document.status === "ready" && (
-        <div className="mt-4">
-          <Button variant="gradient" size="sm" className="w-full" onClick={handleSave}>
-            <Check className="mr-1 h-4 w-4" />
-            Bestätigen
-          </Button>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
