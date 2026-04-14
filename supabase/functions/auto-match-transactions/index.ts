@@ -17,11 +17,9 @@ serve(async (req) => {
       throw new Error("No authorization header");
     }
 
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } }
-    );
+    const supabaseClient = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_ANON_KEY") ?? "", {
+      global: { headers: { Authorization: authHeader } },
+    });
 
     const {
       data: { user },
@@ -44,25 +42,22 @@ serve(async (req) => {
       .from("bank_transactions")
       .select("matched_invoice_id")
       .not("matched_invoice_id", "is", null);
-    
+
     if (matchedError) throw matchedError;
-    
+
     const alreadyMatchedIds = new Set((matchedInvoiceIds || []).map((t: any) => t.matched_invoice_id));
-    
-    const { data: allInvoices, error: invError } = await supabaseClient
-      .from("invoices")
-      .select("*");
+
+    const { data: allInvoices, error: invError } = await supabaseClient.from("invoices").select("*");
 
     if (invError) throw invError;
-    
+
     // Filter out already matched invoices
     const invoices = (allInvoices || []).filter((inv: any) => !alreadyMatchedIds.has(inv.id));
 
     if (!transactions || transactions.length === 0 || !invoices || invoices.length === 0) {
-      return new Response(
-        JSON.stringify({ success: true, matchedCount: 0 }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: true, matchedCount: 0 }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Use Lovable AI Gateway for intelligent matching
@@ -73,7 +68,7 @@ serve(async (req) => {
     // - >= SUGGEST_THRESHOLD       → als Vorschlag (matched) speichern, User bestätigt manuell
     // - <  SUGGEST_THRESHOLD       → ignoriert (kein Match)
     const AUTO_CONFIRM_THRESHOLD = 95;
-    const SUGGEST_THRESHOLD = 60;
+    const SUGGEST_THRESHOLD = 30;
 
     let matchedCount = 0;
     let autoConfirmedCount = 0;
@@ -85,130 +80,138 @@ serve(async (req) => {
     // - "350.00 GBP"
     const extractOriginalAmount = (originalCurrency: string | null): number | null => {
       if (!originalCurrency) return null;
-      
+
       // Try "Foreign Spend Amount: X.XX" format first
       const foreignSpendMatch = originalCurrency.match(/Foreign Spend Amount:\s*([\d,.]+)/i);
       if (foreignSpendMatch) {
-        const amountStr = foreignSpendMatch[1].replace(',', '.');
+        const amountStr = foreignSpendMatch[1].replace(",", ".");
         const amount = parseFloat(amountStr);
         if (!isNaN(amount)) {
           console.log(`Extracted Foreign Spend Amount: ${amount}`);
           return amount;
         }
       }
-      
+
       // Try simple "X.XX CURRENCY" format (e.g., "5.95 USD", "350.00 GBP")
       const simpleMatch = originalCurrency.match(/^([\d,.]+)\s*[A-Z]{3}/i);
       if (simpleMatch) {
-        const amountStr = simpleMatch[1].replace(',', '.');
+        const amountStr = simpleMatch[1].replace(",", ".");
         const amount = parseFloat(amountStr);
         if (!isNaN(amount)) {
           console.log(`Extracted simple amount: ${amount}`);
           return amount;
         }
       }
-      
+
       // Try to find any number followed by currency code
       const anyMatch = originalCurrency.match(/([\d,.]+)\s*(?:US Dollars|USD|EUR|GBP|CHF|JPY)/i);
       if (anyMatch) {
-        const amountStr = anyMatch[1].replace(',', '.');
+        const amountStr = anyMatch[1].replace(",", ".");
         const amount = parseFloat(amountStr);
         if (!isNaN(amount)) {
           console.log(`Extracted amount from text: ${amount}`);
           return amount;
         }
       }
-      
+
       return null;
     };
 
     // Process transactions
     for (const transaction of transactions) {
       const transactionAmount = Math.abs(transaction.amount);
-      const isAmexWithCurrencyConversion = 
-        transaction.bank_statements?.bank_type === "amex" && 
-        transaction.original_currency !== null;
-      
+      const isAmexWithCurrencyConversion =
+        transaction.bank_statements?.bank_type === "amex" && transaction.original_currency !== null;
+
       let potentialMatches: any[] = [];
       let matchAmount = transactionAmount;
-      
+
       if (isAmexWithCurrencyConversion) {
         // For Amex with currency conversion: Extract Foreign Spend Amount and match exactly
         const foreignAmount = extractOriginalAmount(transaction.original_currency);
-        
+
         if (foreignAmount !== null) {
           matchAmount = foreignAmount;
           console.log(`Amex currency conversion - Using Foreign Spend Amount: ${foreignAmount} for matching`);
         }
       }
-      
+
       // IMPROVED MATCHING STRATEGY:
       // 1. First find matches by name/description similarity
       // 2. Then validate with amount (with currency tolerance)
-      
+
       // Step 1: Find invoices with similar names/descriptions
       const transactionDesc = transaction.description.toLowerCase();
-      
+
       // Calculate similarity score for each invoice based on name matching
       const invoicesWithScores = invoices.map((inv: any) => {
         const issuerLower = inv.issuer.toLowerCase();
         let nameScore = 0;
-        
+
         // Check if issuer name is contained in transaction description
         if (transactionDesc.includes(issuerLower)) {
           nameScore = 100;
         } else {
-          // Check word-by-word matching
+          // Word-by-word matching. Wir bewerten zwei Signale parallel:
+          //  a) Anteil gematchter Issuer-Wörter (fractionScore) — gut wenn Issuer kurz ist
+          //  b) Stärkster Einzel-Token-Match (bestTokenScore) — rettet Fälle wie
+          //     "Udemy Ireland Ltd" vs. Verwendungszweck "UDEMYEU", wo nur ein
+          //     Token substring-matcht, das aber lang und eindeutig ist.
           const issuerWords = issuerLower.split(/[\s,.-]+/).filter((w: string) => w.length > 2);
           const descWords = transactionDesc.split(/[\s,.-]+/).filter((w: string) => w.length > 2);
-          
+
           let matchedWords = 0;
+          let bestTokenScore = 0;
           for (const issuerWord of issuerWords) {
             for (const descWord of descWords) {
               if (descWord.includes(issuerWord) || issuerWord.includes(descWord)) {
                 matchedWords++;
+                const minLen = Math.min(issuerWord.length, descWord.length);
+                // Je länger der gemeinsame Kern, desto eindeutiger das Signal.
+                if (minLen >= 5) bestTokenScore = Math.max(bestTokenScore, 80);
+                else if (minLen >= 4) bestTokenScore = Math.max(bestTokenScore, 70);
+                else if (minLen >= 3) bestTokenScore = Math.max(bestTokenScore, 55);
                 break;
               }
             }
           }
-          
-          if (issuerWords.length > 0) {
-            nameScore = (matchedWords / issuerWords.length) * 80;
-          }
+
+          const fractionScore = issuerWords.length > 0 ? (matchedWords / issuerWords.length) * 80 : 0;
+          nameScore = Math.max(fractionScore, bestTokenScore);
         }
-        
+
         // Amount matching with tolerance for currency differences (up to 10% difference)
         const amountDiff = Math.abs(matchAmount - inv.amount);
-        const amountTolerance = Math.max(matchAmount, inv.amount) * 0.10; // 10% tolerance
+        const amountTolerance = Math.max(matchAmount, inv.amount) * 0.1; // 10% tolerance
         const exactMatch = amountDiff < 0.01;
         const closeMatch = amountDiff <= amountTolerance;
-        
+
         let amountScore = 0;
         if (exactMatch) {
           amountScore = 100;
         } else if (closeMatch) {
-          amountScore = 80 - (amountDiff / amountTolerance * 30); // 50-80 for close matches
+          amountScore = 80 - (amountDiff / amountTolerance) * 30; // 50-80 for close matches
         }
-        
+
         // Combined score: prioritize name matches, use amount as validation
-        const combinedScore = (nameScore * 0.6) + (amountScore * 0.4);
-        
+        const combinedScore = nameScore * 0.6 + amountScore * 0.4;
+
         return {
           invoice: inv,
           nameScore,
           amountScore,
           combinedScore,
           exactAmountMatch: exactMatch,
-          closeAmountMatch: closeMatch
+          closeAmountMatch: closeMatch,
         };
       });
-      
+
       // Filter potential matches: good name match OR exact amount match
       potentialMatches = invoicesWithScores
         .filter((item: any) => item.nameScore >= 50 || item.exactAmountMatch)
         .sort((a: any, b: any) => b.combinedScore - a.combinedScore)
         .map((item: any) => item.invoice);
-      
+
       if (potentialMatches.length === 0) {
         // Fallback: exact amount match only
         potentialMatches = invoices.filter((inv: any) => {
@@ -309,7 +312,7 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
                       .eq("id", transaction.id);
 
                     console.log(
-                      `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${result.matchedInvoiceId} (${result.confidence}%): ${result.reason}`
+                      `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${result.matchedInvoiceId} (${result.confidence}%): ${result.reason}`,
                     );
                     matchedCount++;
                     if (isAutoConfirm) autoConfirmedCount++;
@@ -347,16 +350,15 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
       }
     }
 
-    return new Response(
-      JSON.stringify({ success: true, matchedCount, autoConfirmedCount }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ success: true, matchedCount, autoConfirmedCount }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("Auto-match error:", error);
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
