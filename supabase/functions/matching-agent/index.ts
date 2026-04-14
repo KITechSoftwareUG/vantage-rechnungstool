@@ -59,20 +59,24 @@ serve(async (req) => {
     if (txErr) throw txErr;
     if (!tx) throw new Error("Transaktion nicht gefunden");
 
-    // Bereits zugeordnete invoice ids rausfiltern
-    const { data: matchedRows } = await supabase
-      .from("bank_transactions")
-      .select("matched_invoice_id")
-      .in("match_status", ["matched", "confirmed"])
-      .not("matched_invoice_id", "is", null);
-    const alreadyMatched = new Set((matchedRows || []).map((r: any) => r.matched_invoice_id));
+    // Bereits zugeordnete invoice ids rausfiltern. Paginiert, damit bei >1000
+    // Zeilen nicht still abgeschnitten wird (Supabase default limit).
+    const matchedRows = await fetchAllPaginated<any>(() =>
+      supabase
+        .from("bank_transactions")
+        .select("matched_invoice_id")
+        .in("match_status", ["matched", "confirmed"])
+        .not("matched_invoice_id", "is", null),
+    );
+    const alreadyMatched = new Set(matchedRows.map((r: any) => r.matched_invoice_id));
 
-    const { data: allInvoices, error: invErr } = await supabase
-      .from("invoices")
-      .select("id, issuer, amount, currency, date, file_name, invoice_number, type, file_hash, created_at")
-      .order("date", { ascending: false });
-    if (invErr) throw invErr;
-    const candidatesAfterMatchFilter = (allInvoices || []).filter((i: any) => !alreadyMatched.has(i.id));
+    const allInvoices = await fetchAllPaginated<any>(() =>
+      supabase
+        .from("invoices")
+        .select("id, issuer, amount, currency, date, file_name, invoice_number, type, file_hash, created_at")
+        .order("date", { ascending: false }),
+    );
+    const candidatesAfterMatchFilter = allInvoices.filter((i: any) => !alreadyMatched.has(i.id));
     // Pre-LLM dedup: bei identischen Duplikat-Rechnungen würde das Modell sonst
     // zufällig eine Kopie auswählen. Wir behalten pro Gruppe nur den ältesten
     // Eintrag (wahrscheinlich das Original).
@@ -255,6 +259,21 @@ function dedupInvoices(invoices: any[]): any[] {
     result.push(group[0]);
   }
   return result;
+}
+
+async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {
+  const PAGE_SIZE = 1000;
+  const all: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await makeQuery().range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = (data || []) as T[];
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
 }
 
 function scoreCandidates(tx: any, candidates: any[]): any[] {

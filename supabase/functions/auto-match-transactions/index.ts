@@ -152,9 +152,28 @@ serve(async (req) => {
       );
     }
 
-    // OpenAI API für intelligentes Matching
+    // OpenAI API für intelligentes Matching. Wenn der Key fehlt, ist KI-Matching
+    // nicht konfiguriert — wir failen hart statt still auf Amount-Fallback
+    // zurückzufallen, weil der User sonst denkt "KI funktioniert nicht".
     const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
     const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
+    if (!OPENAI_API_KEY) {
+      // 200 mit Flag statt 500 — supabase-js parst den Body bei Error-Status
+      // nicht zuverlässig, so kommt die Info garantiert im Frontend an.
+      return new Response(
+        JSON.stringify({
+          success: false,
+          aiKeyMissing: true,
+          error: "OPENAI_API_KEY ist in den Edge-Function-Secrets nicht gesetzt. KI-Matching deaktiviert.",
+          matchedCount: 0,
+          autoConfirmedCount: 0,
+          processedCount: 0,
+          totalUnmatched: 0,
+          remaining: 0,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     // Confidence-Schwellen für die zweistufige Auto-Confirm-Logik:
     // - >= AUTO_CONFIRM_THRESHOLD → direkt als bestätigt speichern (vollautomatisch)
@@ -165,6 +184,13 @@ serve(async (req) => {
 
     let matchedCount = 0;
     let autoConfirmedCount = 0;
+    // KI-Telemetrie, damit das Frontend Silent-Failures erkennen kann.
+    let aiAttempted = 0;
+    let aiSucceeded = 0;
+    let aiTimeouts = 0;
+    let aiHttpErrors = 0;
+    let aiParseErrors = 0;
+    let lastAiError: string | null = null;
 
     // Helper function to extract original amount from original_currency field
     // Supports multiple formats:
@@ -317,8 +343,9 @@ serve(async (req) => {
 
       if (potentialMatches.length === 0) continue;
 
-      if (OPENAI_API_KEY && potentialMatches.length >= 1) {
+      if (potentialMatches.length >= 1) {
         // OpenAI für intelligentes Matching — auch bei einzelnen Kandidaten mit Name-Match
+        aiAttempted++;
         try {
           const response = await fetchWithTimeout(
             "https://api.openai.com/v1/chat/completions",
@@ -395,6 +422,7 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
                 const jsonMatch = content.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                   const result = JSON.parse(jsonMatch[0]);
+                  aiSucceeded++;
 
                   if (result.matchedInvoiceId && result.confidence >= SUGGEST_THRESHOLD) {
                     // Hohe Confidence → automatisch als bestätigt setzen.
@@ -420,12 +448,29 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
                     continue;
                   }
                 }
-              } catch (parseError) {
+              } catch (parseError: any) {
+                aiParseErrors++;
+                lastAiError = `parse: ${parseError?.message ?? parseError}`;
                 console.error("Failed to parse AI response:", parseError);
               }
+            } else {
+              aiParseErrors++;
+              lastAiError = "empty response content";
             }
+          } else {
+            aiHttpErrors++;
+            const errBody = await response.text().catch(() => "");
+            lastAiError = `http ${response.status}: ${errBody.slice(0, 200)}`;
+            console.error("OpenAI HTTP error:", response.status, errBody.slice(0, 500));
           }
-        } catch (aiError) {
+        } catch (aiError: any) {
+          if (aiError?.name === "AbortError") {
+            aiTimeouts++;
+            lastAiError = `timeout after ${OPENAI_TIMEOUT_MS}ms`;
+          } else {
+            aiHttpErrors++;
+            lastAiError = `fetch: ${aiError?.message ?? aiError}`;
+          }
           console.error("AI matching error:", aiError);
         }
       }
@@ -459,6 +504,15 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
         processedCount: transactions.length,
         totalUnmatched,
         remaining,
+        ai: {
+          model: OPENAI_MODEL,
+          attempted: aiAttempted,
+          succeeded: aiSucceeded,
+          timeouts: aiTimeouts,
+          httpErrors: aiHttpErrors,
+          parseErrors: aiParseErrors,
+          lastError: lastAiError,
+        },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

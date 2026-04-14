@@ -186,15 +186,40 @@ export default function MatchingPage() {
     let totalAutoConfirmed = 0;
     let totalProcessed = 0;
     let initialBacklog: number | null = null;
+    let aiAttempted = 0;
+    let aiSucceeded = 0;
+    let aiTimeouts = 0;
+    let aiHttpErrors = 0;
+    let aiParseErrors = 0;
+    let lastAiError: string | null = null;
+    let aiModel: string | null = null;
 
     try {
       for (let batch = 0; batch < MAX_BATCHES; batch++) {
         const { data, error } = await supabase.functions.invoke("auto-match-transactions");
         if (error) throw error;
+        if (data?.aiKeyMissing) {
+          toast({
+            title: "KI-Matching nicht konfiguriert",
+            description: "OPENAI_API_KEY fehlt in den Supabase-Edge-Function-Secrets. In Supabase Dashboard setzen und Function redeployen.",
+            variant: "destructive",
+          });
+          return;
+        }
 
         totalMatched += data?.matchedCount ?? 0;
         totalAutoConfirmed += data?.autoConfirmedCount ?? 0;
         totalProcessed += data?.processedCount ?? 0;
+
+        if (data?.ai) {
+          aiAttempted += data.ai.attempted ?? 0;
+          aiSucceeded += data.ai.succeeded ?? 0;
+          aiTimeouts += data.ai.timeouts ?? 0;
+          aiHttpErrors += data.ai.httpErrors ?? 0;
+          aiParseErrors += data.ai.parseErrors ?? 0;
+          if (data.ai.lastError) lastAiError = data.ai.lastError;
+          if (data.ai.model) aiModel = data.ai.model;
+        }
 
         const remaining: number = data?.remaining ?? 0;
         if (initialBacklog === null) {
@@ -208,13 +233,27 @@ export default function MatchingPage() {
       }
 
       const suggested = Math.max(0, totalMatched - totalAutoConfirmed);
-      toast({
-        title: "KI-Matching abgeschlossen",
-        description:
-          totalMatched === 0
-            ? `Keine neuen Treffer gefunden${initialBacklog ? ` (${initialBacklog} Transaktionen geprüft)` : ""}`
-            : `${totalAutoConfirmed} automatisch bestätigt (≥95% Confidence) · ${suggested} als Vorschlag · ${totalProcessed} Transaktionen geprüft`,
-      });
+      const aiErrorsTotal = aiTimeouts + aiHttpErrors + aiParseErrors;
+      // Wenn die KI zwar aufgerufen wurde, aber nie erfolgreich geantwortet hat,
+      // ist das ein Konfig-/Model-Problem — nicht einfach "keine Treffer".
+      if (aiAttempted > 0 && aiSucceeded === 0) {
+        toast({
+          title: "KI-Matching fehlgeschlagen",
+          description: `Modell ${aiModel ?? "?"}: ${aiAttempted} Anfragen, 0 erfolgreich (${aiTimeouts} Timeouts, ${aiHttpErrors} HTTP-Fehler). Letzter Fehler: ${lastAiError ?? "unbekannt"}`,
+          variant: "destructive",
+        });
+      } else {
+        const aiSuffix = aiAttempted > 0
+          ? ` · KI: ${aiSucceeded}/${aiAttempted}${aiErrorsTotal > 0 ? ` (${aiErrorsTotal} Fehler)` : ""}`
+          : "";
+        toast({
+          title: "KI-Matching abgeschlossen",
+          description:
+            totalMatched === 0
+              ? `Keine neuen Treffer gefunden${initialBacklog ? ` (${initialBacklog} Transaktionen geprüft)` : ""}${aiSuffix}`
+              : `${totalAutoConfirmed} automatisch bestätigt (≥95% Confidence) · ${suggested} als Vorschlag · ${totalProcessed} Transaktionen geprüft${aiSuffix}`,
+        });
+      }
       refetch();
     } catch (error: any) {
       toast({ title: "Fehler beim Auto-Matching", description: error.message, variant: "destructive" });
