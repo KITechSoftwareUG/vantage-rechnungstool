@@ -573,9 +573,7 @@ Deno.serve(async (req) => {
     // vorherigen Lauf) fällt die Function auf den Temp-Namen zurück, statt die
     // vorhandene Datei zu überschreiben.
     if (finalStoragePath !== tempStoragePath) {
-      const { error: moveError } = await supabase.storage
-        .from("documents")
-        .move(tempStoragePath, finalStoragePath);
+      const { error: moveError } = await supabase.storage.from("documents").move(tempStoragePath, finalStoragePath);
 
       if (moveError) {
         console.error("Storage move failed, keeping temp path:", moveError);
