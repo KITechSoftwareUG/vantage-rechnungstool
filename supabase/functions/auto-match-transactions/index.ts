@@ -39,6 +39,39 @@ async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {
   return all;
 }
 
+// Pre-LLM dedup der Invoice-Kandidatenliste. Ohne diesen Schritt kriegt das
+// Modell bei identischen Duplikat-Rechnungen (gleicher Inhalt, versehentlich
+// zweimal ingested) mehrere Kandidaten mit identischen Feldern zur Auswahl und
+// entscheidet zufällig. Wir wählen pro Duplikat-Gruppe genau EINEN
+// Repräsentanten — bevorzugt den mit dem ältesten `created_at`, weil das der
+// "echte" Originaleintrag ist.
+function dedupInvoices(invoices: any[]): any[] {
+  const norm = (s: string | null | undefined) =>
+    (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const keyOf = (inv: any) => {
+    if (inv.file_hash) return `hash:${inv.file_hash}`;
+    const num = norm(inv.invoice_number);
+    if (num.length >= 3) return `num:${num}|${Math.round(Number(inv.amount) * 100)}`;
+    return `meta:${inv.date}|${norm(inv.issuer)}|${Math.round(Number(inv.amount) * 100)}`;
+  };
+  const groups = new Map<string, any[]>();
+  for (const inv of invoices) {
+    const k = keyOf(inv);
+    const g = groups.get(k) || [];
+    g.push(inv);
+    groups.set(k, g);
+  }
+  const result: any[] = [];
+  for (const group of groups.values()) {
+    // Älteste Rechnung als Repräsentant → `created_at` aufsteigend sortieren.
+    group.sort(
+      (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime(),
+    );
+    result.push(group[0]);
+  }
+  return result;
+}
+
 async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -91,7 +124,11 @@ serve(async (req) => {
     const allInvoicesRaw = await fetchAllPaginated<any>(() => supabaseClient.from("invoices").select("*"));
 
     // Filter out already matched invoices
-    const invoices = allInvoicesRaw.filter((inv: any) => !alreadyMatchedIds.has(inv.id));
+    const invoicesAfterMatchFilter = allInvoicesRaw.filter((inv: any) => !alreadyMatchedIds.has(inv.id));
+    // Dedup auf Inhalt/Rechnungsnummer/Metadaten, damit das LLM bei echten
+    // Duplikat-Rechnungen nicht zufällig eine Kopie auswählt.
+    const invoices = dedupInvoices(invoicesAfterMatchFilter);
+    console.log(`Invoices: ${allInvoicesRaw.length} total → ${invoicesAfterMatchFilter.length} unmatched → ${invoices.length} after dedup`);
 
     const totalUnmatched = allTransactions.length;
 

@@ -13,6 +13,7 @@ export interface InvoiceData {
   createdAt?: string;
   paymentMethod?: "bank" | "cash";
   invoiceNumber?: string | null;
+  fileHash?: string | null;
 }
 
 export interface ExtractedTransaction {

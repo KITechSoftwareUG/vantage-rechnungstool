@@ -39,6 +39,8 @@ export function useInvoices() {
             type: inv.type as "incoming" | "outgoing",
             status: inv.status as "processing" | "ready" | "saved",
             createdAt: inv.created_at,
+            invoiceNumber: (inv as any).invoice_number ?? null,
+            fileHash: (inv as any).file_hash ?? null,
           } as InvoiceData;
         })
       );

@@ -69,10 +69,14 @@ serve(async (req) => {
 
     const { data: allInvoices, error: invErr } = await supabase
       .from("invoices")
-      .select("id, issuer, amount, currency, date, file_name, invoice_number, type")
+      .select("id, issuer, amount, currency, date, file_name, invoice_number, type, file_hash, created_at")
       .order("date", { ascending: false });
     if (invErr) throw invErr;
-    const candidates = (allInvoices || []).filter((i: any) => !alreadyMatched.has(i.id));
+    const candidatesAfterMatchFilter = (allInvoices || []).filter((i: any) => !alreadyMatched.has(i.id));
+    // Pre-LLM dedup: bei identischen Duplikat-Rechnungen würde das Modell sonst
+    // zufällig eine Kopie auswählen. Wir behalten pro Gruppe nur den ältesten
+    // Eintrag (wahrscheinlich das Original).
+    const candidates = dedupInvoices(candidatesAfterMatchFilter);
 
     // Kandidaten vorfiltern: wenn zu viele, dann nach groben Heuristiken beschneiden
     // (Beschreibung/Issuer-Overlap oder Betrags-Nähe), damit der Prompt nicht explodiert.
@@ -222,6 +226,35 @@ function extractJson(text: string): any | null {
     }
   }
   return null;
+}
+
+// Pre-LLM dedup: groups invoices that are almost certainly the same bill and
+// returns one representative per group. Prevents the LLM from arbitrarily
+// picking between byte-identical / metadata-identical duplicates.
+function dedupInvoices(invoices: any[]): any[] {
+  const norm = (s: string | null | undefined) =>
+    (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const keyOf = (inv: any) => {
+    if (inv.file_hash) return `hash:${inv.file_hash}`;
+    const num = norm(inv.invoice_number);
+    if (num.length >= 3) return `num:${num}|${Math.round(Number(inv.amount) * 100)}`;
+    return `meta:${inv.date}|${norm(inv.issuer)}|${Math.round(Number(inv.amount) * 100)}`;
+  };
+  const groups = new Map<string, any[]>();
+  for (const inv of invoices) {
+    const k = keyOf(inv);
+    const g = groups.get(k) || [];
+    g.push(inv);
+    groups.set(k, g);
+  }
+  const result: any[] = [];
+  for (const group of groups.values()) {
+    group.sort(
+      (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime(),
+    );
+    result.push(group[0]);
+  }
+  return result;
 }
 
 function scoreCandidates(tx: any, candidates: any[]): any[] {

@@ -24,6 +24,7 @@ interface PendingInvoice {
   paymentMethod: string;
   year: number;
   month: number;
+  fileHash: string | null;
 }
 
 
@@ -73,6 +74,7 @@ export function ReviewQueue() {
             paymentMethod: inv.payment_method,
             year: inv.year,
             month: inv.month,
+            fileHash: (inv as any).file_hash ?? null,
           } as PendingInvoice;
         })
       );
@@ -194,6 +196,8 @@ export function ReviewQueue() {
       fileName: inv.fileName,
       fileUrl: inv.fileUrl,
       status: inv.status,
+      invoiceNumber: inv.invoiceNumber,
+      fileHash: inv.fileHash,
     }));
     const pending = pendingInvoices.map((inv) => ({
       id: inv.id,
@@ -204,6 +208,8 @@ export function ReviewQueue() {
       fileName: inv.fileName,
       fileUrl: inv.fileUrl,
       status: "processing" as string,
+      invoiceNumber: inv.invoiceNumber,
+      fileHash: inv.fileHash,
     }));
     return [...pending, ...confirmed];
   }, [pendingInvoices, confirmedInvoices]);

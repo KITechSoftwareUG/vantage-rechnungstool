@@ -46,6 +46,8 @@ export default function InvoicesPage() {
       fileName: inv.fileName,
       fileUrl: inv.fileUrl,
       status: inv.status,
+      invoiceNumber: inv.invoiceNumber,
+      fileHash: inv.fileHash,
     })),
     [invoices]
   );

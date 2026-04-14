@@ -21,7 +21,17 @@ interface DuplicateInfo {
   currency?: string;
   status?: string;
   fileUrl?: string;
+  duplicateReason?: "hash" | "invoice_number" | "metadata";
 }
+
+const reasonLabel = (reason?: "hash" | "invoice_number" | "metadata") => {
+  switch (reason) {
+    case "hash": return "Identischer Inhalt";
+    case "invoice_number": return "Gleiche Rechnungsnummer";
+    case "metadata": return "Gleiche Metadaten";
+    default: return "Mögliches Duplikat";
+  }
+};
 
 interface CurrentDocInfo {
   id: string;
@@ -139,7 +149,7 @@ export function DuplicateBadge({ currentId, currentDoc, duplicates, onMerge, isM
                       Aktuelles Dokument (ID: {currentId.slice(0, 8)}…)
                     </div>
                   )}
-                  <DocCard doc={dup} label="Mögliches Duplikat" />
+                  <DocCard doc={dup} label={reasonLabel(dup.duplicateReason)} />
                 </div>
                 <div className="flex justify-end">
                   <Button
