@@ -15,7 +15,7 @@ export function useBankTransactions() {
         .select(`
           *,
           bank_statements(bank, bank_type),
-          invoices(id, issuer, amount, date, file_name, file_url)
+          invoices(id, user_id, year, month, issuer, amount, date, file_name, file_url)
         `)
         .order("date", { ascending: false });
 

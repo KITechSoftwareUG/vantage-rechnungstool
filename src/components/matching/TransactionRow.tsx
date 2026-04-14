@@ -31,6 +31,7 @@ import { useUpdateTransactionMatch, useUnmatchedInvoices } from "@/hooks/useMatc
 import { useAddRecurringPattern } from "@/hooks/useRecurringPatterns";
 import { useSwipeAction } from "@/hooks/useSwipeAction";
 import { useToast } from "@/hooks/use-toast";
+import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 
 interface TransactionRowProps {
   selected?: boolean;
@@ -55,6 +56,9 @@ interface TransactionRowProps {
     bankName?: string;
     matchedInvoice?: {
       id: string;
+      user_id?: string;
+      year?: number;
+      month?: number;
       issuer: string;
       amount: number;
       date: string;
@@ -123,6 +127,8 @@ export function TransactionRow({
   const [isOpen, setIsOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [inlinePreviewOpen, setInlinePreviewOpen] = useState(false);
+  const [resolvedInvoiceUrl, setResolvedInvoiceUrl] = useState<string | null>(null);
+  const [isResolvingUrl, setIsResolvingUrl] = useState(false);
   const updateMatch = useUpdateTransactionMatch();
   const addRecurringPattern = useAddRecurringPattern();
   const { data: invoices = [] } = useUnmatchedInvoices();
@@ -149,6 +155,38 @@ export function TransactionRow({
     disableLeft: !canSwipeLeft,
     disableRight: !canSwipeRight,
   });
+
+  // Löst die Invoice-URL lazy in eine frische Signed URL auf, sobald
+  // eine Preview geöffnet wird. Behebt Fälle, in denen file_url eine
+  // interne Supabase-URL ist, die vom Browser nicht erreichbar ist.
+  const inv = transaction.matchedInvoice;
+  useEffect(() => {
+    if (!inlinePreviewOpen && !previewOpen) return;
+    if (resolvedInvoiceUrl || isResolvingUrl) return;
+    if (!inv) return;
+    if (!inv.user_id || !inv.year || !inv.month || !inv.file_name) {
+      if (inv.file_url) setResolvedInvoiceUrl(inv.file_url);
+      return;
+    }
+    setIsResolvingUrl(true);
+    resolveStorageUrl(inv.user_id, inv.year, inv.month, inv.file_name, inv.file_url)
+      .then((url) => setResolvedInvoiceUrl(url))
+      .catch(() => {
+        if (inv.file_url) setResolvedInvoiceUrl(inv.file_url);
+      })
+      .finally(() => setIsResolvingUrl(false));
+  }, [
+    inlinePreviewOpen,
+    previewOpen,
+    inv?.id,
+    inv?.user_id,
+    inv?.year,
+    inv?.month,
+    inv?.file_name,
+    inv?.file_url,
+    resolvedInvoiceUrl,
+    isResolvingUrl,
+  ]);
 
   // --- Dismiss-Animation: slide-out → collapse → DB-update ---
   const [animPhase, setAnimPhase] = useState<"idle" | "slide-out" | "collapse">("idle");
@@ -651,7 +689,7 @@ export function TransactionRow({
     </div>
 
     {/* Inline PDF-Preview - nur gerendert wenn aufgeklappt */}
-    {inlinePreviewOpen && transaction.matchedInvoice?.file_url && (
+    {inlinePreviewOpen && transaction.matchedInvoice && (
       <div
         className="border-t border-border/50 bg-muted/20 p-4"
         style={{
@@ -659,11 +697,17 @@ export function TransactionRow({
           transition: isSwiping ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
         }}
       >
-        <UrlDocumentPreview
-          fileUrl={transaction.matchedInvoice.file_url}
-          fileName={transaction.matchedInvoice.file_name}
-          className="max-h-[500px]"
-        />
+        {resolvedInvoiceUrl ? (
+          <UrlDocumentPreview
+            fileUrl={resolvedInvoiceUrl}
+            fileName={transaction.matchedInvoice.file_name}
+            className="max-h-[500px]"
+          />
+        ) : (
+          <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
+            {isResolvingUrl ? "Vorschau wird geladen…" : "Keine Vorschau verfügbar"}
+          </div>
+        )}
       </div>
     )}
 
@@ -696,17 +740,19 @@ export function TransactionRow({
                 <p className="font-medium truncate">{transaction.matchedInvoice?.file_name}</p>
               </div>
             </div>
-            {transaction.matchedInvoice?.file_url ? (
+            {resolvedInvoiceUrl ? (
               <div className="border rounded-lg overflow-hidden bg-muted/20">
-                {transaction.matchedInvoice.file_url.toLowerCase().endsWith(".pdf") ? (
+                {(transaction.matchedInvoice?.file_name ?? resolvedInvoiceUrl)
+                  .toLowerCase()
+                  .includes(".pdf") ? (
                   <iframe
-                    src={transaction.matchedInvoice.file_url}
+                    src={resolvedInvoiceUrl}
                     className="w-full h-[60vh]"
                     title="Rechnung Vorschau"
                   />
                 ) : (
                   <img
-                    src={transaction.matchedInvoice.file_url}
+                    src={resolvedInvoiceUrl}
                     alt="Rechnung Vorschau"
                     className="w-full max-h-[60vh] object-contain"
                   />
@@ -714,7 +760,7 @@ export function TransactionRow({
               </div>
             ) : (
               <div className="flex items-center justify-center h-64 border rounded-lg bg-muted/20 text-muted-foreground">
-                Keine Vorschau verfügbar
+                {isResolvingUrl ? "Vorschau wird geladen…" : "Keine Vorschau verfügbar"}
               </div>
             )}
           </div>
