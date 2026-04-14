@@ -90,11 +90,11 @@ function IngestionLogRow({
 
   function getDocStatusBadge(docStatus: string | null | undefined) {
     if (!docStatus) return null;
-    if (docStatus === "ready") {
+    if (docStatus === "ready" || docStatus === "saved") {
       return (
         <Badge variant="secondary" className="gap-1 bg-green-500/20 text-green-700 dark:text-green-400 text-xs">
           <CheckCircle2 className="h-3 w-3" />
-          Bestätigt
+          Fertig verarbeitet
         </Badge>
       );
     }
@@ -300,7 +300,7 @@ export function IngestionTracker() {
                           <p className="text-sm font-semibold">{label}</p>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                             <span>{summary.total} Dokument{summary.total !== 1 ? "e" : ""}</span>
-                            {summary.confirmed > 0 && <span className="text-primary">✓ {summary.confirmed} bestätigt</span>}
+                            {summary.confirmed > 0 && <span className="text-primary">✓ {summary.confirmed} fertig verarbeitet</span>}
                             {summary.awaitingReview > 0 && <span className="text-amber-600 dark:text-amber-400">⏳ {summary.awaitingReview} zur Überprüfung</span>}
                             {summary.errors > 0 && <span className="text-destructive">{summary.errors} Fehler</span>}
                             {summary.pending > 0 && <span className="text-warning">{summary.pending} ausstehend</span>}
