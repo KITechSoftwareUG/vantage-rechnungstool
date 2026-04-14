@@ -23,7 +23,7 @@ const FOLDER_MAPPING: Record<string, string> = {
   incoming: "01 Eingang",
   outgoing: "02 Ausgang",
   commission: "03 Provisionsabrechnung",
-  volksbank: "04 VR-Bank Kontoauszüge",
+  volksbank: "04 Kontoauszüge",
   amex: "05 AMEX Kontoauszüge",
   cash: "06 Kasse",
 };
