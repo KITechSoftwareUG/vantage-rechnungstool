@@ -3,6 +3,19 @@
 Kontext für Claude Code. Vor jeder Session **einmal komplett lesen**, bevor du
 Annahmen triffst oder Code änderst.
 
+## ⚠️ WICHTIG: Lovable ist Source of Truth
+
+**Backend und Deployment laufen über Lovable.** Das betrifft insbesondere:
+- **Auth** (Supabase Auth wird über Lovable konfiguriert)
+- **Edge Functions** (Deployment über Lovable, nicht manuell via Supabase-CLI)
+- **Datenbank / Supabase-Integration**
+- **Frontend-Deployment** (läuft über Lovable, nicht über Docker-Build auf
+  diesem Server)
+
+Der Docker-Build auf diesem Server ist nur für **lokales Prototyping /
+Entwicklung**. Produktive Änderungen an Backend, Auth oder Edge Functions
+dürfen nicht am Lovable-Deployment vorbei gemacht werden.
+
 ## Repo
 
 - Working directory: `/opt/app/vantage-rechnungstool`
