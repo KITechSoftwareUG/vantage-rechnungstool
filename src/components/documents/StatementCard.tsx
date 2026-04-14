@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Building, Calendar, CreditCard, Edit2, Check, X, RefreshCw, Loader2, Eye, Trash2, ChevronDown, ChevronUp, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,21 +17,27 @@ interface StatementCardProps {
   isReprocessing?: boolean;
   transactionCount?: number;
   index?: number;
+  transactionSearch?: string;
 }
 
-export function StatementCard({ 
-  statement, 
-  onSave, 
+export function StatementCard({
+  statement,
+  onSave,
   onDelete,
   onReprocess,
   isReprocessing = false,
   transactionCount,
-  index = 0 
+  index = 0,
+  transactionSearch,
 }: StatementCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [showTransactions, setShowTransactions] = useState(false);
+  const [showTransactions, setShowTransactions] = useState(!!transactionSearch);
   const [editData, setEditData] = useState(statement);
+
+  useEffect(() => {
+    if (transactionSearch) setShowTransactions(true);
+  }, [transactionSearch]);
 
   const handleSave = () => {
     const date = new Date(editData.date);
@@ -296,6 +302,7 @@ export function StatementCard({
               <StatementTransactionsList
                 statementId={statement.id}
                 expectedDiff={balanceDiff}
+                searchQuery={transactionSearch}
               />
             </div>
           )}

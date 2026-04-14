@@ -16,6 +16,19 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 interface Props {
   statementId: string;
   expectedDiff?: number;
+  searchQuery?: string;
+}
+
+function matchesQuery(
+  tx: { date: string; description: string; amount: number },
+  q: string
+) {
+  const lower = q.toLowerCase();
+  if (tx.description.toLowerCase().includes(lower)) return true;
+  if (tx.date === q) return true;
+  const n = parseFloat(q.replace(",", "."));
+  if (!isNaN(n) && Math.abs(Math.abs(tx.amount) - Math.abs(n)) < 0.01) return true;
+  return false;
 }
 
 const statusConfig: Record<StatementTransaction["matchStatus"], { label: string; color: string }> = {
@@ -26,8 +39,9 @@ const statusConfig: Record<StatementTransaction["matchStatus"], { label: string;
   recurring: { label: "Laufende Kosten", color: "bg-info/10 text-info border-info/20" },
 };
 
-export function StatementTransactionsList({ statementId, expectedDiff }: Props) {
+export function StatementTransactionsList({ statementId, expectedDiff, searchQuery }: Props) {
   const { data: transactions = [], isLoading } = useBankStatementTransactions(statementId);
+  const q = searchQuery?.trim() ?? "";
   const updateTx = useUpdateBankTransaction();
   const deleteTx = useDeleteBankTransaction();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -126,8 +140,15 @@ export function StatementTransactionsList({ statementId, expectedDiff }: Props) 
               const isEditing = editingId === tx.id;
               const data = isEditing ? editData! : tx;
               const isCredit = data.transactionType === "credit";
+              const isMatch = q.length > 0 && matchesQuery(tx, q);
               return (
-                <tr key={tx.id} className="hover:bg-muted/20">
+                <tr
+                  key={tx.id}
+                  className={cn(
+                    "hover:bg-muted/20",
+                    isMatch && "bg-warning/10 ring-1 ring-inset ring-warning/30"
+                  )}
+                >
                   <td className="px-2 py-2">
                     {isEditing ? (
                       <Input

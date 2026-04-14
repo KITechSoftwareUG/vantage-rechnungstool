@@ -41,11 +41,46 @@ export default function StatementsPage() {
     enabled: !!user,
   });
 
-  const filteredStatements = statements.filter(stmt =>
-    stmt.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    stmt.bank.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    stmt.accountNumber.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const trimmedQuery = searchQuery.trim();
+  const { data: transactionMatchIds = new Set<string>() } = useQuery({
+    queryKey: ["bank_transactions_search", user?.id, trimmedQuery],
+    queryFn: async (): Promise<Set<string>> => {
+      if (!trimmedQuery) return new Set();
+
+      const ors: string[] = [`description.ilike.%${trimmedQuery}%`];
+      const numeric = parseFloat(trimmedQuery.replace(",", "."));
+      if (!isNaN(numeric)) {
+        ors.push(`amount.eq.${numeric}`);
+        ors.push(`amount.eq.${-numeric}`);
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedQuery)) {
+        ors.push(`date.eq.${trimmedQuery}`);
+      }
+
+      const { data, error } = await supabase
+        .from("bank_transactions")
+        .select("bank_statement_id")
+        .or(ors.join(","));
+      if (error) throw error;
+      return new Set(
+        (data || [])
+          .map((t: any) => t.bank_statement_id)
+          .filter((id): id is string => !!id)
+      );
+    },
+    enabled: !!user && !!trimmedQuery,
+  });
+
+  const q = trimmedQuery.toLowerCase();
+  const filteredStatements = statements.filter(stmt => {
+    if (!trimmedQuery) return true;
+    return (
+      stmt.fileName.toLowerCase().includes(q) ||
+      stmt.bank.toLowerCase().includes(q) ||
+      stmt.accountNumber.toLowerCase().includes(q) ||
+      transactionMatchIds.has(stmt.id)
+    );
+  });
 
   const groupedStatements = groupByYear(filteredStatements);
 
@@ -102,7 +137,7 @@ export default function StatementsPage() {
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Suchen nach Bank, Kontonummer oder Dateiname..."
+            placeholder="Suchen nach Bank, Kontonummer, Dateiname oder Transaktion (Text, Betrag, YYYY-MM-DD)..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
@@ -124,6 +159,9 @@ export default function StatementsPage() {
               isReprocessing={reprocessingId === statement.id}
               transactionCount={transactionCounts[statement.id] || 0}
               index={index}
+              transactionSearch={
+                trimmedQuery && transactionMatchIds.has(statement.id) ? trimmedQuery : undefined
+              }
             />
           )}
           emptyMessage="Keine Kontoauszüge gefunden. Laden Sie Dokumente unter 'Upload' hoch."
@@ -140,6 +178,9 @@ export default function StatementsPage() {
               isReprocessing={reprocessingId === statement.id}
               transactionCount={transactionCounts[statement.id] || 0}
               index={index}
+              transactionSearch={
+                trimmedQuery && transactionMatchIds.has(statement.id) ? trimmedQuery : undefined
+              }
             />
           ))}
         </div>
