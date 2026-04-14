@@ -135,9 +135,9 @@ Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-
     - currency: Die Währung der Rechnung als ISO 4217 Code (z.B. "EUR", "USD", "GBP", "CHF"). 
       Suche nach Währungssymbolen (€, $, £, Fr.) oder Angaben wie "USD", "EUR" etc.
       Wenn keine Währung erkennbar ist, verwende "EUR" als Standard.
-    - detectedCategory: Erkenne, was für ein Dokument das ist. Mögliche Werte:
-      * "eingang" - Eingangsrechnung (Rechnung die man bezahlen muss, Ausgabe)
-      * "ausgang" - Ausgangsrechnung (Rechnung die man gestellt hat, Einnahme)
+    - detectedCategory: Erkenne, was für ein Dokument das ist. WICHTIG: "Wir" sind Alexander Fürthbauer / Vantage. Dokumente, deren Empfänger Alexander Fürthbauer oder Vantage ist, sind "eingang". Dokumente, deren Aussteller Alexander Fürthbauer oder Vantage ist, sind "ausgang". Mögliche Werte:
+      * "eingang" - Eingangsrechnung (Empfänger = wir; Rechnung die wir bezahlen müssen)
+      * "ausgang" - Ausgangsrechnung (Aussteller = wir; Rechnung die wir gestellt haben)
       * "provision" - Provisionsabrechnung (Abrechnung von Provisionen, Courtage, Vermittlungsgebühren)
       * "kasse" - Kassenbeleg/Barzahlung (Quittung, Taxibeleg, Barrechnung)
       Achte besonders auf Begriffe wie "Provisionsabrechnung", "Courtage", "Vermittlung" -> "provision"
