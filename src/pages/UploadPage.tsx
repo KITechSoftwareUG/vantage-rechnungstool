@@ -1,4 +1,5 @@
 import { IngestionTracker } from "@/components/upload/IngestionTracker";
+import { ProcessingBanner } from "@/components/upload/ProcessingBanner";
 import { ReviewQueue } from "@/components/upload/ReviewQueue";
 
 export default function UploadPage() {
@@ -12,6 +13,11 @@ export default function UploadPage() {
         <p className="mt-1 text-muted-foreground">
           Dokumente werden automatisch über n8n eingespeist
         </p>
+      </div>
+
+      {/* Live-Status aller laufenden Drive-Uploads */}
+      <div className="animate-fade-in">
+        <ProcessingBanner />
       </div>
 
       {/* Review Queue - Documents pending review */}

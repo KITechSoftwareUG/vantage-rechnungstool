@@ -1,5 +1,12 @@
 import { supabase } from "@/integrations/supabase/client";
 
+// Session-Cache für Signed URLs. Ohne Cache löst jeder React-Query-Refetch
+// (alle 3-10s) für N Rechnungen N neue createSignedUrl-Calls aus. Signed URLs
+// gelten 1h; wir refreshen 5min vor Ablauf, um Race-Conditions zu vermeiden.
+const SIGNED_URL_TTL_MS = 3600 * 1000;
+const SIGNED_URL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
+
 function extractStoragePath(fileUrl: string): string | null {
   try {
     const parsed = new URL(fileUrl);
@@ -40,11 +47,19 @@ export async function resolveStorageUrl(
     `${userId}/${year}/${String(month).padStart(2, "0")}/${fileName}`,
   ].filter(Boolean) as string[];
 
+  const now = Date.now();
   for (const path of candidates) {
+    const cached = signedUrlCache.get(path);
+    if (cached && cached.expiresAt - SIGNED_URL_REFRESH_MARGIN_MS > now) {
+      return cached.url;
+    }
     const { data, error } = await supabase.storage
       .from("documents")
       .createSignedUrl(path, 3600);
-    if (!error && data?.signedUrl) return data.signedUrl;
+    if (!error && data?.signedUrl) {
+      signedUrlCache.set(path, { url: data.signedUrl, expiresAt: now + SIGNED_URL_TTL_MS });
+      return data.signedUrl;
+    }
   }
 
   // Last resort: return the stored URL (may be an internal URL, but UrlDocumentPreview

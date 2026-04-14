@@ -163,7 +163,19 @@ export function useIngestionLogs() {
         document_status: log.document_id ? (statusMap[log.document_id] ?? null) : null,
       }));
     },
-    refetchInterval: 3000,
+    // Adaptive Polling-Frequenz:
+    // - 3 s wenn aktive `processing`-Logs existieren (User wartet auf OCR)
+    // - 15 s sonst (nur Status-Aktualisierungen, keine Eile)
+    // - false wenn Tab versteckt (kein Polling im Hintergrund)
+    refetchInterval: (query) => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return false;
+      }
+      const data = query.state.data as IngestionLog[] | undefined;
+      const hasProcessing = data?.some((l) => l.status === "processing") ?? false;
+      return hasProcessing ? 3000 : 15000;
+    },
+    refetchIntervalInBackground: false,
   });
 
   const groupedLogs = useMemo((): IngestionCategoryGroup[] => {

@@ -529,8 +529,16 @@ Jede Transaktion MUSS enthalten: date, description, amount (positive Zahl), type
 originalCurrency nur bei Fremdwährung, sonst null.
 Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
 
+      // Der Verifikations-Pass ist OPTIONAL. Harter 45s-Cap via AbortController:
+      // ohne Cap hing der 2. Pass (Pro + grosses PDF) bis zum Supabase-Edge-
+      // Function-Wall-Clock-Limit (~150s) und der ganze Webhook-Run brach ab
+      // → Kontoauszug wurde nicht eingefügt. KEIN Retry: wenn Pro langsam ist,
+      // lieber Pass-1 übernehmen als den ganzen Ingest zu blockieren.
+      const VERIFY_TIMEOUT_MS = 45000;
+      const verifyCtrl = new AbortController();
+      const verifyTimer = setTimeout(() => verifyCtrl.abort(), VERIFY_TIMEOUT_MS);
       try {
-        const verifyResponse = await fetchWithRetry("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        const verifyResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${LOVABLE_API_KEY}`,
@@ -550,6 +558,7 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
               },
             ],
           }),
+          signal: verifyCtrl.signal,
         });
 
         if (verifyResponse.ok) {
@@ -571,8 +580,13 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
           verificationWarning = "Verifikationslauf nicht möglich — nur erster OCR-Pass verwendet.";
         }
       } catch (verifyError) {
-        console.error("Verification pass error:", verifyError);
-        verificationWarning = "Verifikationslauf fehlgeschlagen — nur erster OCR-Pass verwendet.";
+        const isAbort = verifyError instanceof Error && verifyError.name === "AbortError";
+        console.error("Verification pass error:", isAbort ? "timeout" : verifyError);
+        verificationWarning = isAbort
+          ? "Verifikationslauf nach 45s abgebrochen — nur erster OCR-Pass verwendet."
+          : "Verifikationslauf fehlgeschlagen — nur erster OCR-Pass verwendet.";
+      } finally {
+        clearTimeout(verifyTimer);
       }
     }
 
