@@ -10,7 +10,7 @@ import { Cloud, CloudOff, Loader2, FolderSync, Check, Radio } from "lucide-react
 const FOLDER_MAPPING: Record<string, string> = {
   incoming: "01 Eingang (Provisionsabrechnungen, etc...)",
   outgoing: "02 Ausgang (Rechnungen, Belege, etc...)",
-  volksbank: "03 VR-Bank Kontoauszüge",
+  volksbank: "03 Kontoauszüge",
   amex: "04 AMEX Kontoauszüge",
   commission: "05 Provisionsabrechnung",
   cash: "06 Kasse",
