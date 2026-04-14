@@ -26,10 +26,13 @@ import { useKeyboardNavigation } from "@/hooks/useKeyboardNavigation";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
+import { MatchingAgentDialog } from "@/components/matching/MatchingAgentDialog";
+import { Bot } from "lucide-react";
 
 export default function MatchingPage() {
   const { toast } = useToast();
   const [isAutoMatching, setIsAutoMatching] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { data: invoices = [] } = useInvoices();
   const bulkConfirm = useBulkConfirmMatches();
@@ -340,20 +343,38 @@ export default function MatchingPage() {
           </div>
         </div>
 
-        <Button
-          variant="gradient"
-          onClick={handleAutoMatch}
-          disabled={isAutoMatching || unmatchedCount === 0}
-          className="gap-2"
-        >
-          {isAutoMatching ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Sparkles className="h-4 w-4" />
-          )}
-          KI Auto-Matching
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setAgentOpen(true)}
+            disabled={unmatchedCount === 0}
+            className="gap-2"
+            title="Offene Transaktionen zusammen mit dem KI-Agenten durchgehen"
+          >
+            <Bot className="h-4 w-4" />
+            KI-Assistent ({unmatchedCount})
+          </Button>
+          <Button
+            variant="gradient"
+            onClick={handleAutoMatch}
+            disabled={isAutoMatching || unmatchedCount === 0}
+            className="gap-2"
+          >
+            {isAutoMatching ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            KI Auto-Matching
+          </Button>
+        </div>
       </div>
+
+      <MatchingAgentDialog
+        open={agentOpen}
+        onOpenChange={setAgentOpen}
+        transactions={transactions.filter((t: any) => t.matchStatus === "unmatched")}
+      />
 
       {/* Bulk Action Bar */}
       {selectedIds.size > 0 && (
