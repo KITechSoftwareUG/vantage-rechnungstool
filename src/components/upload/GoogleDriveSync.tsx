@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { useGoogleDrive } from "@/hooks/useGoogleDrive";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Cloud, CloudOff, Loader2, FolderSync, Check, Radio } from "lucide-react";
+import { Cloud, CloudOff, Loader2, FolderSync, Check, Radio, AlertCircle } from "lucide-react";
 
 // Mapping of upload categories to Google Drive folder names
 const FOLDER_MAPPING: Record<string, string> = {
@@ -44,6 +44,7 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
   const [isPolling, setIsPolling] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [stats, setStats] = useState<{ total: number; processed: number } | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Handle OAuth callback
@@ -81,15 +82,35 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
       });
 
       if (response.error) {
+        const msg = response.error.message || String(response.error);
         console.error("Sync error:", response.error);
+        setLastError(msg);
+        if (showToasts) {
+          toast({
+            title: "Sync fehlgeschlagen",
+            description: msg,
+            variant: "destructive",
+          });
+        }
         return 0;
       }
 
       const result: SyncResult = response.data;
 
+      if (result.error) {
+        setLastError(result.error);
+        if (showToasts) {
+          toast({ title: "Sync fehlgeschlagen", description: result.error, variant: "destructive" });
+        }
+        return 0;
+      }
+
       if (!result.connected) {
         return 0;
       }
+
+      // Erfolgreich → vorherigen Fehler-Zustand verwerfen.
+      setLastError(null);
 
       setStats({
         total: result.totalInFolder || 0,
@@ -134,7 +155,12 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
 
       return 0;
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       console.error("Sync failed:", error);
+      setLastError(msg);
+      if (showToasts) {
+        toast({ title: "Sync fehlgeschlagen", description: msg, variant: "destructive" });
+      }
       return 0;
     }
   }, [category, onFilesImported, toast]);
@@ -239,10 +265,16 @@ export function GoogleDriveSync({ category, onFilesImported }: GoogleDriveSyncPr
             Live
           </Badge>
         )}
-        {stats && (
+        {stats && !lastError && (
           <span className="text-xs text-muted-foreground">
             {stats.processed}/{stats.total} verarbeitet
           </span>
+        )}
+        {lastError && (
+          <Badge variant="destructive" className="gap-1" title={lastError}>
+            <AlertCircle className="h-3 w-3" />
+            Sync-Fehler
+          </Badge>
         )}
       </div>
       

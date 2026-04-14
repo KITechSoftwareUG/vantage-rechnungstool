@@ -363,7 +363,14 @@ export default function InvoicesPage() {
         <YearMonthAccordion
           data={groupedInvoices}
           renderDocument={(invoice, index) => (
-            <div key={invoice.id} className="relative">
+            <div
+              key={invoice.id}
+              className="relative"
+              // Native Lazy-Render: Karten au\u00dferhalb des Viewports werden
+              // nicht gepainted. Dropt Rendering-Last bei 500+ Rechnungen
+              // drastisch, ohne externe Library.
+              style={{ contentVisibility: "auto", containIntrinsicSize: "320px" }}
+            >
               {isSelectMode && (
                 <div className="absolute top-2 left-2 z-10">
                   <Checkbox

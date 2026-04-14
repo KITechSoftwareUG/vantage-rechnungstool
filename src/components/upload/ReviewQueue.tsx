@@ -133,8 +133,12 @@ export function ReviewQueue() {
 
   const confirmAllMutation = useMutation({
     mutationFn: async () => {
-      const updates = pendingInvoices.map((inv) =>
-        supabase
+      // Promise.allSettled statt Promise.all: ein Fehler in der Mitte des
+      // Batches darf nicht alle nachfolgenden Updates verschlucken. Wir
+      // liefern detaillierte Fehler pro Datei zurück, damit der User sieht,
+      // welche Rechnung wirklich gehängt hat.
+      const updates = pendingInvoices.map(async (inv) => {
+        const { error } = await supabase
           .from("invoices")
           .update({
             date: inv.date,
@@ -146,16 +150,37 @@ export function ReviewQueue() {
             invoice_number: inv.invoiceNumber,
             status: "ready",
           })
-          .eq("id", inv.id)
-      );
-      const results = await Promise.all(updates);
-      const failed = results.find((r) => r.error);
-      if (failed?.error) throw failed.error;
+          .eq("id", inv.id);
+        if (error) throw new Error(`${inv.fileName}: ${error.message}`);
+        return inv;
+      });
+      const results = await Promise.allSettled(updates);
+      const failures = results
+        .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+        .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
+      const successCount = results.length - failures.length;
+      return { successCount, failures };
     },
-    onSuccess: () => {
+    onSuccess: ({ successCount, failures }) => {
       queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      toast({ title: `${pendingInvoices.length} Rechnungen bestätigt` });
+      if (successCount > 0) {
+        toast({ title: `${successCount} Rechnung${successCount === 1 ? "" : "en"} bestätigt` });
+      }
+      // Pro Fehler eine eigene Toast — bei Massen-Aktion können das viele
+      // sein, deshalb cappen wir bei 3 und fassen den Rest zusammen.
+      const previewFailures = failures.slice(0, 3);
+      for (const msg of previewFailures) {
+        toast({ title: "Bestätigung fehlgeschlagen", description: msg, variant: "destructive" });
+      }
+      if (failures.length > previewFailures.length) {
+        toast({
+          title: `${failures.length - previewFailures.length} weitere Fehler`,
+          description: "Siehe Konsole für Details.",
+          variant: "destructive",
+        });
+        console.error("Bulk confirm failures:", failures);
+      }
       setConfirmAll(false);
     },
     onError: (error) => {

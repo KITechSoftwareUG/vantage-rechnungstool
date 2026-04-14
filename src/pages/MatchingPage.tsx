@@ -486,12 +486,18 @@ export default function MatchingPage() {
                       <div className="w-32 text-right">Aktionen</div>
                     </div>
                     {monthTransactions.map((transaction: any) => (
-                      <TransactionRow
+                      <div
                         key={transaction.id}
-                        transaction={transaction}
-                        selected={selectedIds.has(transaction.id)}
-                        onToggleSelect={toggleSelect}
-                      />
+                        // Native Lazy-Render f\u00fcr lange Transaktions-Listen
+                        // (3000+ Rows). Keine externe Virtualisierungs-Lib n\u00f6tig.
+                        style={{ contentVisibility: "auto", containIntrinsicSize: "84px" }}
+                      >
+                        <TransactionRow
+                          transaction={transaction}
+                          selected={selectedIds.has(transaction.id)}
+                          onToggleSelect={toggleSelect}
+                        />
+                      </div>
                     ))}
                   </CollapsibleContent>
                 </Collapsible>
