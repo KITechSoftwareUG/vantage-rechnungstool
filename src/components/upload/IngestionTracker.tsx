@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
@@ -165,8 +165,18 @@ export function IngestionTracker() {
   const [deleteLogDocType, setDeleteLogDocType] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [showCleanupUnprocessed, setShowCleanupUnprocessed] = useState(false);
 
   const { logs, isLoading, refetch, groupedLogs, deleteMutation, bulkDeleteMutation } = useIngestionLogs();
+
+  const unprocessedIds = useMemo(() => {
+    if (!logs) return new Set<string>();
+    return new Set(
+      logs
+        .filter((l) => l.document_status !== "ready" && l.document_status !== "saved")
+        .map((l) => l.id)
+    );
+  }, [logs]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -216,6 +226,12 @@ export function IngestionTracker() {
     });
   };
 
+  const handleCleanupUnprocessed = () => {
+    bulkDeleteMutation.mutate(unprocessedIds, {
+      onSettled: () => setShowCleanupUnprocessed(false),
+    });
+  };
+
   const handleSingleDelete = () => {
     if (!deleteLogId) return;
     deleteMutation.mutate(
@@ -261,6 +277,17 @@ export function IngestionTracker() {
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     {selectedIds.size} löschen
+                  </Button>
+                )}
+                {unprocessedIds.size > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    onClick={() => setShowCleanupUnprocessed(true)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Unverarbeitete entfernen ({unprocessedIds.size})
                   </Button>
                 )}
               </>
@@ -369,6 +396,14 @@ export function IngestionTracker() {
         onConfirm={handleBulkDelete}
         title={`${selectedIds.size} Dokument${selectedIds.size !== 1 ? "e" : ""} entfernen`}
         description={`Möchten Sie ${selectedIds.size} ausgewählte Dokument${selectedIds.size !== 1 ? "e" : ""} wirklich entfernen? Die Einträge und zugehörigen Dokumente werden aus der Datenbank gelöscht.`}
+        isDeleting={bulkDeleteMutation.isPending}
+      />
+      <DeleteConfirmationDialog
+        open={showCleanupUnprocessed}
+        onOpenChange={setShowCleanupUnprocessed}
+        onConfirm={handleCleanupUnprocessed}
+        title={`${unprocessedIds.size} unverarbeitete Einträge entfernen`}
+        description={`Alle Einträge, die nicht den Status "fertig verarbeitet" haben (z. B. Fehler, Duplikate, noch in Bearbeitung), werden aus der Liste entfernt. Zugehörige Dokumente werden ebenfalls aus der Datenbank gelöscht.`}
         isDeleting={bulkDeleteMutation.isPending}
       />
     </>
