@@ -31,9 +31,8 @@ serve(async (req) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) throw new Error("No authorization header");
 
-    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-    if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
-    const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
+    const llm = resolveLLM();
+    if (!llm) throw new Error("Weder GEMINI_API_KEY noch OPENAI_API_KEY ist in den Edge-Function-Secrets gesetzt");
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
@@ -140,14 +139,14 @@ serve(async (req) => {
       userMessage || "(keine Antwort, triff den besten Vorschlag)",
     ].join("\n");
 
-    const llmRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    const llmRes = await fetch(`${llm.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${llm.apiKey}`,
       },
       body: JSON.stringify({
-        model: OPENAI_MODEL,
+        model: llm.model,
         temperature: 0.1,
         response_format: { type: "json_object" },
         messages: [
@@ -259,6 +258,35 @@ function dedupInvoices(invoices: any[]): any[] {
     result.push(group[0]);
   }
   return result;
+}
+
+type LLMConfig = {
+  provider: "gemini" | "openai";
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+};
+
+function resolveLLM(): LLMConfig | null {
+  const geminiKey = Deno.env.get("GEMINI_API_KEY");
+  if (geminiKey) {
+    return {
+      provider: "gemini",
+      apiKey: geminiKey,
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash",
+    };
+  }
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (openaiKey) {
+    return {
+      provider: "openai",
+      apiKey: openaiKey,
+      baseUrl: "https://api.openai.com/v1",
+      model: Deno.env.get("OPENAI_MODEL") ?? Deno.env.get("LLM_MODEL") ?? "gpt-4o-mini",
+    };
+  }
+  return null;
 }
 
 async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {

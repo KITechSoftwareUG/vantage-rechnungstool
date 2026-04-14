@@ -152,19 +152,16 @@ serve(async (req) => {
       );
     }
 
-    // OpenAI API für intelligentes Matching. Wenn der Key fehlt, ist KI-Matching
-    // nicht konfiguriert — wir failen hart statt still auf Amount-Fallback
-    // zurückzufallen, weil der User sonst denkt "KI funktioniert nicht".
-    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-    const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
-    if (!OPENAI_API_KEY) {
-      // 200 mit Flag statt 500 — supabase-js parst den Body bei Error-Status
-      // nicht zuverlässig, so kommt die Info garantiert im Frontend an.
+    // LLM-Config: Gemini oder OpenAI, je nachdem welches Secret gesetzt ist.
+    // Beide nutzen den OpenAI-kompatiblen Endpoint — Google bietet den offiziell
+    // unter generativelanguage.googleapis.com/v1beta/openai an.
+    const llm = resolveLLM();
+    if (!llm) {
       return new Response(
         JSON.stringify({
           success: false,
           aiKeyMissing: true,
-          error: "OPENAI_API_KEY ist in den Edge-Function-Secrets nicht gesetzt. KI-Matching deaktiviert.",
+          error: "Weder GEMINI_API_KEY noch OPENAI_API_KEY ist in den Edge-Function-Secrets gesetzt. KI-Matching deaktiviert.",
           matchedCount: 0,
           autoConfirmedCount: 0,
           processedCount: 0,
@@ -348,15 +345,15 @@ serve(async (req) => {
         aiAttempted++;
         try {
           const response = await fetchWithTimeout(
-            "https://api.openai.com/v1/chat/completions",
+            `${llm.baseUrl}/chat/completions`,
             {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${OPENAI_API_KEY}`,
+                Authorization: `Bearer ${llm.apiKey}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                model: OPENAI_MODEL,
+                model: llm.model,
                 response_format: { type: "json_object" },
                 messages: [
                   {
@@ -505,7 +502,8 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
         totalUnmatched,
         remaining,
         ai: {
-          model: OPENAI_MODEL,
+          provider: llm.provider,
+          model: llm.model,
           attempted: aiAttempted,
           succeeded: aiSucceeded,
           timeouts: aiTimeouts,
@@ -525,3 +523,35 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
     });
   }
 });
+
+type LLMConfig = {
+  provider: "gemini" | "openai";
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+};
+
+// Gemini bevorzugt (der User hat explizit darauf umgestellt). OpenAI nur als
+// Fallback, damit ein altes Secret nicht sofort zu Downtime führt.
+function resolveLLM(): LLMConfig | null {
+  const geminiKey = Deno.env.get("GEMINI_API_KEY");
+  if (geminiKey) {
+    return {
+      provider: "gemini",
+      apiKey: geminiKey,
+      // Google stellt einen OpenAI-kompatiblen Endpoint unter /v1beta/openai bereit.
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash",
+    };
+  }
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (openaiKey) {
+    return {
+      provider: "openai",
+      apiKey: openaiKey,
+      baseUrl: "https://api.openai.com/v1",
+      model: Deno.env.get("OPENAI_MODEL") ?? Deno.env.get("LLM_MODEL") ?? "gpt-4o-mini",
+    };
+  }
+  return null;
+}
