@@ -6,6 +6,49 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Harte Obergrenze pro Invocation: bei 1-2s pro OpenAI-Call gibt das einen
+// Wall-Clock von ~100s — gut unterhalb des Edge-Function-Timeouts. Das
+// Frontend ruft die Function in einer Schleife auf, bis `remaining === 0`.
+const MAX_TRANSACTIONS_PER_INVOCATION = 50;
+
+// Per-Call-Timeout für OpenAI: ein hängender Call darf nicht den gesamten
+// Run blockieren.
+const OPENAI_TIMEOUT_MS = 20000;
+
+// Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
+// Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
+// pro Transaktion auftauchen → Token-Explosion und schlechtere Genauigkeit.
+const MAX_CANDIDATES_PER_TX = 15;
+
+// Supabase begrenzt Selects standardmäßig auf 1000 Rows. Ohne Pagination
+// verschwinden bei großen Datenmengen sowohl Transaktionen als auch
+// already-matched Invoice-IDs aus der Sicht der Function — letzteres führt
+// dazu, dass bereits gematchte Rechnungen erneut als Kandidaten auftauchen.
+async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {
+  const PAGE_SIZE = 1000;
+  const all: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await makeQuery().range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = (data || []) as T[];
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -29,39 +72,52 @@ serve(async (req) => {
       throw new Error("Not authenticated");
     }
 
-    // Get all unmatched transactions (no bank type filter needed)
-    const { data: transactions, error: transError } = await supabaseClient
-      .from("bank_transactions")
-      .select("*, bank_statements(bank_type)")
-      .eq("match_status", "unmatched");
+    // Alle drei Selects MÜSSEN paginiert sein, sonst werden bei >1000 Rows
+    // stillschweigend Daten abgeschnitten.
+    const allTransactions = await fetchAllPaginated<any>(() =>
+      supabaseClient
+        .from("bank_transactions")
+        .select("*, bank_statements(bank_type)")
+        .eq("match_status", "unmatched")
+        .order("date", { ascending: false }),
+    );
 
-    if (transError) throw transError;
+    const matchedInvoiceIds = await fetchAllPaginated<any>(() =>
+      supabaseClient.from("bank_transactions").select("matched_invoice_id").not("matched_invoice_id", "is", null),
+    );
 
-    // Get all invoices that are NOT already matched to a transaction
-    const { data: matchedInvoiceIds, error: matchedError } = await supabaseClient
-      .from("bank_transactions")
-      .select("matched_invoice_id")
-      .not("matched_invoice_id", "is", null);
+    const alreadyMatchedIds = new Set(matchedInvoiceIds.map((t: any) => t.matched_invoice_id));
 
-    if (matchedError) throw matchedError;
-
-    const alreadyMatchedIds = new Set((matchedInvoiceIds || []).map((t: any) => t.matched_invoice_id));
-
-    const { data: allInvoices, error: invError } = await supabaseClient.from("invoices").select("*");
-
-    if (invError) throw invError;
+    const allInvoicesRaw = await fetchAllPaginated<any>(() => supabaseClient.from("invoices").select("*"));
 
     // Filter out already matched invoices
-    const invoices = (allInvoices || []).filter((inv: any) => !alreadyMatchedIds.has(inv.id));
+    const invoices = allInvoicesRaw.filter((inv: any) => !alreadyMatchedIds.has(inv.id));
 
-    if (!transactions || transactions.length === 0 || !invoices || invoices.length === 0) {
-      return new Response(JSON.stringify({ success: true, matchedCount: 0 }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const totalUnmatched = allTransactions.length;
+
+    // Pro Invocation nur eine begrenzte Menge Transaktionen verarbeiten,
+    // damit wir nicht in den Wall-Clock-Timeout der Edge Function laufen.
+    // Das Frontend ruft die Function in einer Schleife auf, bis `remaining=0`.
+    const transactions = allTransactions.slice(0, MAX_TRANSACTIONS_PER_INVOCATION);
+    const remaining = Math.max(0, totalUnmatched - transactions.length);
+
+    if (transactions.length === 0 || invoices.length === 0) {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          matchedCount: 0,
+          autoConfirmedCount: 0,
+          processedCount: 0,
+          totalUnmatched,
+          remaining: 0,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
-    // Use Lovable AI Gateway for intelligent matching
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    // OpenAI API für intelligentes Matching
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
 
     // Confidence-Schwellen für die zweistufige Auto-Confirm-Logik:
     // - >= AUTO_CONFIRM_THRESHOLD → direkt als bestätigt speichern (vollautomatisch)
@@ -207,35 +263,41 @@ serve(async (req) => {
       });
 
       // Filter potential matches: good name match OR exact amount match
+      // Top-N: bei generischen Issuern können sonst hunderte Kandidaten
+      // pro Transaktion ans LLM gehen → Token-Explosion + Genauigkeitsverlust.
       potentialMatches = invoicesWithScores
         .filter((item: any) => item.nameScore >= 50 || item.exactAmountMatch)
         .sort((a: any, b: any) => b.combinedScore - a.combinedScore)
+        .slice(0, MAX_CANDIDATES_PER_TX)
         .map((item: any) => item.invoice);
 
       if (potentialMatches.length === 0) {
         // Fallback: exact amount match only
-        potentialMatches = invoices.filter((inv: any) => {
-          return Math.abs(matchAmount - inv.amount) < 0.01;
-        });
+        potentialMatches = invoices
+          .filter((inv: any) => Math.abs(matchAmount - inv.amount) < 0.01)
+          .slice(0, MAX_CANDIDATES_PER_TX);
       }
 
       if (potentialMatches.length === 0) continue;
 
-      if (LOVABLE_API_KEY && potentialMatches.length >= 1) {
-        // Use AI for intelligent matching - now also for single candidates with name matching
+      if (OPENAI_API_KEY && potentialMatches.length >= 1) {
+        // OpenAI für intelligentes Matching — auch bei einzelnen Kandidaten mit Name-Match
         try {
-          const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${LOVABLE_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "google/gemini-2.5-flash",
-              messages: [
-                {
-                  role: "system",
-                  content: `Du bist ein präziser Finanz-Matching-Assistent. Du ordnest Banktransaktionen den richtigen Rechnungen zu.
+          const response = await fetchWithTimeout(
+            "https://api.openai.com/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${OPENAI_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: OPENAI_MODEL,
+                response_format: { type: "json_object" },
+                messages: [
+                  {
+                    role: "system",
+                    content: `Du bist ein präziser Finanz-Matching-Assistent. Du ordnest Banktransaktionen den richtigen Rechnungen zu.
 
 KRITERIEN (in dieser Reihenfolge gewichtet):
 
@@ -266,10 +328,10 @@ WENN MEHRERE RECHNUNGEN PASSEN könnten: Wähle die mit der besten Aussteller-Ü
 
 ANTWORT-FORMAT (NUR JSON, sonst nichts):
 { "matchedInvoiceId": "uuid oder null", "confidence": 0-100, "reason": "knappe Begründung in einem Satz" }`,
-                },
-                {
-                  role: "user",
-                  content: `Ordne diese Transaktion der besten Rechnung zu:
+                  },
+                  {
+                    role: "user",
+                    content: `Ordne diese Transaktion der besten Rechnung zu:
 
 Transaktion:
 - Datum: ${transaction.date}
@@ -280,10 +342,12 @@ ${transaction.original_currency ? `- Original-Currency-Info: ${transaction.origi
 
 Mögliche Rechnungen (vorgefiltert nach Name/Betrag):
 ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer} | Betrag: ${inv.amount} ${inv.currency || "EUR"} | Datum: ${inv.date}`).join("\n")}`,
-                },
-              ],
-            }),
-          });
+                  },
+                ],
+              }),
+            },
+            OPENAI_TIMEOUT_MS,
+          );
 
           if (response.ok) {
             const data = await response.json();
@@ -350,9 +414,17 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
       }
     }
 
-    return new Response(JSON.stringify({ success: true, matchedCount, autoConfirmedCount }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        matchedCount,
+        autoConfirmedCount,
+        processedCount: transactions.length,
+        totalUnmatched,
+        remaining,
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("Auto-match error:", error);
