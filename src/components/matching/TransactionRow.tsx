@@ -127,9 +127,14 @@ export function TransactionRow({
   const addRecurringPattern = useAddRecurringPattern();
   const { data: invoices = [] } = useUnmatchedInvoices();
 
-  // Swipe links → "Laufende Kosten", Swipe rechts → zurück auf "Offen"
+  // Swipe links → "Laufende Kosten" (nur auf offenen Zeilen).
+  // Swipe rechts: auf offenen Zeilen → "Ignorieren", auf Laufende-Kosten/Ignoriert → zurück auf "Offen".
   const canSwipeLeft = transaction.matchStatus === "unmatched" || transaction.matchStatus === "no_match";
-  const canSwipeRight = transaction.matchStatus === "recurring";
+  const rightSwipeBringsBack =
+    transaction.matchStatus === "recurring" || transaction.matchStatus === "ignored";
+  const rightSwipeIgnores =
+    transaction.matchStatus === "unmatched" || transaction.matchStatus === "no_match";
+  const canSwipeRight = rightSwipeBringsBack || rightSwipeIgnores;
   const {
     offset,
     isSwiping,
@@ -172,7 +177,11 @@ export function TransactionRow({
     if (dismissing === "left") {
       await handleRecurring();
     } else if (dismissing === "right") {
-      await handleUnmatch();
+      if (rightSwipeBringsBack) {
+        await handleUnmatch();
+      } else {
+        await handleIgnore();
+      }
     }
     setAnimPhase("idle");
     setRowHeight(undefined);
@@ -254,6 +263,23 @@ export function TransactionRow({
     }
   };
 
+  const handleIgnore = async () => {
+    try {
+      await updateMatch.mutateAsync({
+        transactionId: transaction.id,
+        invoiceId: null,
+        matchStatus: "ignored",
+      });
+      toast({
+        title: "Transaktion ignoriert",
+        description: "Du findest sie weiterhin im Abschnitt 'Ignoriert'.",
+      });
+      setIsOpen(false);
+    } catch (error: any) {
+      toast({ title: "Fehler", description: error.message, variant: "destructive" });
+    }
+  };
+
   const handleRecurring = async () => {
     try {
       await addRecurringPattern.mutateAsync(transaction.description);
@@ -279,6 +305,7 @@ export function TransactionRow({
     confirmed: { label: "Bestätigt", color: "bg-success/10 text-success border-success/20" },
     no_match: { label: "Keine Rechnung", color: "bg-muted text-muted-foreground border-muted" },
     recurring: { label: "Laufende Kosten", color: "bg-info/10 text-info border-info/20" },
+    ignored: { label: "Ignoriert", color: "bg-muted text-muted-foreground border-muted" },
   };
 
   const status = statusConfig[transaction.matchStatus as keyof typeof statusConfig] || statusConfig.unmatched;
@@ -373,15 +400,19 @@ export function TransactionRow({
         </div>
       )}
 
-      {/* Swipe-Hintergrund RECHTS → "Zurück auf Offen" (amber/warning) */}
+      {/* Swipe-Hintergrund RECHTS → "Ignorieren" (grau) oder "Zurück auf Offen" (amber) */}
       {swipeDirection === "right" && (
         <div
           className="absolute inset-y-0 left-0 flex items-center justify-start overflow-hidden rounded-l-lg"
           style={{
             width: Math.abs(offset),
-            background: isPastThreshold
-              ? "linear-gradient(270deg, rgba(245,158,11,0.7) 0%, rgba(245,158,11,0.95) 100%)"
-              : "linear-gradient(270deg, rgba(245,158,11,0.2) 0%, rgba(245,158,11,0.5) 100%)",
+            background: rightSwipeBringsBack
+              ? isPastThreshold
+                ? "linear-gradient(270deg, rgba(245,158,11,0.7) 0%, rgba(245,158,11,0.95) 100%)"
+                : "linear-gradient(270deg, rgba(245,158,11,0.2) 0%, rgba(245,158,11,0.5) 100%)"
+              : isPastThreshold
+                ? "linear-gradient(270deg, rgba(100,116,139,0.75) 0%, rgba(71,85,105,0.95) 100%)"
+                : "linear-gradient(270deg, rgba(100,116,139,0.25) 0%, rgba(71,85,105,0.5) 100%)",
           }}
         >
           <div
@@ -394,16 +425,20 @@ export function TransactionRow({
           >
             {swipeProgress > 0.6 && (
               <span className="text-sm font-semibold whitespace-nowrap">
-                Zurück auf Offen
+                {rightSwipeBringsBack ? "Zurück auf Offen" : "Ignorieren"}
               </span>
             )}
-            <Undo2
-              className="h-5 w-5 shrink-0"
-              style={{
-                transform: isPastThreshold ? "rotate(-45deg)" : "none",
-                transition: "transform 0.2s ease-out",
-              }}
-            />
+            {rightSwipeBringsBack ? (
+              <Undo2
+                className="h-5 w-5 shrink-0"
+                style={{
+                  transform: isPastThreshold ? "rotate(-45deg)" : "none",
+                  transition: "transform 0.2s ease-out",
+                }}
+              />
+            ) : (
+              <EyeOff className="h-5 w-5 shrink-0" />
+            )}
           </div>
         </div>
       )}

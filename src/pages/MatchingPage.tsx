@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, Check, X, Keyboard } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, Check, X, Keyboard, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -73,12 +73,16 @@ export default function MatchingPage() {
     toggleMonth,
     recurringOpen,
     setRecurringOpen,
+    ignoredOpen,
+    setIgnoredOpen,
     groupedByMonth,
     recurringTransactions,
+    ignoredTransactions,
     unmatchedCount,
     matchedCount,
     confirmedCount,
     recurringCount,
+    ignoredCount,
   } = useFilteredTransactions();
 
   const updateMatch = useUpdateTransactionMatch();
@@ -90,9 +94,10 @@ export default function MatchingPage() {
     groupedByMonth.forEach((g) => g.transactions.forEach((t: any) => ids.push(t.id)));
     if (filterStatus === "all") {
       recurringTransactions.forEach((t: any) => ids.push(t.id));
+      ignoredTransactions.forEach((t: any) => ids.push(t.id));
     }
     return ids;
-  }, [groupedByMonth, recurringTransactions, filterStatus]);
+  }, [groupedByMonth, recurringTransactions, ignoredTransactions, filterStatus]);
 
   // Keyboard navigation: J/K → next/prev, Enter → confirm focused, u → unmatch, n → no_match
   const keyboardCallbacks = useMemo(
@@ -561,6 +566,37 @@ export default function MatchingPage() {
                 </Collapsible>
               );
             })}
+
+            {filterStatus === "all" && ignoredCount > 0 && (
+              <Collapsible open={ignoredOpen} onOpenChange={setIgnoredOpen} className="mt-6">
+                <CollapsibleTrigger asChild>
+                  <button className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50">
+                    {ignoredOpen ? (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium text-foreground">Ignoriert</span>
+                    <span className="text-sm text-muted-foreground">({ignoredCount} Transaktionen)</span>
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2 space-y-2">
+                  {ignoredTransactions.map((transaction: any) => (
+                    <TransactionRow
+                      key={transaction.id}
+                      transaction={transaction}
+                      isFocused={focusedId === transaction.id}
+                      onFocus={() => setFocusedId(transaction.id)}
+                      registerRef={(node) => {
+                        if (node) transactionRowRefs.current.set(transaction.id, node);
+                        else transactionRowRefs.current.delete(transaction.id);
+                      }}
+                    />
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
 
             {filterStatus === "all" && recurringCount > 0 && (
               <Collapsible open={recurringOpen} onOpenChange={setRecurringOpen} className="mt-6">

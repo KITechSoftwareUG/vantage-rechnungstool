@@ -15,6 +15,7 @@ export function useFilteredTransactions() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
   const [recurringOpen, setRecurringOpen] = useState(false);
+  const [ignoredOpen, setIgnoredOpen] = useState(false);
 
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
   const { data: recurringPatterns = [] } = useRecurringPatterns();
@@ -54,9 +55,14 @@ export function useFilteredTransactions() {
     [transactions]
   );
 
+  const ignoredTransactions = useMemo(
+    () => transactions.filter((t: any) => t.matchStatus === "ignored"),
+    [transactions]
+  );
+
   const sortedTransactions = useMemo(() => {
     return [...transactions]
-      .filter((t: any) => t.matchStatus !== "recurring")
+      .filter((t: any) => t.matchStatus !== "recurring" && t.matchStatus !== "ignored")
       .sort((a: any, b: any) => {
         const statusOrder: Record<string, number> = {
           matched: 0,
@@ -142,6 +148,7 @@ export function useFilteredTransactions() {
   const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
   const confirmedCount = transactions.filter((t: any) => t.matchStatus === "confirmed").length;
   const recurringCount = recurringTransactions.length;
+  const ignoredCount = ignoredTransactions.length;
 
   return {
     transactions,
@@ -157,9 +164,13 @@ export function useFilteredTransactions() {
     setRecurringOpen,
     groupedByMonth,
     recurringTransactions,
+    ignoredTransactions,
+    ignoredOpen,
+    setIgnoredOpen,
     unmatchedCount,
     matchedCount,
     confirmedCount,
     recurringCount,
+    ignoredCount,
   };
 }

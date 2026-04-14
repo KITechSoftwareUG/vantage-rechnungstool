@@ -9,7 +9,7 @@ export interface BankTransaction {
   matchedInvoiceId: string | null;
   matchConfidence: number | null;
   matchReason: string | null;
-  matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring";
+  matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring" | "ignored";
   createdAt?: string;
   updatedAt?: string;
 }

@@ -55,7 +55,7 @@ export function useUpdateTransactionMatch() {
     }: {
       transactionId: string;
       invoiceId: string | null;
-      matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring";
+      matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring" | "ignored";
       matchConfidence?: number;
     }) => {
       const { data, error } = await supabase
