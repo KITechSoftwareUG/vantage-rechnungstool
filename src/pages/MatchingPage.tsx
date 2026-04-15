@@ -445,6 +445,68 @@ export default function MatchingPage() {
 
   return (
     <div className="space-y-6">
+      {/* Blockierendes Overlay waehrend des Auto-Match-Laufs. Verhindert jede
+          Interaktion (Klicks, Scrollen, Swipe) und macht sichtbar, was laeuft.
+          Nur der Abbrechen-Button ist bedienbar. */}
+      {isAutoMatching && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm"
+          // Scroll-Lock: Mausrad/Touch im Hintergrund ignorieren.
+          onWheel={(e) => e.preventDefault()}
+          onTouchMove={(e) => e.preventDefault()}
+        >
+          <div className="glass-card mx-4 flex max-w-md flex-col items-center gap-5 rounded-2xl px-8 py-8 text-center shadow-2xl">
+            <div className="relative flex h-16 w-16 items-center justify-center">
+              <Loader2 className="h-16 w-16 animate-spin text-primary" />
+              <Sparkles className="absolute h-6 w-6 text-primary" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="font-heading text-xl font-bold text-foreground">
+                KI-Matching läuft
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Bitte warten — die Transaktionen werden zugeordnet.
+              </p>
+            </div>
+            {autoMatchProgress && (
+              <div className="flex w-full flex-col gap-2 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Welle</span>
+                  <span className="font-semibold text-foreground">
+                    {autoMatchProgress.batch}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Geprüft</span>
+                  <span className="font-semibold text-foreground">
+                    {autoMatchProgress.processed}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Zugeordnet</span>
+                  <span className="font-semibold text-success">
+                    {autoMatchProgress.confirmed}
+                  </span>
+                </div>
+              </div>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => {
+                autoMatchCancelRef.current = true;
+                autoMatchAbortRef.current?.abort();
+                autoMatchCancelResolveRef.current?.();
+              }}
+              disabled={autoMatchCancelRef.current}
+              className="w-full gap-2"
+            >
+              <X className="h-4 w-4" />
+              {autoMatchCancelRef.current ? "Wird abgebrochen..." : "Abbrechen"}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="animate-fade-in">
         <h1 className="font-heading text-3xl font-bold text-foreground">Zuordnung</h1>
@@ -490,36 +552,7 @@ export default function MatchingPage() {
             <Bot className="h-4 w-4" />
             KI-Assistent ({unmatchedCount})
           </Button>
-          {isAutoMatching ? (
-            <>
-              {autoMatchProgress && (
-                <div className="glass-card flex items-center gap-3 px-4 py-2 text-sm">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  <span className="text-muted-foreground">
-                    Batch {autoMatchProgress.batch} · {autoMatchProgress.processed} geprüft ·{" "}
-                    <span className="font-semibold text-foreground">
-                      {autoMatchProgress.confirmed} zugeordnet
-                    </span>
-                  </span>
-                </div>
-              )}
-              <Button
-                variant="outline"
-                onClick={() => {
-                  autoMatchCancelRef.current = true;
-                  autoMatchAbortRef.current?.abort();
-                  // Entscheidend: synchron das Cancel-Promise aufloesen,
-                  // damit die laufende Welle sofort aus Promise.race faellt.
-                  autoMatchCancelResolveRef.current?.();
-                }}
-                disabled={autoMatchCancelRef.current}
-                className="gap-2"
-              >
-                <X className="h-4 w-4" />
-                {autoMatchCancelRef.current ? "Abbrechen..." : "Abbrechen"}
-              </Button>
-            </>
-          ) : (
+          {isAutoMatching ? null : (
             <Button
               variant="gradient"
               onClick={handleAutoMatch}
