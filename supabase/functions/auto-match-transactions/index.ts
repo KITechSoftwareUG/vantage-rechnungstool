@@ -322,20 +322,24 @@ serve(async (req) => {
         };
       });
 
-      // Filter potential matches: good name match OR exact amount match
-      // Top-N: bei generischen Issuern können sonst hunderte Kandidaten
-      // pro Transaktion ans LLM gehen → Token-Explosion + Genauigkeitsverlust.
+      // Filter potential matches: bewusst großzügig — die KI soll entscheiden,
+      // nicht der lokale Pre-Filter. Der KI-Assistent-Dialog hat keine harte
+      // Schwelle und findet genau deswegen Treffer, die der alte Auto-Match-
+      // Pfad schluckt. Wir schicken jetzt ebenfalls Top-N ohne harten Cutoff.
       potentialMatches = invoicesWithScores
-        .filter((item: any) => item.nameScore >= 50 || item.exactAmountMatch)
+        .filter((item: any) => item.nameScore >= 25 || item.closeAmountMatch)
         .sort((a: any, b: any) => b.combinedScore - a.combinedScore)
         .slice(0, MAX_CANDIDATES_PER_TX)
         .map((item: any) => item.invoice);
 
       if (potentialMatches.length === 0) {
-        // Fallback: exact amount match only
-        potentialMatches = invoices
-          .filter((inv: any) => Math.abs(matchAmount - inv.amount) < 0.01)
-          .slice(0, MAX_CANDIDATES_PER_TX);
+        // Letzter Fallback: Top-N nach Score, auch wenn jedes Signal schwach war.
+        // Besser die KI sagt "keine Übereinstimmung" als dass wir die Transaktion
+        // komplett ohne Prüfung durchfallen lassen.
+        potentialMatches = invoicesWithScores
+          .sort((a: any, b: any) => b.combinedScore - a.combinedScore)
+          .slice(0, MAX_CANDIDATES_PER_TX)
+          .map((item: any) => item.invoice);
       }
 
       if (potentialMatches.length === 0) continue;
@@ -358,51 +362,49 @@ serve(async (req) => {
                 messages: [
                   {
                     role: "system",
-                    content: `Du bist ein präziser Finanz-Matching-Assistent. Du ordnest Banktransaktionen den richtigen Rechnungen zu.
+                    content: `Du bist ein deutscher Buchhaltungs-Assistent, der Banktransaktionen Rechnungen zuordnet.
 
-KRITERIEN (in dieser Reihenfolge gewichtet):
+DEINE AUFGABE: Finde die WAHRSCHEINLICHSTE Rechnung aus der Kandidatenliste und gib eine EHRLICHE Confidence zurück. Die Applikation entscheidet auf Basis deiner Confidence selbst, was damit passiert — du sollst NICHT selbst entscheiden "das ist zu unsicher, ich gebe null zurück". Gib null NUR zurück, wenn wirklich KEINE der Kandidaten-Rechnungen inhaltlich zur Transaktion passt.
 
-1. AUSSTELLER vs. VERWENDUNGSZWECK (höchste Priorität):
-   - Der Aussteller-Name der Rechnung sollte im Verwendungszweck der Transaktion auftauchen.
-   - Firmennamen variieren stark: "OpenAI" → "OPENAI SAN FRANCISCO CA", "Google Cloud" → "GOOGLE CLOUD EMEA LTD", "Hetzner" → "HETZNER ONLINE GMBH NUERNBE".
-   - Abkürzungen, Standorte, Rechtsformen (GmbH, Ltd, Inc.) ignorieren.
-   - Wenn der Kern-Name übereinstimmt → starkes Signal.
+KRITERIEN (gewichtet):
 
-2. BETRAG MIT WÄHRUNGS-TOLERANZ:
-   - Idealfall: exakte Übereinstimmung (±0.01€).
-   - WICHTIG bei Fremdwährungen: Wenn die Rechnung z.B. in USD ist und der Betrag stimmt nahe mit dem Foreign Spend Amount der Transaktion überein, ist das ein sehr starker Treffer.
-   - Bei SEPA-Überweisungen einer USD-Rechnung kann der EUR-Betrag um den Wechselkurs abweichen — bis zu ~10% sind plausibel wenn die Currency-Conversion durch eine Bank lief.
-   - Reine Betrags-Matches OHNE Name-Match sind schwach (Confidence max. 70%).
+1. AUSSTELLER vs. VERWENDUNGSZWECK (wichtigstes Signal):
+   - Firmennamen variieren: "OpenAI" ↔ "OPENAI SAN FRANCISCO CA", "Hetzner" ↔ "HETZNER ONLINE GMBH NUERNBE", "Udemy Ireland Ltd" ↔ "UDEMYEU".
+   - Rechtsformen (GmbH, Ltd, Inc., LLC), Standorte und Zahlungsdienstleister-Präfixe ("PAYPAL *…", "AMZN Mktp") ignorieren.
+   - Der KERN des Firmennamens muss plausibel im Verwendungszweck auftauchen.
 
-3. DATUM-PLAUSIBILITÄT:
-   - Rechnungsdatum liegt typischerweise 0-30 Tage VOR der Transaktion.
-   - Bei Abos/wiederkehrend kann es exakter Tag oder ±wenige Tage sein.
-   - Datum NACH der Transaktion ist verdächtig (außer bei Vorab-Rechnungen).
+2. BETRAG:
+   - Exakt (±0.01) → starkes Signal.
+   - Bei Fremdwährung/FX bis ~10% Abweichung plausibel (SEPA in USD/GBP-Rechnung).
+   - Reiner Betragstreffer ohne Name-Signal ist SCHWACH.
 
-CONFIDENCE-SKALA:
-- 95-100: Aussteller-Match perfekt + exakter Betrag (oder validierter USD/EUR-Match) + plausibles Datum
-- 80-94: Aussteller-Match klar + Betrag passt mit Currency-Toleranz, oder Aussteller-Match perfekt + Datum etwas off
-- 60-79: Aussteller-Match nur teilweise, oder reiner Betragstreffer ohne Name
-- < 60:  Unsicher / kein guter Match — gib null zurück
+3. DATUM:
+   - Rechnungsdatum typischerweise 0-45 Tage VOR der Transaktion.
+   - Bei Abos: gleicher Tag oder ±wenige Tage wiederkehrend.
 
-WENN MEHRERE RECHNUNGEN PASSEN könnten: Wähle die mit der besten Aussteller-Übereinstimmung. Wenn keine eindeutig besser ist, wähle die mit Datum am nächsten zur Transaktion.
+CONFIDENCE-SKALA (ehrlich ausfüllen, KEIN Selbst-Zensieren):
+- 95-100: Aussteller passt eindeutig + Betrag exakt + Datum plausibel
+- 70-94:  Aussteller passt klar, aber eine Dimension abweichend (Betrag leicht off ODER Datum weiter weg)
+- 40-69:  Aussteller passt teilweise (nur Kern-Token), oder starker Betragstreffer ohne klaren Name
+- 20-39:  Schwacher aber vorhandener Hinweis — trotzdem die beste Option von allen
+- null + confidence 0: KEINE der Kandidaten-Rechnungen passt inhaltlich
 
-ANTWORT-FORMAT (NUR JSON, sonst nichts):
-{ "matchedInvoiceId": "uuid oder null", "confidence": 0-100, "reason": "knappe Begründung in einem Satz" }`,
+WICHTIG: Die Applikation hat eine interne Schwelle. Du wirst deine Entscheidung NICHT damit "helfen" dass du knappe Matches auf null setzt — im Gegenteil, du machst es dadurch schlechter. Gib deine beste Option + ehrliche Confidence.
+
+ANTWORT: NUR ein JSON-Objekt, keine Code-Fences, kein Fließtext:
+{"matchedInvoiceId": <eine UUID aus der Kandidatenliste ODER null>, "confidence": <0-100>, "reason": "<ein kurzer deutscher Satz>"}`,
                   },
                   {
                     role: "user",
-                    content: `Ordne diese Transaktion der besten Rechnung zu:
-
-Transaktion:
+                    content: `### TRANSAKTION
 - Datum: ${transaction.date}
 - Verwendungszweck: ${transaction.description}
-- Betrag (zur Match-Prüfung): ${matchAmount}${isAmexWithCurrencyConversion ? " (Foreign Spend Amount aus AMEX-Umrechnung)" : " EUR"}
-- EUR-Betrag laut Bank: ${transactionAmount} EUR
-${transaction.original_currency ? `- Original-Currency-Info: ${transaction.original_currency}` : ""}
+- Betrag (EUR): ${transactionAmount}${isAmexWithCurrencyConversion ? `\n- Foreign Spend Amount (original): ${matchAmount}` : ""}${transaction.original_currency ? `\n- Original-Currency-Info: ${transaction.original_currency}` : ""}
 
-Mögliche Rechnungen (vorgefiltert nach Name/Betrag):
-${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer} | Betrag: ${inv.amount} ${inv.currency || "EUR"} | Datum: ${inv.date}`).join("\n")}`,
+### KANDIDATEN-RECHNUNGEN
+${potentialMatches.map((inv: any, i: number) => `${i + 1}. ID=${inv.id} | Aussteller: ${inv.issuer} | Betrag: ${inv.amount} ${inv.currency || "EUR"} | Datum: ${inv.date}${inv.invoice_number ? ` | Rech-Nr: ${inv.invoice_number}` : ""}`).join("\n")}
+
+Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Confidence ehrlich an.`,
                   },
                 ],
               }),
@@ -433,10 +435,21 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
                     console.log(`[AI-DEBUG #${aiAttempted}] parsed:`, JSON.stringify(result));
                   }
 
-                  if (result.matchedInvoiceId && result.confidence >= SUGGEST_THRESHOLD) {
+                  // Validierung: invoiceId muss wirklich ein UUID aus der
+                  // Kandidatenliste sein. Schützt vor halluzinierten IDs und
+                  // vor dem String "uuid oder null" aus Schema-Beispielen.
+                  const candidateIds = new Set(potentialMatches.map((c: any) => c.id));
+                  const invoiceIdValid =
+                    typeof result.matchedInvoiceId === "string" &&
+                    candidateIds.has(result.matchedInvoiceId);
+                  const confidenceNum = typeof result.confidence === "number"
+                    ? result.confidence
+                    : parseFloat(result.confidence);
+
+                  if (invoiceIdValid && confidenceNum >= SUGGEST_THRESHOLD) {
                     // Hohe Confidence → automatisch als bestätigt setzen.
                     // Niedrigere Confidence → nur als Vorschlag, User bestätigt manuell.
-                    const isAutoConfirm = result.confidence >= AUTO_CONFIRM_THRESHOLD;
+                    const isAutoConfirm = confidenceNum >= AUTO_CONFIRM_THRESHOLD;
                     const newStatus = isAutoConfirm ? "confirmed" : "matched";
 
                     await supabaseClient
@@ -444,13 +457,13 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
                       .update({
                         matched_invoice_id: result.matchedInvoiceId,
                         match_status: newStatus,
-                        match_confidence: result.confidence,
+                        match_confidence: confidenceNum,
                         match_reason: result.reason ?? null,
                       })
                       .eq("id", transaction.id);
 
                     console.log(
-                      `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${result.matchedInvoiceId} (${result.confidence}%): ${result.reason}`,
+                      `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${result.matchedInvoiceId} (${confidenceNum}%): ${result.reason}`,
                     );
                     matchedCount++;
                     if (isAutoConfirm) autoConfirmedCount++;
