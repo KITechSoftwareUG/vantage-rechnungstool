@@ -17,14 +17,14 @@ const OPENAI_TIMEOUT_MS = 20000;
 
 // Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
 // neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-parallel-claim-v10-sanity";
+const EDGE_VERSION = "2026-04-15-parallel-claim-v11-hashdedup-tolerance";
 
 // Stale-Claim-Recovery: Wenn eine fruehere Invocation gecrasht ist, koennen
 // Transaktionen mit `match_status='ai_processing'` haengen bleiben. Alles
 // aelter als diese Schwelle wird beim naechsten Function-Start wieder auf
 // 'unmatched' gesetzt. Wall-Clock einer Invocation ist ~100s, 3min ist
 // konservativ genug, um keine laufende Invocation zu stoeren.
-const STALE_CLAIM_MS = 3 * 60 * 1000;
+const STALE_CLAIM_MS = 60 * 1000;
 
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
@@ -58,14 +58,38 @@ async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {
 // "echte" Originaleintrag ist.
 function dedupInvoices(invoices: any[]): any[] {
   const norm = (s: string | null | undefined) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const pickOldest = (group: any[]) => {
+    group.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+    return group[0];
+  };
+
+  // Pass 1: file_hash-Dedup. Zwei Rechnungen mit identischem file_hash sind
+  // byte-gleiche PDFs (Re-Upload) — da darf nur die aelteste ueberleben, sonst
+  // matchen beide Kopien parallel auf dieselbe Transaktion. Null/leere Hashes
+  // werden nicht gruppiert (unbekannter Hash != identisch).
+  const afterHash: any[] = [];
+  const hashGroups = new Map<string, any[]>();
+  for (const inv of invoices) {
+    if (inv.file_hash) {
+      const g = hashGroups.get(inv.file_hash) || [];
+      g.push(inv);
+      hashGroups.set(inv.file_hash, g);
+    } else {
+      afterHash.push(inv);
+    }
+  }
+  for (const group of hashGroups.values()) {
+    afterHash.push(pickOldest(group));
+  }
+
+  // Pass 2: Metadaten-Dedup (invoice_number + amount, sonst date+issuer+amount).
   const keyOf = (inv: any) => {
-    if (inv.file_hash) return `hash:${inv.file_hash}`;
     const num = norm(inv.invoice_number);
     if (num.length >= 3) return `num:${num}|${Math.round(Number(inv.amount) * 100)}`;
     return `meta:${inv.date}|${norm(inv.issuer)}|${Math.round(Number(inv.amount) * 100)}`;
   };
   const groups = new Map<string, any[]>();
-  for (const inv of invoices) {
+  for (const inv of afterHash) {
     const k = keyOf(inv);
     const g = groups.get(k) || [];
     g.push(inv);
@@ -73,9 +97,7 @@ function dedupInvoices(invoices: any[]): any[] {
   }
   const result: any[] = [];
   for (const group of groups.values()) {
-    // Älteste Rechnung als Repräsentant → `created_at` aufsteigend sortieren.
-    group.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
-    result.push(group[0]);
+    result.push(pickOldest(group));
   }
   return result;
 }
@@ -151,7 +173,7 @@ serve(async (req) => {
     // (b) Kandidaten-IDs auswaehlen. Oversample: bei 4 parallelen Calls
     // kollidieren alle auf denselben Top-N; jeder Call braucht eine groessere
     // Pipeline, um trotzdem MAX_TRANSACTIONS_PER_INVOCATION claimen zu koennen.
-    const CLAIM_OVERSAMPLE = MAX_TRANSACTIONS_PER_INVOCATION * 4;
+    const CLAIM_OVERSAMPLE = MAX_TRANSACTIONS_PER_INVOCATION * 2;
     const { data: candidateRows, error: candErr } = await supabaseClient
       .from("bank_transactions")
       .select("id")
@@ -454,9 +476,15 @@ serve(async (req) => {
           nameScore = Math.max(fractionScore, bestTokenScore);
         }
 
-        // Amount matching with tolerance for currency differences (up to 10% difference)
+        // Amount matching with tolerance. 5% fuer same-currency EUR-Matches
+        // (reine Rundung / Gebuehren), 10% nur wenn FX-Konvertierung im Spiel
+        // ist (Amex mit original_currency oder Invoice nicht in EUR) — dort
+        // kostet der Wechselkurs-Spread mehr als ein paar Cent.
+        const invoiceCurrency = (inv.currency || "EUR").toUpperCase();
+        const isFxCase = isAmexWithCurrencyConversion || invoiceCurrency !== "EUR";
+        const tolerancePct = isFxCase ? 0.1 : 0.05;
         const amountDiff = Math.abs(matchAmount - inv.amount);
-        const amountTolerance = Math.max(matchAmount, inv.amount) * 0.1; // 10% tolerance
+        const amountTolerance = Math.max(matchAmount, inv.amount) * tolerancePct;
         const exactMatch = amountDiff < 0.01;
         const closeMatch = amountDiff <= amountTolerance;
 
