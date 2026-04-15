@@ -700,11 +700,13 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
     // Bei Kollision (finalStoragePath existiert schon, z. B. durch einen
     // vorherigen Lauf) fällt die Function auf den Temp-Namen zurück, statt die
     // vorhandene Datei zu überschreiben.
+    let moveErrorMessage: string | null = null;
     if (finalStoragePath !== tempStoragePath) {
       const { error: moveError } = await supabase.storage.from("documents").move(tempStoragePath, finalStoragePath);
 
       if (moveError) {
         console.error("Storage move failed, keeping temp path:", moveError);
+        moveErrorMessage = `Rename fehlgeschlagen (${moveError.message}) — Datei behält Temp-Namen: ${tempFileName}`;
         finalFileName = tempFileName;
         finalStoragePath = tempStoragePath;
       } else {
@@ -839,8 +841,11 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
       }
     }
 
-    // Update ingestion log with result
+    // Update ingestion log with result. Move-Fehler wird an die Warnung
+    // angehaengt, damit der User im Portal sieht, warum die Datei den
+    // Temp-Namen behaelt.
     if (logEntry) {
+      const combinedWarning = [warningMessage, moveErrorMessage].filter(Boolean).join(" | ") || null;
       await supabase
         .from("document_ingestion_log")
         .update({
@@ -848,7 +853,7 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
           document_id: documentId,
           file_name: finalFileName,
           error_message: documentId ? null : "Failed to create DB record",
-          warning_message: warningMessage,
+          warning_message: combinedWarning,
         })
         .eq("id", logEntry.id);
     }
