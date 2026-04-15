@@ -263,52 +263,15 @@ Deno.serve(async (req) => {
     const originalFileName = url.searchParams.get("file_name") || url.searchParams.get("fileName") || "";
     const contentType = req.headers.get("content-type") || "";
 
-    // user_id MUSS aus dem JWT kommen — nicht aus Body/Query. Einzige Ausnahme:
-    // Service-Role-Calls (z. B. Python-Drive-Poller), die den SUPABASE_SERVICE_
-    // ROLE_KEY als Bearer mitschicken; dort akzeptieren wir user_id aus der
-    // Query, weil der Caller keine User-Session hat.
-    const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
-    const bearerToken = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    const isServiceRole = !!bearerToken && !!serviceRoleKey && bearerToken === serviceRoleKey;
-
-    let userId: string | null = null;
-    if (isServiceRole) {
-      userId = url.searchParams.get("user_id");
-    } else {
-      // JWT validieren via Supabase-Auth (anon-Client mit Bearer-Token).
-      if (!bearerToken) {
-        return new Response(JSON.stringify({ success: false, error: "Missing Authorization header" }), {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      try {
-        const authClient = createClient(
-          Deno.env.get("SUPABASE_URL")!,
-          Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-          { global: { headers: { Authorization: `Bearer ${bearerToken}` } } },
-        );
-        const { data: userData, error: userError } = await authClient.auth.getUser(bearerToken);
-        if (userError || !userData?.user?.id) {
-          return new Response(JSON.stringify({ success: false, error: "Invalid JWT" }), {
-            status: 401,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-        userId = userData.user.id;
-      } catch (authErr) {
-        console.error("JWT validation error:", authErr);
-        return new Response(JSON.stringify({ success: false, error: "JWT validation failed" }), {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-    }
+    // Single-User-Tool: user_id kommt aus dem Query-Param. Keine JWT-Validierung,
+    // keine Multi-Tenant-Grenze. Caller koennen der Python-Drive-Poller
+    // (n8n-JWT) oder der Browser (Supabase-Session-JWT) sein — in beiden Faellen
+    // wird user_id aus der Query gelesen.
+    const userId = url.searchParams.get("user_id");
 
     console.log("=== N8N WEBHOOK ===");
     console.log("Category:", category, "Year:", year, "Month:", month);
-    console.log("User ID:", userId, "Original filename:", originalFileName, "ServiceRole:", isServiceRole);
+    console.log("User ID:", userId, "Original filename:", originalFileName);
 
     // Validate required parameters
     if (!userId) {
