@@ -12,6 +12,36 @@ export interface TransactionMatchSnapshot {
   match_confidence: number | null;
 }
 
+// Optimistisches Patch-Helper: ein Cache-Update ohne Refetch-Flicker.
+function optimisticPatch(
+  queryClient: ReturnType<typeof useQueryClient>,
+  transactionIds: string[],
+  patch: (t: any) => any,
+) {
+  const prev = queryClient.getQueriesData({ queryKey: ["bank_transactions"] });
+  const idSet = new Set(transactionIds);
+  queryClient.setQueriesData({ queryKey: ["bank_transactions"] }, (old: any) => {
+    if (!Array.isArray(old)) return old;
+    return old.map((t: any) => (idSet.has(t.id) ? patch(t) : t));
+  });
+  return prev;
+}
+
+function rollback(
+  queryClient: ReturnType<typeof useQueryClient>,
+  prev: ReturnType<typeof optimisticPatch>,
+) {
+  for (const [queryKey, data] of prev) {
+    queryClient.setQueryData(queryKey, data);
+  }
+}
+
+function settleWithoutRefetch(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ["bank_transactions"], refetchType: "none" });
+  queryClient.invalidateQueries({ queryKey: ["invoices"], refetchType: "none" });
+  queryClient.invalidateQueries({ queryKey: ["unmatched_invoices"], refetchType: "none" });
+}
+
 export function useBulkConfirmMatches() {
   const queryClient = useQueryClient();
 
@@ -25,11 +55,17 @@ export function useBulkConfirmMatches() {
       if (error) throw error;
       return transactionIds.length;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["unmatched_invoices"] });
+    onMutate: async (transactionIds) => {
+      await queryClient.cancelQueries({ queryKey: ["bank_transactions"] });
+      const prev = optimisticPatch(queryClient, transactionIds, (t) => ({
+        ...t,
+        matchStatus: "confirmed",
+        matchConfidence: 100,
+      }));
+      return { prev };
     },
+    onError: (_e, _v, ctx: any) => ctx?.prev && rollback(queryClient, ctx.prev),
+    onSettled: () => settleWithoutRefetch(queryClient),
   });
 }
 
@@ -50,11 +86,19 @@ export function useBulkUnmatch() {
       if (error) throw error;
       return transactionIds.length;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["unmatched_invoices"] });
+    onMutate: async (transactionIds) => {
+      await queryClient.cancelQueries({ queryKey: ["bank_transactions"] });
+      const prev = optimisticPatch(queryClient, transactionIds, (t) => ({
+        ...t,
+        matchStatus: "unmatched",
+        matchedInvoiceId: null,
+        matchConfidence: null,
+        matchedInvoice: null,
+      }));
+      return { prev };
     },
+    onError: (_e, _v, ctx: any) => ctx?.prev && rollback(queryClient, ctx.prev),
+    onSettled: () => settleWithoutRefetch(queryClient),
   });
 }
 
@@ -85,10 +129,30 @@ export function useRestoreMatchSnapshots() {
       if (failed?.error) throw failed.error;
       return snapshots.length;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["unmatched_invoices"] });
+    onMutate: async (snapshots) => {
+      await queryClient.cancelQueries({ queryKey: ["bank_transactions"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["bank_transactions"] });
+      const snapMap = new Map(snapshots.map((s) => [s.id, s]));
+      queryClient.setQueriesData({ queryKey: ["bank_transactions"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((t: any) => {
+          const s = snapMap.get(t.id);
+          if (!s) return t;
+          return {
+            ...t,
+            matchStatus: s.match_status,
+            matchedInvoiceId: s.matched_invoice_id,
+            matchConfidence: s.match_confidence,
+            // Wenn die Zuordnung wiederhergestellt wird, aber der eingebettete
+            // Invoice-Record im Cache fehlt, bleibt er null — der naechste
+            // Refetch bei Focus liefert die vollen Daten nach.
+            matchedInvoice: s.matched_invoice_id ? t.matchedInvoice : null,
+          };
+        });
+      });
+      return { prev };
     },
+    onError: (_e, _v, ctx: any) => ctx?.prev && rollback(queryClient, ctx.prev),
+    onSettled: () => settleWithoutRefetch(queryClient),
   });
 }

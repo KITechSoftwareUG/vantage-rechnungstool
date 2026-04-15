@@ -72,10 +72,45 @@ export function useUpdateTransactionMatch() {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["unmatched_invoices"] });
+    // Optimistisches Update: der Cache-Eintrag fuer die eine TX wird sofort
+    // aktualisiert, kein Refetch der gesamten Liste. Ohne das flackert nach
+    // jedem Swipe die komplette Seite, weil drei Queries invalidiert werden
+    // und alle Rows neu mounten.
+    onMutate: async ({ transactionId, invoiceId, matchStatus, matchConfidence }) => {
+      await queryClient.cancelQueries({ queryKey: ["bank_transactions"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["bank_transactions"] });
+      queryClient.setQueriesData({ queryKey: ["bank_transactions"] }, (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((t: any) =>
+          t.id === transactionId
+            ? {
+                ...t,
+                matchStatus,
+                matchedInvoiceId: invoiceId,
+                matchConfidence: matchConfidence ?? null,
+                // Wenn die Zuordnung aufgehoben wird, auch das eingebettete
+                // Invoice-Objekt leeren, damit die Badge/Preview verschwindet.
+                matchedInvoice: invoiceId ? t.matchedInvoice : null,
+              }
+            : t,
+        );
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx: any) => {
+      if (ctx?.prev) {
+        for (const [queryKey, data] of ctx.prev) {
+          queryClient.setQueryData(queryKey, data);
+        }
+      }
+    },
+    // refetchType: 'none' markiert Queries als stale aber loest kein sofortiges
+    // Refetch aus. So bleibt die UI ohne Flicker, und die Daten werden beim
+    // naechsten regulaeren Fetch (z.B. window focus) synchronisiert.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["invoices"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["unmatched_invoices"], refetchType: "none" });
     },
   });
 }
