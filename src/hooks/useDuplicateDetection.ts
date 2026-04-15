@@ -164,12 +164,34 @@ export function useMergeDuplicate() {
 
   return useMutation({
     mutationFn: async ({
-      keeperId,
-      duplicateId,
+      keeperId: rawKeeperId,
+      duplicateId: rawDuplicateId,
     }: {
       keeperId: string;
       duplicateId: string;
     }) => {
+      // Bug-Fix: Wenn ein neu eingespieltes (processing) Dokument Duplikat
+      // einer bereits bestaetigten (ready/saved) Rechnung ist, wuerde die
+      // UI die alte bestaetigte Rechnung loeschen und die neue pending
+      // behalten. Vor dem Delete Status pruefen und so swappen, dass immer
+      // der bestaetigte Datensatz ueberlebt.
+      const { data: statusRows, error: statusErr } = await supabase
+        .from("invoices")
+        .select("id, status")
+        .in("id", [rawKeeperId, rawDuplicateId]);
+      if (statusErr) throw statusErr;
+
+      const statusOf = (id: string) =>
+        (statusRows || []).find((r: any) => r.id === id)?.status as string | undefined;
+      const isConfirmed = (s: string | undefined) => s === "ready" || s === "saved";
+
+      let keeperId = rawKeeperId;
+      let duplicateId = rawDuplicateId;
+      if (isConfirmed(statusOf(rawDuplicateId)) && !isConfirmed(statusOf(rawKeeperId))) {
+        keeperId = rawDuplicateId;
+        duplicateId = rawKeeperId;
+      }
+
       const { data: linkedTransactions } = await supabase
         .from("bank_transactions")
         .select("id")
