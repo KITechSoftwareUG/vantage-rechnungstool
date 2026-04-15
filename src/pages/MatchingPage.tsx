@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, ChevronDown, ChevronRight, Calendar, X } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, X, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -107,9 +107,17 @@ export default function MatchingPage() {
     setFilterStatus,
     openMonths,
     toggleMonth,
+    recurringOpen,
+    setRecurringOpen,
+    ignoredOpen,
+    setIgnoredOpen,
     groupedByMonth,
+    recurringTransactions,
+    ignoredTransactions,
     unmatchedCount,
     confirmedCount,
+    recurringCount,
+    ignoredCount,
   } = useFilteredTransactions();
 
   const invoiceCount = invoices.length;
@@ -118,8 +126,12 @@ export default function MatchingPage() {
   const visibleIds = useMemo(() => {
     const ids: string[] = [];
     groupedByMonth.forEach((g: any) => g.transactions.forEach((t: any) => ids.push(t.id)));
+    if (filterStatus === "all") {
+      recurringTransactions.forEach((t: any) => ids.push(t.id));
+      ignoredTransactions.forEach((t: any) => ids.push(t.id));
+    }
     return ids;
-  }, [groupedByMonth]);
+  }, [groupedByMonth, recurringTransactions, ignoredTransactions, filterStatus]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -541,6 +553,49 @@ export default function MatchingPage() {
               );
             })}
 
+            {filterStatus === "all" && ignoredCount > 0 && (
+              <Collapsible open={ignoredOpen} onOpenChange={setIgnoredOpen} className="mt-6">
+                <CollapsibleTrigger asChild>
+                  <button className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50">
+                    {ignoredOpen ? (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium text-foreground">Ignoriert</span>
+                    <span className="text-sm text-muted-foreground">({ignoredCount} Transaktionen)</span>
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2 space-y-2">
+                  {ignoredTransactions.map((transaction: any) => (
+                    <TransactionRow key={transaction.id} transaction={transaction} />
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
+
+            {filterStatus === "all" && recurringCount > 0 && (
+              <Collapsible open={recurringOpen} onOpenChange={setRecurringOpen} className="mt-6">
+                <CollapsibleTrigger asChild>
+                  <button className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50">
+                    {recurringOpen ? (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <RefreshCw className="h-4 w-4 text-info" />
+                    <span className="font-medium text-foreground">Laufende Kosten</span>
+                    <span className="text-sm text-muted-foreground">({recurringCount} Transaktionen ohne Rechnung)</span>
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2 space-y-2">
+                  {recurringTransactions.map((transaction: any) => (
+                    <TransactionRow key={transaction.id} transaction={transaction} />
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
           </div>
         )}
       </div>
