@@ -15,6 +15,10 @@ const MAX_TRANSACTIONS_PER_INVOCATION = 50;
 // Run blockieren.
 const OPENAI_TIMEOUT_MS = 20000;
 
+// Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
+// neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
+const EDGE_VERSION = "2026-04-15-results-v3";
+
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
 // pro Transaktion auftauchen → Token-Explosion und schlechtere Genauigkeit.
@@ -141,6 +145,7 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: true,
+          version: EDGE_VERSION,
           matchedCount: 0,
           autoConfirmedCount: 0,
           processedCount: 0,
@@ -159,6 +164,7 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           success: false,
+          version: EDGE_VERSION,
           aiKeyMissing: true,
           error:
             "Weder GEMINI_API_KEY noch OPENAI_API_KEY ist in den Edge-Function-Secrets gesetzt. KI-Matching deaktiviert.",
@@ -689,7 +695,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
         success: true,
         // Version-Tag: bei "0 Treffer" sofort im Network-Tab erkennbar ob
         // ueberhaupt die neue Edge-Function-Version live ist.
-        version: "2026-04-15-results-v2",
+        version: EDGE_VERSION,
         matchedCount,
         autoConfirmedCount,
         processedCount: transactions.length,
@@ -720,7 +726,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("Auto-match error:", error);
-    return new Response(JSON.stringify({ error: errorMessage }), {
+    return new Response(JSON.stringify({ error: errorMessage, version: EDGE_VERSION }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
