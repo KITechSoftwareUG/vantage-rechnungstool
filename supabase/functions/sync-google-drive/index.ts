@@ -248,17 +248,9 @@ serve(async (req) => {
     // Get files in folder (including month subfolders for incoming/outgoing)
     const allFiles = await getFilesWithMonthInfo(accessToken, folderId, folderType);
 
-    // Get already processed files
-    const { data: processedFiles } = await supabase
-      .from("processed_drive_files")
-      .select("drive_file_id")
-      .eq("user_id", user.id)
-      .eq("folder_type", folderType);
-
-    const processedIds = new Set(processedFiles?.map(f => f.drive_file_id) || []);
-
-    // Filter to only new files
-    const newFiles = allFiles.filter(f => !processedIds.has(f.id));
+    // Kein Dedup am Ingest — jede Datei wird durchgereicht. Duplikate werden
+    // ausschliesslich im Matching-Tool nach Bestaetigung behandelt.
+    const newFiles = allFiles;
 
     // Download and return new files with their content (including month info)
     const filesWithContent = await Promise.all(
@@ -287,7 +279,7 @@ serve(async (req) => {
         connected: true,
         newFiles: validFiles,
         totalInFolder: allFiles.length,
-        alreadyProcessed: processedIds.size,
+        alreadyProcessed: 0,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

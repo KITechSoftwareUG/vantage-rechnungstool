@@ -314,28 +314,11 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Check for duplicate if drive_file_id is provided
-    if (driveFileId) {
-      const { data: existing } = await supabase
-        .from("processed_drive_files")
-        .select("id")
-        .eq("drive_file_id", driveFileId)
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (existing) {
-        console.log("Duplicate file detected:", driveFileId);
-        return new Response(JSON.stringify({ success: true, message: "File already processed", duplicate: true }), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // file_hash wird weiterhin berechnet und in die DB geschrieben, damit das
-    // Matching-Tool spaeter deduplizieren kann. Am Ingest selbst wird NICHT
-    // geblockt — Duplikate landen in der Review-Queue und werden dort bzw.
-    // beim Matching aufgeloest.
+    // Kein Dedup am Ingest — jede Datei geht durch, auch bit-identische oder
+    // re-uploads derselben Drive-File-ID. Dedup passiert ausschliesslich im
+    // Matching-Tool nach der Bestaetigung, und nur fuer Rechnungen.
+    // file_hash wird trotzdem berechnet + geschrieben, damit auto-match ihn
+    // dort zum Deduplizieren nutzen kann.
     const fileHash = await sha256Hex(fileBuffer);
 
     // Upload file to storage with temp name first

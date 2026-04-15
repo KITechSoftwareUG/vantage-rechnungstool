@@ -155,22 +155,11 @@ serve(async (req) => {
 
         const allFiles = await getFilesInFolder(accessToken, folderId);
 
-        // Get already processed files
-        const { data: processedFiles } = await supabase
-          .from("processed_drive_files")
-          .select("drive_file_id")
-          .eq("user_id", userId)
-          .eq("folder_type", folderType);
-
-        const processedIds = new Set(processedFiles?.map(f => f.drive_file_id) || []);
-        const newFiles = allFiles.filter(f => !processedIds.has(f.id));
-
-        if (newFiles.length > 0) {
-          console.log(`Found ${newFiles.length} new files in "${folderName}" for user ${userId}`);
-          totalNewFiles += newFiles.length;
-
-          // Mark files as detected (processing will happen client-side)
-          // We just track that they exist for background monitoring
+        // Kein Dedup am Ingest — alle gefundenen Dateien werden gezaehlt.
+        // Duplikat-Erkennung passiert ausschliesslich im Matching-Tool.
+        if (allFiles.length > 0) {
+          console.log(`Found ${allFiles.length} files in "${folderName}" for user ${userId}`);
+          totalNewFiles += allFiles.length;
         }
       }
     }

@@ -5,8 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { UrlDocumentPreview } from "./UrlDocumentPreview";
-import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 
+// Die Review-Queue erwaehnt KEINE Duplikate. Dedup passiert ausschliesslich
+// nach der Bestaetigung im Matching-Tool (siehe useDuplicateDetection in
+// src/pages/InvoicesPage.tsx). Hier also keine DuplicateBadge / onMerge /
+// isMerging-Props.
 interface ReviewInvoice {
   id: string;
   fileName: string;
@@ -26,13 +29,10 @@ interface ReviewCardProps {
   invoice: ReviewInvoice;
   onConfirm: (data: ReviewInvoice) => void;
   onDiscard: (id: string) => void;
-  duplicates?: Array<{ id: string; fileName: string; date: string; issuer: string; amount: number; currency?: string; status?: string; fileUrl?: string }>;
-  onMerge?: (keeperId: string, duplicateId: string) => void;
-  isMerging?: boolean;
   index?: number;
 }
 
-export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDiscard, duplicates = [], onMerge, isMerging, index = 0 }: ReviewCardProps) {
+export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDiscard, index = 0 }: ReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState(invoice);
   const [amountInput, setAmountInput] = useState(invoice.amount.toString().replace(".", ","));
@@ -82,24 +82,6 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
                   <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
                     Zur Überprüfung
                   </Badge>
-                  {duplicates.length > 0 && onMerge && (
-                    <DuplicateBadge
-                      currentId={invoice.id}
-                      currentDoc={{
-                        id: invoice.id,
-                        fileName: invoice.fileName,
-                        date: invoice.date,
-                        issuer: invoice.issuer,
-                        amount: invoice.amount,
-                        currency: invoice.currency,
-                        status: "processing",
-                        fileUrl: invoice.fileUrl,
-                      }}
-                      duplicates={duplicates}
-                      onMerge={onMerge}
-                      isMerging={isMerging}
-                    />
-                  )}
                 </div>
               </div>
             </div>
@@ -251,4 +233,4 @@ export const ReviewCard = memo(function ReviewCard({ invoice, onConfirm, onDisca
       </div>
     </div>
   );
-}, (prev, next) => prev.invoice.id === next.invoice.id && prev.index === next.index && prev.duplicates?.length === next.duplicates?.length && prev.isMerging === next.isMerging);
+}, (prev, next) => prev.invoice.id === next.invoice.id && prev.index === next.index);
