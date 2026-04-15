@@ -327,58 +327,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Content-based duplicate check (only for invoice-type documents, not bank
-    // statements — statements are legitimately re-ingested when corrections
-    // come in). This catches the case where the same PDF is re-uploaded under
-    // a different Drive file ID or filename, BEFORE we pay for OCR.
+    // Dedup bewusst NICHT am Upload: alle Rechnungen duerfen mehrfach rein,
+    // Duplikat-Erkennung erfolgt spaeter im Matching-Tool. fileHash wird
+    // trotzdem berechnet und in den invoices-Record geschrieben, damit die
+    // Matching-UI bit-identische Doppel schnell erkennen kann.
     const fileHash = await sha256Hex(fileBuffer);
-    if (docType !== "statement") {
-      // .limit(1) statt .maybeSingle(): Falls vor Einführung des Hash-Checks
-      // bereits Duplikate als separate Rows in der DB liegen, würde
-      // .maybeSingle() bei Re-Upload erroren — wir wollen aber jedes
-      // bit-identische Re-Upload zuverlässig blockieren.
-      const { data: existingInvoices } = await supabase
-        .from("invoices")
-        .select("id, file_name, date, issuer, amount")
-        .eq("user_id", userId)
-        .eq("file_hash", fileHash)
-        .limit(1);
-      const existingInvoice = existingInvoices?.[0];
-
-      if (existingInvoice) {
-        console.log("Content-hash duplicate detected:", fileHash, "→ existing invoice", existingInvoice.id);
-        // Log the rejected duplicate so it shows up in the ingestion tracker.
-        await supabase.from("document_ingestion_log").insert({
-          user_id: userId,
-          file_name: originalFileName || `hash_${fileHash.slice(0, 12)}`,
-          document_type: category,
-          endpoint_category: category,
-          endpoint_year: year,
-          endpoint_month: month,
-          status: "duplicate",
-          document_id: existingInvoice.id,
-          warning_message: `Identisches Dokument bereits vorhanden: ${existingInvoice.file_name}`,
-        });
-        // Mark drive file as processed so the poller doesn't retry forever.
-        if (driveFileId) {
-          await supabase.from("processed_drive_files").insert({
-            user_id: userId,
-            drive_file_id: driveFileId,
-            file_name: originalFileName || existingInvoice.file_name,
-            folder_type: category,
-          });
-        }
-        return new Response(
-          JSON.stringify({
-            success: true,
-            duplicate: true,
-            message: "Identisches Dokument bereits vorhanden",
-            existingInvoiceId: existingInvoice.id,
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-    }
 
     // Upload file to storage with temp name first
     const timestamp = Date.now();
