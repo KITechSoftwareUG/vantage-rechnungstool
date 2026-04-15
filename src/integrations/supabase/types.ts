@@ -218,6 +218,7 @@ export type Database = {
           created_at: string
           currency: string
           date: string
+          file_hash: string | null
           file_name: string
           file_url: string | null
           id: string
@@ -237,6 +238,7 @@ export type Database = {
           created_at?: string
           currency?: string
           date: string
+          file_hash?: string | null
           file_name: string
           file_url?: string | null
           id?: string
@@ -256,6 +258,7 @@ export type Database = {
           created_at?: string
           currency?: string
           date?: string
+          file_hash?: string | null
           file_name?: string
           file_url?: string | null
           id?: string
