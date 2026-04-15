@@ -26,5 +26,10 @@ export async function processDocumentOCR(file: File, documentType: "invoice" | "
   });
 
   if (error) throw error;
-  return data;
+  return data as {
+    success: boolean;
+    data: unknown;
+    parseWarning: string | null;
+    needsReview: boolean;
+  };
 }

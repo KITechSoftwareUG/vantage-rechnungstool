@@ -33,14 +33,26 @@ export function useReprocessStatement() {
       if (error) throw error;
 
       const transactions = data.data?.transactions || [];
+      const parseWarning: string | null = data?.parseWarning ?? null;
+      const needsReview: boolean = data?.needsReview === true;
 
       if (transactions.length === 0) {
         toast({
           title: "Keine Transaktionen gefunden",
-          description: "Die OCR-Erkennung konnte keine Transaktionen im Dokument finden.",
+          description:
+            parseWarning ??
+            "Die OCR-Erkennung konnte keine Transaktionen im Dokument finden. Bitte manuell prüfen.",
           variant: "destructive",
         });
         return;
+      }
+
+      if (needsReview && parseWarning) {
+        toast({
+          title: "Manuelle Prüfung empfohlen",
+          description: parseWarning,
+          variant: "destructive",
+        });
       }
 
       const { newTransactions, duplicates } = await checkDuplicateTransactions(user.id, transactions);
