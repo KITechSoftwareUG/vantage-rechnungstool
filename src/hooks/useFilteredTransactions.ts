@@ -14,8 +14,6 @@ export function useFilteredTransactions() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
-  const [recurringOpen, setRecurringOpen] = useState(false);
-  const [ignoredOpen, setIgnoredOpen] = useState(false);
 
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
   const { data: recurringPatterns = [] } = useRecurringPatterns();
@@ -50,20 +48,13 @@ export function useFilteredTransactions() {
     })();
   }, [recurringPatterns, transactions.length]);
 
-  const recurringTransactions = useMemo(
-    () => transactions.filter((t: any) => t.matchStatus === "recurring"),
-    [transactions]
-  );
-
-  const ignoredTransactions = useMemo(
-    () => transactions.filter((t: any) => t.matchStatus === "ignored"),
-    [transactions]
-  );
-
+  // Reihenfolge ist STATISCH nach Datum — egal welchen Status eine TX hat.
+  // Bei Statuswechsel (z.B. unmatched → recurring) bleibt die Zeile an ihrer
+  // Position; der Status-Badge in der Row zeigt den neuen Zustand.
   const sortedTransactions = useMemo(() => {
-    return [...transactions]
-      .filter((t: any) => t.matchStatus !== "recurring" && t.matchStatus !== "ignored")
-      .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return [...transactions].sort(
+      (a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+    );
   }, [transactions]);
 
   const filteredTransactions = useMemo(() => {
@@ -135,8 +126,6 @@ export function useFilteredTransactions() {
 
   const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
   const confirmedCount = transactions.filter((t: any) => t.matchStatus === "confirmed").length;
-  const recurringCount = recurringTransactions.length;
-  const ignoredCount = ignoredTransactions.length;
 
   return {
     transactions,
@@ -148,16 +137,8 @@ export function useFilteredTransactions() {
     setFilterStatus,
     openMonths,
     toggleMonth,
-    recurringOpen,
-    setRecurringOpen,
     groupedByMonth,
-    recurringTransactions,
-    ignoredTransactions,
-    ignoredOpen,
-    setIgnoredOpen,
     unmatchedCount,
     confirmedCount,
-    recurringCount,
-    ignoredCount,
   };
 }
