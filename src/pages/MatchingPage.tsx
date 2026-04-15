@@ -193,6 +193,12 @@ export default function MatchingPage() {
     let aiParseErrors = 0;
     let lastAiError: string | null = null;
     let aiModel: string | null = null;
+    let edgeVersion: string | null = null;
+    let deterministicMatched = 0;
+    let aiReturnedNull = 0;
+    let aiRejectedInvalidId = 0;
+    let aiRejectedLowConfidence = 0;
+    let dbUpdateErrors = 0;
 
     try {
       for (let batch = 0; batch < MAX_BATCHES; batch++) {
@@ -220,6 +226,14 @@ export default function MatchingPage() {
           if (data.ai.lastError) lastAiError = data.ai.lastError;
           if (data.ai.model) aiModel = data.ai.model;
         }
+        if (data?.version) edgeVersion = data.version;
+        if (data?.decisions) {
+          deterministicMatched += data.decisions.deterministicMatched ?? 0;
+          aiReturnedNull += data.decisions.aiReturnedNull ?? 0;
+          aiRejectedInvalidId += data.decisions.aiRejectedInvalidId ?? 0;
+          aiRejectedLowConfidence += data.decisions.aiRejectedLowConfidence ?? 0;
+          dbUpdateErrors += data.decisions.dbUpdateErrors ?? 0;
+        }
 
         const remaining: number = data?.remaining ?? 0;
         if (initialBacklog === null) {
@@ -246,12 +260,22 @@ export default function MatchingPage() {
         const aiSuffix = aiAttempted > 0
           ? ` · KI: ${aiSucceeded}/${aiAttempted}${aiErrorsTotal > 0 ? ` (${aiErrorsTotal} Fehler)` : ""}`
           : "";
+        const detSuffix = deterministicMatched > 0
+          ? ` · Deterministisch: ${deterministicMatched}`
+          : "";
+        const rejectSuffix = (aiReturnedNull + aiRejectedInvalidId + aiRejectedLowConfidence) > 0
+          ? ` · KI-Ablehnungen: null=${aiReturnedNull}, bad-id=${aiRejectedInvalidId}, low-conf=${aiRejectedLowConfidence}`
+          : "";
+        const dbErrSuffix = dbUpdateErrors > 0
+          ? ` · ⚠️ DB-Fehler: ${dbUpdateErrors}`
+          : "";
+        const versionSuffix = edgeVersion ? ` · v=${edgeVersion}` : " · v=? (alte Version?)";
         toast({
           title: "KI-Matching abgeschlossen",
           description:
             totalMatched === 0
-              ? `Keine neuen Treffer gefunden${initialBacklog ? ` (${initialBacklog} Transaktionen geprüft)` : ""}${aiSuffix}`
-              : `${totalAutoConfirmed} automatisch bestätigt (≥95% Confidence) · ${suggested} als Vorschlag · ${totalProcessed} Transaktionen geprüft${aiSuffix}`,
+              ? `Keine neuen Treffer gefunden${initialBacklog ? ` (${initialBacklog} Transaktionen geprüft)` : ""}${aiSuffix}${detSuffix}${rejectSuffix}${dbErrSuffix}${versionSuffix}`
+              : `${totalAutoConfirmed} automatisch bestätigt · ${suggested} als Vorschlag · ${totalProcessed} geprüft${aiSuffix}${detSuffix}${rejectSuffix}${dbErrSuffix}${versionSuffix}`,
         });
       }
       refetch();

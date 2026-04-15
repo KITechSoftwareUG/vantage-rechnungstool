@@ -188,6 +188,14 @@ serve(async (req) => {
     let aiHttpErrors = 0;
     let aiParseErrors = 0;
     let lastAiError: string | null = null;
+    // Entscheidungs-Telemetrie: wo landet jede TX? Damit wir bei "0 Treffer"
+    // sofort sehen auf welchem Pfad sie versanden.
+    let deterministicMatched = 0;
+    let noCandidates = 0;
+    let aiRejectedInvalidId = 0;
+    let aiRejectedLowConfidence = 0;
+    let aiReturnedNull = 0;
+    let dbUpdateErrors = 0;
 
     // Helper function to extract original amount from original_currency field
     // Supports multiple formats:
@@ -342,10 +350,69 @@ serve(async (req) => {
           .map((item: any) => item.invoice);
       }
 
-      if (potentialMatches.length === 0) continue;
+      if (potentialMatches.length === 0) {
+        noCandidates++;
+        continue;
+      }
+
+      // ------------------------------------------------------------------
+      // DETERMINISTISCHER PRE-KI-MATCH
+      // ------------------------------------------------------------------
+      // Bei Slam-dunk-Faellen (exakter Betrag ±0.01 + klarer Name-Substring +
+      // genau EINE passende Rechnung) ist die KI unnoetig. Wir matchen direkt.
+      // Zweck: immun gegen KI-Ausfaelle, JSON-Parse-Probleme, UUID-Validierung
+      // und was sonst alles zwischen KI-Response und DB-Zeile schiefgehen kann.
+      // Die KI bleibt fuer mehrdeutige Faelle zustaendig.
+      const txDescLower = transaction.description.toLowerCase();
+      const slamDunks = potentialMatches.filter((inv: any) => {
+        const amountOk = Math.abs(Number(inv.amount) - matchAmount) < 0.01;
+        if (!amountOk) return false;
+        // Klarer Name-Match: Issuer-Token (>=4 Zeichen) ist Substring der Desc,
+        // oder ein Desc-Token ist Substring des Issuers. Das matcht
+        // "SalesHub 2b" <-> "SALESHUB2B MUNCHEN", "Raidboxes GmbH" <->
+        // "CKO*RAIDBOXES.IO", "Meta" <-> "META *..." etc. Aber NICHT Meta <->
+        // FACEBK — dort kommt die KI zum Zug.
+        const issuerLower = (inv.issuer ?? "").toLowerCase();
+        const issuerTokens = issuerLower.split(/[\s,.\-_/]+/).filter((t: string) => t.length >= 4);
+        const descTokens = txDescLower.split(/[\s,.\-_/*]+/).filter((t: string) => t.length >= 4);
+        for (const it of issuerTokens) {
+          if (txDescLower.includes(it)) return true;
+          for (const dt of descTokens) {
+            if (it.includes(dt) || dt.includes(it)) return true;
+          }
+        }
+        return false;
+      });
+
+      if (slamDunks.length === 1) {
+        const pick = slamDunks[0];
+        const { error: upErr } = await supabaseClient
+          .from("bank_transactions")
+          .update({
+            matched_invoice_id: pick.id,
+            match_status: "confirmed",
+            match_confidence: 100,
+            match_reason: `Deterministisch: exakter Betrag ${pick.amount} + eindeutiger Aussteller-Match (${pick.issuer})`,
+          })
+          .eq("id", transaction.id);
+        if (upErr) {
+          dbUpdateErrors++;
+          console.error(
+            `DB update FAILED for tx ${transaction.id} (deterministic): ${upErr.message}`,
+          );
+        } else {
+          deterministicMatched++;
+          matchedCount++;
+          autoConfirmedCount++;
+          console.log(
+            `DETERMINISTIC tx ${transaction.id} → invoice ${pick.id} (${pick.issuer} ${pick.amount})`,
+          );
+        }
+        continue;
+      }
 
       if (potentialMatches.length >= 1) {
-        // OpenAI für intelligentes Matching — auch bei einzelnen Kandidaten mit Name-Match
+        // KI-Matching fuer mehrdeutige Faelle
         aiAttempted++;
         try {
           const buildPayload = () => ({
@@ -459,37 +526,62 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                   }
 
                   // Validierung: invoiceId muss wirklich ein UUID aus der
-                  // Kandidatenliste sein. Schützt vor halluzinierten IDs und
-                  // vor dem String "uuid oder null" aus Schema-Beispielen.
+                  // Kandidatenliste sein. trim() gegen ueberraschendes Whitespace.
                   const candidateIds = new Set(potentialMatches.map((c: any) => c.id));
+                  const rawId = result.matchedInvoiceId;
+                  const trimmedId = typeof rawId === "string" ? rawId.trim() : null;
                   const invoiceIdValid =
-                    typeof result.matchedInvoiceId === "string" &&
-                    candidateIds.has(result.matchedInvoiceId);
-                  const confidenceNum = typeof result.confidence === "number"
-                    ? result.confidence
-                    : parseFloat(result.confidence);
+                    trimmedId !== null && trimmedId !== "" && candidateIds.has(trimmedId);
+                  const confRaw = result.confidence;
+                  const confidenceNum = typeof confRaw === "number"
+                    ? confRaw
+                    : typeof confRaw === "string"
+                      ? parseFloat(confRaw)
+                      : NaN;
+                  const confidenceOk = Number.isFinite(confidenceNum);
 
-                  if (invoiceIdValid && confidenceNum >= SUGGEST_THRESHOLD) {
-                    // Hohe Confidence → automatisch als bestätigt setzen.
-                    // Niedrigere Confidence → nur als Vorschlag, User bestätigt manuell.
+                  // Separate Telemetrie: KI sagt "kein Match" vs. KI liefert
+                  // muellige ID vs. KI liefert zu niedrige Confidence.
+                  if (rawId === null || rawId === undefined) {
+                    aiReturnedNull++;
+                  } else if (!invoiceIdValid) {
+                    aiRejectedInvalidId++;
+                    console.warn(
+                      `AI returned invalid invoiceId "${rawId}" for tx ${transaction.id} (not in candidate set)`,
+                    );
+                  } else if (!confidenceOk || confidenceNum < SUGGEST_THRESHOLD) {
+                    aiRejectedLowConfidence++;
+                  }
+
+                  if (invoiceIdValid && confidenceOk && confidenceNum >= SUGGEST_THRESHOLD) {
                     const isAutoConfirm = confidenceNum >= AUTO_CONFIRM_THRESHOLD;
                     const newStatus = isAutoConfirm ? "confirmed" : "matched";
 
-                    await supabaseClient
+                    // ERROR-CHECK: das alte await ohne .error-Check hat Fehler
+                    // (RLS, missing row, constraint violation) still verschluckt
+                    // und dennoch matchedCount hochgezaehlt — Row blieb unmatched.
+                    const { error: upErr } = await supabaseClient
                       .from("bank_transactions")
                       .update({
-                        matched_invoice_id: result.matchedInvoiceId,
+                        matched_invoice_id: trimmedId,
                         match_status: newStatus,
                         match_confidence: confidenceNum,
                         match_reason: result.reason ?? null,
                       })
                       .eq("id", transaction.id);
 
-                    console.log(
-                      `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${result.matchedInvoiceId} (${confidenceNum}%): ${result.reason}`,
-                    );
-                    matchedCount++;
-                    if (isAutoConfirm) autoConfirmedCount++;
+                    if (upErr) {
+                      dbUpdateErrors++;
+                      console.error(
+                        `DB update FAILED for tx ${transaction.id} (AI match): ${upErr.message}`,
+                      );
+                    } else {
+                      console.log(
+                        `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${trimmedId} (${confidenceNum}%): ${result.reason}`,
+                      );
+                      matchedCount++;
+                      if (isAutoConfirm) autoConfirmedCount++;
+                    }
                     continue;
                   }
                 }
@@ -520,13 +612,13 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
         }
       }
 
-      // Fallback: Wenn KI nicht erreichbar war oder kein Match liefert,
-      // und es genau EINEN Treffer mit exaktem Betrag gibt, gilt das als auto-bestätigt.
+      // Letzter Fallback: KI war nicht erreichbar ODER hat null geliefert,
+      // und es gibt genau EINE Rechnung mit exaktem Betrag in der gesamten
+      // (unmatched, dedupten) Invoice-Liste → eindeutiger Betragstreffer.
       const exactMatches = invoices.filter((inv: any) => Math.abs(matchAmount - inv.amount) < 0.01);
       if (exactMatches.length === 1) {
         const match = exactMatches[0];
-
-        await supabaseClient
+        const { error: upErr } = await supabaseClient
           .from("bank_transactions")
           .update({
             matched_invoice_id: match.id,
@@ -535,15 +627,25 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
             match_reason: "Exakter Betragstreffer (eindeutig)",
           })
           .eq("id", transaction.id);
-
-        matchedCount++;
-        autoConfirmedCount++;
+        if (upErr) {
+          dbUpdateErrors++;
+          console.error(
+            `DB update FAILED for tx ${transaction.id} (amount-only fallback): ${upErr.message}`,
+          );
+        } else {
+          matchedCount++;
+          autoConfirmedCount++;
+        }
+        continue;
       }
     }
 
     return new Response(
       JSON.stringify({
         success: true,
+        // Version-Tag: bei "0 Treffer" sofort im Network-Tab erkennbar ob
+        // ueberhaupt die neue Edge-Function-Version live ist.
+        version: "2026-04-15-deterministic-v1",
         matchedCount,
         autoConfirmedCount,
         processedCount: transactions.length,
@@ -558,6 +660,14 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
           httpErrors: aiHttpErrors,
           parseErrors: aiParseErrors,
           lastError: lastAiError,
+        },
+        decisions: {
+          deterministicMatched,
+          noCandidates,
+          aiReturnedNull,
+          aiRejectedInvalidId,
+          aiRejectedLowConfidence,
+          dbUpdateErrors,
         },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
