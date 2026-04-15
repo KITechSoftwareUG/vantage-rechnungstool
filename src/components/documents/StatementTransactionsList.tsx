@@ -33,7 +33,6 @@ function matchesQuery(
 
 const statusConfig: Record<StatementTransaction["matchStatus"], { label: string; color: string }> = {
   unmatched: { label: "Offen", color: "bg-warning/10 text-warning border-warning/20" },
-  matched: { label: "Vorschlag", color: "bg-primary/10 text-primary border-primary/20" },
   confirmed: { label: "Bestätigt", color: "bg-success/10 text-success border-success/20" },
   no_match: { label: "Keine Rechnung", color: "bg-muted text-muted-foreground border-muted" },
   recurring: { label: "Laufende Kosten", color: "bg-info/10 text-info border-info/20" },

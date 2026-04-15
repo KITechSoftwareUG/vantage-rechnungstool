@@ -17,7 +17,7 @@ const OPENAI_TIMEOUT_MS = 20000;
 
 // Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
 // neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-no-amount-fallback-v7";
+const EDGE_VERSION = "2026-04-15-no-suggestions-v8";
 
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
@@ -194,12 +194,11 @@ serve(async (req) => {
       );
     }
 
-    // Confidence-Schwellen für die zweistufige Auto-Confirm-Logik:
-    // - >= AUTO_CONFIRM_THRESHOLD → direkt als bestätigt speichern (vollautomatisch)
-    // - >= SUGGEST_THRESHOLD       → als Vorschlag (matched) speichern, User bestätigt manuell
-    // - <  SUGGEST_THRESHOLD       → ignoriert (kein Match)
+    // Vorschlaege wurden komplett entfernt: KI matched nur noch dann
+    // automatisch, wenn die Confidence so hoch ist dass der User es nicht
+    // nochmal pruefen muss. Alles darunter laesst die TX offen — der User
+    // ordnet sie dann manuell mit Relevanz-Scoring zu.
     const AUTO_CONFIRM_THRESHOLD = 95;
-    const SUGGEST_THRESHOLD = 30;
 
     let matchedCount = 0;
     let autoConfirmedCount = 0;
@@ -217,7 +216,7 @@ serve(async (req) => {
       confidence: number;
       reason: string;
       source: "deterministic" | "ai";
-      status: "confirmed" | "matched";
+      status: "confirmed";
     }> = [];
     // KI-Telemetrie, damit das Frontend Silent-Failures erkennen kann.
     let aiAttempted = 0;
@@ -581,8 +580,8 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                     typeof confRaw === "number" ? confRaw : typeof confRaw === "string" ? parseFloat(confRaw) : NaN;
                   const confidenceOk = Number.isFinite(confidenceNum);
 
-                  // Separate Telemetrie: KI sagt "kein Match" vs. KI liefert
-                  // muellige ID vs. KI liefert zu niedrige Confidence.
+                  // Telemetrie nach Ablehnungsgrund. Vorschlaege gibt es nicht
+                  // mehr — alles unter AUTO_CONFIRM_THRESHOLD bleibt unmatched.
                   if (rawId === null || rawId === undefined) {
                     aiReturnedNull++;
                   } else if (!invoiceIdValid) {
@@ -590,22 +589,16 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                     console.warn(
                       `AI returned invalid invoiceId "${rawId}" for tx ${transaction.id} (not in candidate set)`,
                     );
-                  } else if (!confidenceOk || confidenceNum < SUGGEST_THRESHOLD) {
+                  } else if (!confidenceOk || confidenceNum < AUTO_CONFIRM_THRESHOLD) {
                     aiRejectedLowConfidence++;
                   }
 
-                  if (invoiceIdValid && confidenceOk && confidenceNum >= SUGGEST_THRESHOLD) {
-                    const isAutoConfirm = confidenceNum >= AUTO_CONFIRM_THRESHOLD;
-                    const newStatus = isAutoConfirm ? "confirmed" : "matched";
-
-                    // ERROR-CHECK: das alte await ohne .error-Check hat Fehler
-                    // (RLS, missing row, constraint violation) still verschluckt
-                    // und dennoch matchedCount hochgezaehlt — Row blieb unmatched.
+                  if (invoiceIdValid && confidenceOk && confidenceNum >= AUTO_CONFIRM_THRESHOLD) {
                     const { error: upErr } = await supabaseClient
                       .from("bank_transactions")
                       .update({
                         matched_invoice_id: trimmedId,
-                        match_status: newStatus,
+                        match_status: "confirmed",
                         match_confidence: confidenceNum,
                         match_reason: result.reason ?? null,
                       })
@@ -616,10 +609,10 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                       console.error(`DB update FAILED for tx ${transaction.id} (AI match): ${upErr.message}`);
                     } else {
                       console.log(
-                        `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${trimmedId} (${confidenceNum}%): ${result.reason}`,
+                        `AUTO-CONFIRMED tx ${transaction.id} → invoice ${trimmedId} (${confidenceNum}%): ${result.reason}`,
                       );
                       matchedCount++;
-                      if (isAutoConfirm) autoConfirmedCount++;
+                      autoConfirmedCount++;
                       const matchedInv = potentialMatches.find((c: any) => c.id === trimmedId);
                       matchedTransactions.push({
                         transactionId: transaction.id,
@@ -633,7 +626,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                         confidence: confidenceNum,
                         reason: (result.reason ?? "").toString(),
                         source: "ai",
-                        status: isAutoConfirm ? "confirmed" : "matched",
+                        status: "confirmed",
                       });
                     }
                     continue;

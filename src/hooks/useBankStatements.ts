@@ -166,7 +166,7 @@ export interface StatementTransaction {
   description: string;
   amount: number;
   transactionType: "debit" | "credit";
-  matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring";
+  matchStatus: "unmatched" | "confirmed" | "no_match" | "recurring";
   matchedInvoiceId: string | null;
   originalCurrency: string | null;
 }

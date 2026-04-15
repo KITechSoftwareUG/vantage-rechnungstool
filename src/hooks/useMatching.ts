@@ -55,7 +55,7 @@ export function useUpdateTransactionMatch() {
     }: {
       transactionId: string;
       invoiceId: string | null;
-      matchStatus: "unmatched" | "matched" | "confirmed" | "no_match" | "recurring" | "ignored";
+      matchStatus: "unmatched" | "confirmed" | "no_match" | "recurring" | "ignored";
       matchConfidence?: number;
     }) => {
       const { data, error } = await supabase
@@ -121,11 +121,11 @@ export function useUnmatchedInvoices() {
   return useQuery({
     queryKey: ["unmatched_invoices", user?.id],
     queryFn: async () => {
-      // Get all invoices that are already matched or confirmed to any transaction
+      // Get all invoices that are already linked to a confirmed transaction.
       const { data: matchedIds } = await supabase
         .from("bank_transactions")
         .select("matched_invoice_id")
-        .in("match_status", ["confirmed", "matched"])
+        .eq("match_status", "confirmed")
         .not("matched_invoice_id", "is", null);
 
       const matchedInvoiceIds = matchedIds?.map((t) => t.matched_invoice_id).filter(Boolean) || [];

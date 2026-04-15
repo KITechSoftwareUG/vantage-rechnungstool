@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import { useBankTransactions, useUpdateTransactionMatch } from "@/hooks/useMatching";
 import { useRecurringPatterns, matchesRecurringPattern } from "@/hooks/useRecurringPatterns";
 
-type FilterStatus = "all" | "unmatched" | "matched" | "confirmed";
+type FilterStatus = "all" | "unmatched" | "confirmed";
 
 interface MonthGroup {
   year: number;
@@ -134,7 +134,6 @@ export function useFilteredTransactions() {
   }, []);
 
   const unmatchedCount = transactions.filter((t: any) => t.matchStatus === "unmatched").length;
-  const matchedCount = transactions.filter((t: any) => t.matchStatus === "matched").length;
   const confirmedCount = transactions.filter((t: any) => t.matchStatus === "confirmed").length;
   const recurringCount = recurringTransactions.length;
   const ignoredCount = ignoredTransactions.length;
@@ -157,7 +156,6 @@ export function useFilteredTransactions() {
     ignoredOpen,
     setIgnoredOpen,
     unmatchedCount,
-    matchedCount,
     confirmedCount,
     recurringCount,
     ignoredCount,

@@ -339,7 +339,6 @@ export function TransactionRow({
 
   const statusConfig = {
     unmatched: { label: "Offen", color: "bg-warning/10 text-warning border-warning/20" },
-    matched: { label: "Vorschlag", color: "bg-primary/10 text-primary border-primary/20" },
     confirmed: { label: "Bestätigt", color: "bg-success/10 text-success border-success/20" },
     no_match: { label: "Keine Rechnung", color: "bg-muted text-muted-foreground border-muted" },
     recurring: { label: "Laufende Kosten", color: "bg-info/10 text-info border-info/20" },
@@ -522,24 +521,6 @@ export function TransactionRow({
               {transaction.matchedInvoice.issuer} -{" "}
               {transaction.matchedInvoice.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
             </span>
-            {transaction.matchConfidence && transaction.matchStatus === "matched" && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Badge variant="outline" className="ml-1 cursor-help text-xs">
-                      <Sparkles className="mr-1 h-3 w-3" />
-                      {transaction.matchConfidence}%
-                    </Badge>
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs">
-                    <p className="text-xs font-semibold">KI-Match-Begründung:</p>
-                    <p className="text-xs">
-                      {transaction.matchReason || "Keine Begründung gespeichert"}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
           </div>
         )}
       </div>
@@ -562,9 +543,8 @@ export function TransactionRow({
 
       {/* Actions */}
       <div className="flex w-32 flex-shrink-0 justify-end gap-1">
-        {/* View Invoice Buttons - für matched und confirmed */}
-        {transaction.matchedInvoice &&
-          (transaction.matchStatus === "matched" || transaction.matchStatus === "confirmed") && (
+        {/* View Invoice Buttons - für confirmed */}
+        {transaction.matchedInvoice && transaction.matchStatus === "confirmed" && (
             <>
               <Button
                 variant="ghost"
@@ -586,29 +566,6 @@ export function TransactionRow({
               </Button>
             </>
           )}
-
-        {transaction.matchStatus === "matched" && transaction.matchedInvoiceId && (
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-success"
-              onClick={handleConfirmMatch}
-              title="Vorschlag bestätigen"
-            >
-              <Check className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-destructive"
-              onClick={handleUnmatch}
-              title="Zuordnung ablehnen"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </>
-        )}
 
         {transaction.matchStatus === "confirmed" && (
           <Button

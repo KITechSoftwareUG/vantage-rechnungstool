@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from "react";
-import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, Check, X, EyeOff } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, X, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -9,7 +9,6 @@ import { useInvoices } from "@/hooks/useInvoices";
 import { useFilteredTransactions } from "@/hooks/useFilteredTransactions";
 import { TransactionRow } from "@/components/matching/TransactionRow";
 import {
-  useBulkConfirmMatches,
   useBulkUnmatch,
   useRestoreMatchSnapshots,
   type TransactionMatchSnapshot,
@@ -40,7 +39,7 @@ type AutoMatchResult = {
   confidence: number;
   reason: string;
   source: "deterministic" | "ai";
-  status: "confirmed" | "matched";
+  status: "confirmed";
 };
 
 export default function MatchingPage() {
@@ -52,7 +51,6 @@ export default function MatchingPage() {
   const [autoMatchSummary, setAutoMatchSummary] = useState<{
     processed: number;
     confirmed: number;
-    suggested: number;
     deterministic: number;
     aiAttempted: number;
     aiSucceeded: number;
@@ -71,7 +69,6 @@ export default function MatchingPage() {
     } | null;
   } | null>(null);
   const { data: invoices = [] } = useInvoices();
-  const bulkConfirm = useBulkConfirmMatches();
   const bulkUnmatch = useBulkUnmatch();
   const restoreSnapshots = useRestoreMatchSnapshots();
 
@@ -118,7 +115,6 @@ export default function MatchingPage() {
     recurringTransactions,
     ignoredTransactions,
     unmatchedCount,
-    matchedCount,
     confirmedCount,
     recurringCount,
     ignoredCount,
@@ -154,52 +150,19 @@ export default function MatchingPage() {
     setSelectedIds(new Set());
   }, []);
 
-  const selectAllMatched = useCallback(() => {
-    const matchedIds = transactions
-      .filter((t: any) => t.matchStatus === "matched" && t.matchedInvoiceId)
-      .map((t: any) => t.id);
-    setSelectedIds(new Set(matchedIds));
-  }, [transactions]);
-
   // Bulk actions
   const selectedTransactions = useMemo(
     () => transactions.filter((t: any) => selectedIds.has(t.id)),
     [transactions, selectedIds]
   );
 
-  const canBulkConfirm = selectedTransactions.some(
-    (t: any) => t.matchStatus === "matched" && t.matchedInvoiceId
-  );
   const canBulkUnmatch = selectedTransactions.some(
-    (t: any) => t.matchStatus === "matched" || t.matchStatus === "confirmed"
+    (t: any) => t.matchStatus === "confirmed"
   );
-
-  const handleBulkConfirm = async () => {
-    const targets = selectedTransactions.filter(
-      (t: any) => t.matchStatus === "matched" && t.matchedInvoiceId
-    );
-    if (targets.length === 0) return;
-    const snapshots = snapshotTransactions(targets);
-    const ids = targets.map((t: any) => t.id);
-    try {
-      await bulkConfirm.mutateAsync(ids);
-      toast({
-        title: `${ids.length} Zuordnungen bestätigt`,
-        action: (
-          <ToastAction altText="Rückgängig machen" onClick={() => handleUndo(snapshots)}>
-            Rückgängig
-          </ToastAction>
-        ),
-      });
-      clearSelection();
-    } catch (e: any) {
-      toast({ title: "Fehler", description: e.message, variant: "destructive" });
-    }
-  };
 
   const handleBulkUnmatch = async () => {
     const targets = selectedTransactions.filter(
-      (t: any) => t.matchStatus === "matched" || t.matchStatus === "confirmed"
+      (t: any) => t.matchStatus === "confirmed"
     );
     if (targets.length === 0) return;
     const snapshots = snapshotTransactions(targets);
@@ -303,7 +266,6 @@ export default function MatchingPage() {
         if (remaining === 0 || (data?.processedCount ?? 0) === 0) break;
       }
 
-      const suggested = Math.max(0, totalMatched - totalAutoConfirmed);
       const aiErrorsTotal = aiTimeouts + aiHttpErrors + aiParseErrors;
       // Wenn die KI zwar aufgerufen wurde, aber nie erfolgreich geantwortet hat,
       // ist das ein Konfig-/Model-Problem — nicht einfach "keine Treffer".
@@ -320,7 +282,6 @@ export default function MatchingPage() {
         setAutoMatchSummary({
           processed: totalProcessed,
           confirmed: totalAutoConfirmed,
-          suggested,
           deterministic: deterministicMatched,
           aiAttempted,
           aiSucceeded,
@@ -334,17 +295,12 @@ export default function MatchingPage() {
           rawCounts,
         });
         // Kurzer Toast als Bestaetigung, das Modal hat die Details.
-        // Wir zaehlen hier nur confirmed — Vorschlaege erscheinen separat im
-        // Vorschlaege-Tab und sollen den User nicht doppelt informieren.
         toast({
           title:
             totalAutoConfirmed === 0
               ? "Keine automatischen Treffer"
               : `${totalAutoConfirmed} automatisch zugeordnet`,
-          description:
-            suggested > 0
-              ? `${totalProcessed} TX geprüft · ${suggested} weitere als Vorschlag`
-              : `${totalProcessed} TX geprüft`,
+          description: `${totalProcessed} TX geprüft`,
         });
       }
       refetch();
@@ -398,13 +354,6 @@ export default function MatchingPage() {
             </div>
           </div>
           <div className="glass-card flex items-center gap-3 px-4 py-3">
-            <Sparkles className="h-5 w-5 text-primary" />
-            <div>
-              <p className="text-2xl font-bold text-foreground">{matchedCount}</p>
-              <p className="text-xs text-muted-foreground">Vorschläge</p>
-            </div>
-          </div>
-          <div className="glass-card flex items-center gap-3 px-4 py-3">
             <CheckCircle className="h-5 w-5 text-success" />
             <div>
               <p className="text-2xl font-bold text-foreground">{confirmedCount}</p>
@@ -453,22 +402,6 @@ export default function MatchingPage() {
             {selectedIds.size} ausgewählt
           </span>
           <div className="flex gap-2 ml-auto">
-            {canBulkConfirm && (
-              <Button
-                size="sm"
-                variant="default"
-                className="gap-1"
-                onClick={handleBulkConfirm}
-                disabled={bulkConfirm.isPending}
-              >
-                {bulkConfirm.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Check className="h-4 w-4" />
-                )}
-                Alle bestätigen
-              </Button>
-            )}
             {canBulkUnmatch && (
               <Button
                 size="sm"
@@ -499,10 +432,6 @@ export default function MatchingPage() {
             <TabsTrigger value="all" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               Alle Transaktionen ({transactions.length})
             </TabsTrigger>
-            <TabsTrigger value="matched" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              <Sparkles className="mr-1 h-4 w-4" />
-              Vorschläge ({matchedCount})
-            </TabsTrigger>
             <TabsTrigger value="unmatched" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <AlertCircle className="mr-1 h-4 w-4" />
               Offen ({unmatchedCount})
@@ -531,12 +460,6 @@ export default function MatchingPage() {
             <Button size="sm" variant="outline" onClick={selectAll} className="text-xs">
               Alle wählen
             </Button>
-            {matchedCount > 0 && (
-              <Button size="sm" variant="outline" onClick={selectAllMatched} className="text-xs gap-1">
-                <Sparkles className="h-3 w-3" />
-                Vorschläge wählen
-              </Button>
-            )}
           </div>
         </div>
         <div className="flex gap-4 text-sm text-muted-foreground">
@@ -697,12 +620,6 @@ export default function MatchingPage() {
                 <div className="space-y-1 text-xs">
                   <div>
                     <span className="text-success font-medium">{autoMatchSummary.confirmed} automatisch bestätigt</span>
-                    {autoMatchSummary.suggested > 0 && (
-                      <span className="text-muted-foreground">
-                        {" · "}
-                        +{autoMatchSummary.suggested} Vorschläge (siehe Vorschläge-Tab)
-                      </span>
-                    )}
                     {" · "}
                     {autoMatchSummary.processed} TX geprüft
                   </div>
@@ -728,9 +645,9 @@ export default function MatchingPage() {
 
           <div className="overflow-y-auto" style={{ maxHeight: "60vh" }}>
             {(() => {
-              // Modal zeigt nur die automatisch bestaetigten Treffer.
-              // Vorschlaege bleiben in der DB als matched, sind aber im
-              // Vorschlaege-Tab sichtbar — hier wuerden sie nur ablenken.
+              // Auto-Match schreibt seit v8 nur noch confirmed; der Filter ist
+              // defensiv falls Legacy-Daten oder ein anderer Pfad mal etwas
+              // anderes liefert.
               const confirmedOnly = (autoMatchResults ?? []).filter((r) => r.status === "confirmed");
               return confirmedOnly.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
