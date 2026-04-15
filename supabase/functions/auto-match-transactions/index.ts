@@ -46,8 +46,7 @@ async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {
 // Repräsentanten — bevorzugt den mit dem ältesten `created_at`, weil das der
 // "echte" Originaleintrag ist.
 function dedupInvoices(invoices: any[]): any[] {
-  const norm = (s: string | null | undefined) =>
-    (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const norm = (s: string | null | undefined) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const keyOf = (inv: any) => {
     if (inv.file_hash) return `hash:${inv.file_hash}`;
     const num = norm(inv.invoice_number);
@@ -64,9 +63,7 @@ function dedupInvoices(invoices: any[]): any[] {
   const result: any[] = [];
   for (const group of groups.values()) {
     // Älteste Rechnung als Repräsentant → `created_at` aufsteigend sortieren.
-    group.sort(
-      (a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime(),
-    );
+    group.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
     result.push(group[0]);
   }
   return result;
@@ -128,7 +125,9 @@ serve(async (req) => {
     // Dedup auf Inhalt/Rechnungsnummer/Metadaten, damit das LLM bei echten
     // Duplikat-Rechnungen nicht zufällig eine Kopie auswählt.
     const invoices = dedupInvoices(invoicesAfterMatchFilter);
-    console.log(`Invoices: ${allInvoicesRaw.length} total → ${invoicesAfterMatchFilter.length} unmatched → ${invoices.length} after dedup`);
+    console.log(
+      `Invoices: ${allInvoicesRaw.length} total → ${invoicesAfterMatchFilter.length} unmatched → ${invoices.length} after dedup`,
+    );
 
     const totalUnmatched = allTransactions.length;
 
@@ -161,7 +160,8 @@ serve(async (req) => {
         JSON.stringify({
           success: false,
           aiKeyMissing: true,
-          error: "Weder GEMINI_API_KEY noch OPENAI_API_KEY ist in den Edge-Function-Secrets gesetzt. KI-Matching deaktiviert.",
+          error:
+            "Weder GEMINI_API_KEY noch OPENAI_API_KEY ist in den Edge-Function-Secrets gesetzt. KI-Matching deaktiviert.",
           matchedCount: 0,
           autoConfirmedCount: 0,
           processedCount: 0,
@@ -414,9 +414,7 @@ serve(async (req) => {
           .eq("id", transaction.id);
         if (upErr) {
           dbUpdateErrors++;
-          console.error(
-            `DB update FAILED for tx ${transaction.id} (deterministic): ${upErr.message}`,
-          );
+          console.error(`DB update FAILED for tx ${transaction.id} (deterministic): ${upErr.message}`);
         } else {
           deterministicMatched++;
           matchedCount++;
@@ -435,9 +433,7 @@ serve(async (req) => {
             source: "deterministic",
             status: "confirmed",
           });
-          console.log(
-            `DETERMINISTIC tx ${transaction.id} → invoice ${pick.id} (${pick.issuer} ${pick.amount})`,
-          );
+          console.log(`DETERMINISTIC tx ${transaction.id} → invoice ${pick.id} (${pick.issuer} ${pick.amount})`);
         }
         continue;
       }
@@ -520,11 +516,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
           // umschalten und diese Transaktion neu aufrufen. Der Switch bleibt
           // fuer den Rest des Invocation-Runs aktiv — alle weiteren TX nutzen
           // dann direkt das Fallback-Modell, ohne erneut 404 zu produzieren.
-          if (
-            response.status === 404 &&
-            llm.fallbackModel &&
-            llm.model !== llm.fallbackModel
-          ) {
+          if (response.status === 404 && llm.fallbackModel && llm.model !== llm.fallbackModel) {
             const deprecated = llm.model;
             llm.model = llm.fallbackModel;
             console.warn(
@@ -561,14 +553,10 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                   const candidateIds = new Set(potentialMatches.map((c: any) => c.id));
                   const rawId = result.matchedInvoiceId;
                   const trimmedId = typeof rawId === "string" ? rawId.trim() : null;
-                  const invoiceIdValid =
-                    trimmedId !== null && trimmedId !== "" && candidateIds.has(trimmedId);
+                  const invoiceIdValid = trimmedId !== null && trimmedId !== "" && candidateIds.has(trimmedId);
                   const confRaw = result.confidence;
-                  const confidenceNum = typeof confRaw === "number"
-                    ? confRaw
-                    : typeof confRaw === "string"
-                      ? parseFloat(confRaw)
-                      : NaN;
+                  const confidenceNum =
+                    typeof confRaw === "number" ? confRaw : typeof confRaw === "string" ? parseFloat(confRaw) : NaN;
                   const confidenceOk = Number.isFinite(confidenceNum);
 
                   // Separate Telemetrie: KI sagt "kein Match" vs. KI liefert
@@ -603,9 +591,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
 
                     if (upErr) {
                       dbUpdateErrors++;
-                      console.error(
-                        `DB update FAILED for tx ${transaction.id} (AI match): ${upErr.message}`,
-                      );
+                      console.error(`DB update FAILED for tx ${transaction.id} (AI match): ${upErr.message}`);
                     } else {
                       console.log(
                         `${isAutoConfirm ? "AUTO-CONFIRMED" : "Matched"} transaction ${transaction.id} → invoice ${trimmedId} (${confidenceNum}%): ${result.reason}`,
@@ -675,9 +661,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
           .eq("id", transaction.id);
         if (upErr) {
           dbUpdateErrors++;
-          console.error(
-            `DB update FAILED for tx ${transaction.id} (amount-only fallback): ${upErr.message}`,
-          );
+          console.error(`DB update FAILED for tx ${transaction.id} (amount-only fallback): ${upErr.message}`);
         } else {
           matchedCount++;
           autoConfirmedCount++;
