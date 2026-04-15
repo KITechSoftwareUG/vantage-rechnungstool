@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, X, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +45,10 @@ type AutoMatchResult = {
 export default function MatchingPage() {
   const { toast } = useToast();
   const [isAutoMatching, setIsAutoMatching] = useState(false);
+  // Cancel-Flag fuer Auto-Matching. Wird zwischen Batches geprueft — die
+  // gerade laufende Edge-Function-Invocation wird nicht abgebrochen, aber
+  // der Frontend-Loop stoppt sofort nach dem aktuellen Batch.
+  const autoMatchCancelRef = useRef(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [autoMatchResults, setAutoMatchResults] = useState<AutoMatchResult[] | null>(null);
@@ -184,6 +188,7 @@ export default function MatchingPage() {
   };
 
   const handleAutoMatch = async () => {
+    autoMatchCancelRef.current = false;
     setIsAutoMatching(true);
     // Edge Function verarbeitet aus Wall-Clock-Gründen nur N Transaktionen
     // pro Aufruf. Wir loopen, bis sie `remaining: 0` meldet. Safety-Cap
@@ -215,8 +220,14 @@ export default function MatchingPage() {
     } | null = null;
     const allResults: AutoMatchResult[] = [];
 
+    let wasCancelled = false;
     try {
       for (let batch = 0; batch < MAX_BATCHES; batch++) {
+        // Cancel VOR Batch-Start: noch nichts in der DB passiert, sauber raus.
+        if (autoMatchCancelRef.current) {
+          wasCancelled = true;
+          break;
+        }
         const { data, error } = await supabase.functions.invoke("auto-match-transactions");
         if (error) throw error;
         if (data?.aiKeyMissing) {
@@ -264,6 +275,14 @@ export default function MatchingPage() {
         // Matching-Laufs nicht mitten im Scrollen aktualisiert werden.
         // Refetch passiert erst, wenn der User das Ergebnis-Modal schliesst.
 
+        // Cancel NACH Batch-Response: dieser Batch ist bereits in der DB,
+        // die Ergebnisse wurden oben akkumuliert → wir zeigen sie, brechen
+        // aber den naechsten Batch ab.
+        if (autoMatchCancelRef.current) {
+          wasCancelled = true;
+          break;
+        }
+
         if (remaining === 0 || (data?.processedCount ?? 0) === 0) break;
       }
 
@@ -296,11 +315,12 @@ export default function MatchingPage() {
           rawCounts,
         });
         // Kurzer Toast als Bestaetigung, das Modal hat die Details.
+        const cancelNote = wasCancelled ? " (abgebrochen)" : "";
         toast({
           title:
             totalAutoConfirmed === 0
-              ? "Keine automatischen Treffer"
-              : `${totalAutoConfirmed} automatisch zugeordnet`,
+              ? `Keine automatischen Treffer${cancelNote}`
+              : `${totalAutoConfirmed} automatisch zugeordnet${cancelNote}`,
           description: `${totalProcessed} TX geprüft`,
         });
       }
@@ -375,19 +395,29 @@ export default function MatchingPage() {
             <Bot className="h-4 w-4" />
             KI-Assistent ({unmatchedCount})
           </Button>
-          <Button
-            variant="gradient"
-            onClick={handleAutoMatch}
-            disabled={isAutoMatching || unmatchedCount === 0}
-            className="gap-2"
-          >
-            {isAutoMatching ? (
+          {isAutoMatching ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                autoMatchCancelRef.current = true;
+              }}
+              disabled={autoMatchCancelRef.current}
+              className="gap-2"
+            >
               <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
+              {autoMatchCancelRef.current ? "Abbrechen..." : "Abbrechen"}
+            </Button>
+          ) : (
+            <Button
+              variant="gradient"
+              onClick={handleAutoMatch}
+              disabled={unmatchedCount === 0}
+              className="gap-2"
+            >
               <Sparkles className="h-4 w-4" />
-            )}
-            KI Auto-Matching
-          </Button>
+              KI Auto-Matching
+            </Button>
+          )}
         </div>
       </div>
 
