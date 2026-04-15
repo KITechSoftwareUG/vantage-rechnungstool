@@ -260,8 +260,9 @@ export default function MatchingPage() {
           initialBacklog = (data?.totalUnmatched ?? 0) as number;
         }
 
-        // Zwischenstand-Refetch, damit der User Fortschritt sieht.
-        refetch();
+        // KEIN Zwischenstand-Refetch mehr: die Liste darf waehrend des
+        // Matching-Laufs nicht mitten im Scrollen aktualisiert werden.
+        // Refetch passiert erst, wenn der User das Ergebnis-Modal schliesst.
 
         if (remaining === 0 || (data?.processedCount ?? 0) === 0) break;
       }
@@ -303,7 +304,8 @@ export default function MatchingPage() {
           description: `${totalProcessed} TX geprüft`,
         });
       }
-      refetch();
+      // Refetch passiert erst wenn User das Modal schliesst — so sieht er
+      // die neuen Status-Badges nicht schon waehrend er das Modal anschaut.
     } catch (error: any) {
       toast({ title: "Fehler beim Auto-Matching", description: error.message, variant: "destructive" });
     } finally {
@@ -606,6 +608,10 @@ export default function MatchingPage() {
           if (!open) {
             setAutoMatchResults(null);
             setAutoMatchSummary(null);
+            // Erst jetzt, beim Schliessen des Ergebnis-Modals, wird die Liste
+            // mit den neuen Zuordnungen synchronisiert. Vorher: Modal zeigt
+            // was gemacht wurde, Liste zeigt noch den alten Stand.
+            refetch();
           }
         }}
       >
