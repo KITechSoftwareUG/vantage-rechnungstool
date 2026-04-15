@@ -157,8 +157,18 @@ export function ReviewQueue() {
   const discardMutation = useMutation({
     mutationFn: async (id: string) => {
       const inv = pendingInvoices.find((p) => p.id === id);
+      // Vollstaendig entfernen: Invoice-Record + Storage-File +
+      // Ingestion-Log-Eintrag + Drive-Marker. Sonst muss der User die gleiche
+      // Datei spaeter manuell nochmal aus dem Einspeisungs-Tracker loeschen.
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
+      // Ingestion-Log-Eintrag fuer genau dieses Dokument entfernen (Drive-
+      // Poller oder manueller Upload hat einen Log-Eintrag mit document_id=id
+      // angelegt). Fire-and-forget.
+      void supabase.from("document_ingestion_log").delete().eq("document_id", id).then(
+        () => undefined,
+        () => undefined,
+      );
       // Storage-Cleanup nur nach erfolgreichem DB-Delete, als fire-and-forget.
       // Scheitert das Storage-Remove, ist das kein User-sichtbarer Fehler.
       if (inv && user) {
@@ -185,6 +195,7 @@ export function ReviewQueue() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
       toast({ title: "Rechnung verworfen" });
     },
     onError: (error, _id, ctx) => {
@@ -260,6 +271,12 @@ export function ReviewQueue() {
       const ids = snapshot.map((inv) => inv.id);
       const { error } = await supabase.from("invoices").delete().in("id", ids);
       if (error) throw error;
+      // Zugehoerige Ingestion-Log-Eintraege mit weg, damit die verworfenen
+      // Rechnungen nicht weiter im Einspeisungs-Tracker auftauchen.
+      void supabase.from("document_ingestion_log").delete().in("document_id", ids).then(
+        () => undefined,
+        () => undefined,
+      );
       if (user) {
         const paths = buildStoragePaths(
           snapshot.map((inv) => ({
@@ -287,6 +304,7 @@ export function ReviewQueue() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
       toast({ title: "Alle Rechnungen verworfen" });
     },
     onError: (error, _vars, ctx) => {
