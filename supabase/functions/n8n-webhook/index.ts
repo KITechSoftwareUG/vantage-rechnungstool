@@ -697,20 +697,42 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
     finalStoragePath = `${userId}/${year}/${month}/${finalFileName}`;
 
     // Server-side move — ein einziger Storage-Call statt download+upload+delete.
-    // Bei Kollision (finalStoragePath existiert schon, z. B. durch einen
-    // vorherigen Lauf) fällt die Function auf den Temp-Namen zurück, statt die
-    // vorhandene Datei zu überschreiben.
+    // Bei Namens-Kollision (finalStoragePath existiert bereits, z.B. weil der
+    // User mehrere "Kopie von ..."-Varianten derselben Rechnung hochlaedt)
+    // haengen wir `_v2`, `_v3`, ... an, bis ein freier Name gefunden wird —
+    // statt stumm auf den Temp-Namen zurueckzufallen.
     let moveErrorMessage: string | null = null;
     if (finalStoragePath !== tempStoragePath) {
-      const { error: moveError } = await supabase.storage.from("documents").move(tempStoragePath, finalStoragePath);
-
-      if (moveError) {
-        console.error("Storage move failed, keeping temp path:", moveError);
-        moveErrorMessage = `Rename fehlgeschlagen (${moveError.message}) — Datei behält Temp-Namen: ${tempFileName}`;
+      const baseName = finalFileName.replace(/\.[^.]+$/, "");
+      const ext = finalFileName.match(/\.[^.]+$/)?.[0] ?? "";
+      const folder = `${userId}/${year}/${month}`;
+      let moved = false;
+      let lastError: any = null;
+      for (let attempt = 1; attempt <= 10; attempt++) {
+        const candidateName = attempt === 1 ? finalFileName : `${baseName}_v${attempt}${ext}`;
+        const candidatePath = `${folder}/${candidateName}`;
+        const { error: moveError } = await supabase.storage
+          .from("documents")
+          .move(tempStoragePath, candidatePath);
+        if (!moveError) {
+          finalFileName = candidateName;
+          finalStoragePath = candidatePath;
+          moved = true;
+          console.log(`File renamed to: ${candidatePath} (attempt ${attempt})`);
+          break;
+        }
+        lastError = moveError;
+        // Nur bei typischen Kollisions-Fehlern suffix-probieren; bei anderen
+        // Fehlern sofort abbrechen (keine Retries bei Auth/Permission-Problemen).
+        const msg = (moveError.message || "").toLowerCase();
+        const isCollision = msg.includes("already exists") || msg.includes("duplicate") || msg.includes("resource");
+        if (!isCollision) break;
+      }
+      if (!moved) {
+        console.error("Storage move failed after retries, keeping temp path:", lastError);
+        moveErrorMessage = `Rename fehlgeschlagen (${lastError?.message ?? "unbekannt"}) — Datei behält Temp-Namen: ${tempFileName}`;
         finalFileName = tempFileName;
         finalStoragePath = tempStoragePath;
-      } else {
-        console.log("File renamed to:", finalStoragePath);
       }
     }
 
