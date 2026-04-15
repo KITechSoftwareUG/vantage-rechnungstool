@@ -11,6 +11,48 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { useState, useCallback, useMemo } from "react";
 import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 
+function extractStoragePath(fileUrl: string | null | undefined): string | null {
+  if (!fileUrl) return null;
+  try {
+    const parsed = new URL(fileUrl);
+    const markers = [
+      "/storage/v1/object/public/documents/",
+      "/storage/v1/object/sign/documents/",
+      "/storage/v1/object/authenticated/documents/",
+    ];
+    for (const marker of markers) {
+      const idx = parsed.pathname.indexOf(marker);
+      if (idx !== -1) {
+        return decodeURIComponent(parsed.pathname.slice(idx + marker.length));
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function removeStorageObjectsForInvoiceIds(ids: string[]) {
+  if (ids.length === 0) return;
+  const { data, error } = await supabase
+    .from("invoices")
+    .select("user_id, year, month, file_name, file_url")
+    .in("id", ids);
+  if (error || !data) return;
+
+  const paths = new Set<string>();
+  for (const row of data) {
+    const fromUrl = extractStoragePath(row.file_url);
+    if (fromUrl) paths.add(fromUrl);
+    if (row.user_id && row.year != null && row.month != null && row.file_name) {
+      paths.add(`${row.user_id}/${row.year}/${row.month}/${row.file_name}`);
+      paths.add(`${row.user_id}/${row.year}/${String(row.month).padStart(2, "0")}/${row.file_name}`);
+    }
+  }
+  if (paths.size === 0) return;
+  // Storage-Fehler nicht propagieren: wenn die Datei schon weg ist, soll der
+  // DB-Delete trotzdem laufen. Der Bucket darf nicht zur Blockade werden.
+  await supabase.storage.from("documents").remove(Array.from(paths));
+}
+
 interface PendingInvoice {
   id: string;
   fileName: string;
@@ -116,6 +158,7 @@ export function ReviewQueue() {
 
   const discardMutation = useMutation({
     mutationFn: async (id: string) => {
+      await removeStorageObjectsForInvoiceIds([id]);
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
     },
@@ -192,6 +235,7 @@ export function ReviewQueue() {
   const discardAllMutation = useMutation({
     mutationFn: async () => {
       const ids = pendingInvoices.map((inv) => inv.id);
+      await removeStorageObjectsForInvoiceIds(ids);
       const { error } = await supabase.from("invoices").delete().in("id", ids);
       if (error) throw error;
     },
