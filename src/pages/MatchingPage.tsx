@@ -20,12 +20,49 @@ import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
 import { MatchingAgentDialog } from "@/components/matching/MatchingAgentDialog";
 import { Bot } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+type AutoMatchResult = {
+  transactionId: string;
+  transactionDescription: string;
+  transactionAmount: number;
+  transactionDate: string;
+  invoiceId: string;
+  invoiceIssuer: string;
+  invoiceAmount: number;
+  invoiceDate: string;
+  confidence: number;
+  reason: string;
+  source: "deterministic" | "ai" | "amount-fallback";
+  status: "confirmed" | "matched";
+};
 
 export default function MatchingPage() {
   const { toast } = useToast();
   const [isAutoMatching, setIsAutoMatching] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [autoMatchResults, setAutoMatchResults] = useState<AutoMatchResult[] | null>(null);
+  const [autoMatchSummary, setAutoMatchSummary] = useState<{
+    processed: number;
+    confirmed: number;
+    suggested: number;
+    deterministic: number;
+    aiAttempted: number;
+    aiSucceeded: number;
+    aiReturnedNull: number;
+    aiRejectedInvalidId: number;
+    aiRejectedLowConfidence: number;
+    dbErrors: number;
+    edgeVersion: string | null;
+    aiModel: string | null;
+  } | null>(null);
   const { data: invoices = [] } = useInvoices();
   const bulkConfirm = useBulkConfirmMatches();
   const bulkUnmatch = useBulkUnmatch();
@@ -199,6 +236,7 @@ export default function MatchingPage() {
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
     let dbUpdateErrors = 0;
+    const allResults: AutoMatchResult[] = [];
 
     try {
       for (let batch = 0; batch < MAX_BATCHES; batch++) {
@@ -234,6 +272,9 @@ export default function MatchingPage() {
           aiRejectedLowConfidence += data.decisions.aiRejectedLowConfidence ?? 0;
           dbUpdateErrors += data.decisions.dbUpdateErrors ?? 0;
         }
+        if (Array.isArray(data?.matchedTransactions)) {
+          allResults.push(...(data.matchedTransactions as AutoMatchResult[]));
+        }
 
         const remaining: number = data?.remaining ?? 0;
         if (initialBacklog === null) {
@@ -257,25 +298,27 @@ export default function MatchingPage() {
           variant: "destructive",
         });
       } else {
-        const aiSuffix = aiAttempted > 0
-          ? ` · KI: ${aiSucceeded}/${aiAttempted}${aiErrorsTotal > 0 ? ` (${aiErrorsTotal} Fehler)` : ""}`
-          : "";
-        const detSuffix = deterministicMatched > 0
-          ? ` · Deterministisch: ${deterministicMatched}`
-          : "";
-        const rejectSuffix = (aiReturnedNull + aiRejectedInvalidId + aiRejectedLowConfidence) > 0
-          ? ` · KI-Ablehnungen: null=${aiReturnedNull}, bad-id=${aiRejectedInvalidId}, low-conf=${aiRejectedLowConfidence}`
-          : "";
-        const dbErrSuffix = dbUpdateErrors > 0
-          ? ` · ⚠️ DB-Fehler: ${dbUpdateErrors}`
-          : "";
-        const versionSuffix = edgeVersion ? ` · v=${edgeVersion}` : " · v=? (alte Version?)";
+        // Result-Modal: zeigt jede einzelne neu zugeordnete TX. Damit sieht der
+        // User auf einen Blick was passiert ist, statt nur eine abstrakte Zahl.
+        setAutoMatchResults(allResults);
+        setAutoMatchSummary({
+          processed: totalProcessed,
+          confirmed: totalAutoConfirmed,
+          suggested,
+          deterministic: deterministicMatched,
+          aiAttempted,
+          aiSucceeded,
+          aiReturnedNull,
+          aiRejectedInvalidId,
+          aiRejectedLowConfidence,
+          dbErrors: dbUpdateErrors,
+          edgeVersion,
+          aiModel,
+        });
+        // Kurzer Toast als Bestaetigung, das Modal hat die Details.
         toast({
-          title: "KI-Matching abgeschlossen",
-          description:
-            totalMatched === 0
-              ? `Keine neuen Treffer gefunden${initialBacklog ? ` (${initialBacklog} Transaktionen geprüft)` : ""}${aiSuffix}${detSuffix}${rejectSuffix}${dbErrSuffix}${versionSuffix}`
-              : `${totalAutoConfirmed} automatisch bestätigt · ${suggested} als Vorschlag · ${totalProcessed} geprüft${aiSuffix}${detSuffix}${rejectSuffix}${dbErrSuffix}${versionSuffix}`,
+          title: totalMatched === 0 ? "Keine neuen Treffer" : `${totalMatched} neu zugeordnet`,
+          description: `${totalProcessed} TX geprüft. Klick für Details.`,
         });
       }
       refetch();
@@ -607,6 +650,122 @@ export default function MatchingPage() {
           </div>
         )}
       </div>
+
+      <Dialog
+        open={autoMatchResults !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAutoMatchResults(null);
+            setAutoMatchSummary(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              KI-Matching Ergebnis
+            </DialogTitle>
+            {autoMatchSummary && (
+              <DialogDescription asChild>
+                <div className="space-y-1 text-xs">
+                  <div>
+                    <span className="font-medium text-foreground">{autoMatchResults?.length ?? 0}</span>
+                    {" neu zugeordnet · "}
+                    <span className="text-success">{autoMatchSummary.confirmed} bestätigt</span>
+                    {" · "}
+                    <span className="text-primary">{autoMatchSummary.suggested} als Vorschlag</span>
+                    {" · "}
+                    {autoMatchSummary.processed} TX geprüft
+                  </div>
+                  <div className="text-muted-foreground">
+                    Pfade: deterministisch={autoMatchSummary.deterministic}
+                    {autoMatchSummary.aiAttempted > 0 && ` · KI ${autoMatchSummary.aiSucceeded}/${autoMatchSummary.aiAttempted} (${autoMatchSummary.aiModel ?? "?"})`}
+                    {(autoMatchSummary.aiReturnedNull + autoMatchSummary.aiRejectedInvalidId + autoMatchSummary.aiRejectedLowConfidence) > 0 &&
+                      ` · KI-Ablehnungen: null=${autoMatchSummary.aiReturnedNull}, bad-id=${autoMatchSummary.aiRejectedInvalidId}, low-conf=${autoMatchSummary.aiRejectedLowConfidence}`}
+                    {autoMatchSummary.dbErrors > 0 && ` · ⚠️ DB-Fehler: ${autoMatchSummary.dbErrors}`}
+                  </div>
+                  <div className="text-muted-foreground">
+                    Edge-Function:{" "}
+                    {autoMatchSummary.edgeVersion ? (
+                      <span className="font-mono">{autoMatchSummary.edgeVersion}</span>
+                    ) : (
+                      <span className="font-medium text-warning">⚠️ alte Version (Lovable redeploy nötig)</span>
+                    )}
+                  </div>
+                </div>
+              </DialogDescription>
+            )}
+          </DialogHeader>
+
+          <div className="overflow-y-auto" style={{ maxHeight: "60vh" }}>
+            {autoMatchResults && autoMatchResults.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                Keine neuen Zuordnungen in diesem Lauf.
+                {autoMatchSummary && autoMatchSummary.processed > 0 && (
+                  <div className="mt-2 text-xs">
+                    Mögliche Gründe siehst du oben in den Pfad-Zählern.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {autoMatchResults?.map((r) => (
+                  <div
+                    key={r.transactionId}
+                    className="rounded-lg border border-border/60 bg-card p-3 text-sm"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                          r.status === "confirmed"
+                            ? "bg-success/10 text-success"
+                            : "bg-primary/10 text-primary"
+                        }`}
+                      >
+                        {r.status === "confirmed" ? "Bestätigt" : "Vorschlag"} · {r.confidence}%
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-xs ${
+                          r.source === "deterministic"
+                            ? "bg-info/10 text-info"
+                            : r.source === "ai"
+                              ? "bg-muted text-muted-foreground"
+                              : "bg-warning/10 text-warning"
+                        }`}
+                      >
+                        {r.source === "deterministic"
+                          ? "Deterministisch"
+                          : r.source === "ai"
+                            ? "KI"
+                            : "Betrags-Fallback"}
+                      </span>
+                      <span className="ml-auto text-xs text-muted-foreground">{r.transactionDate}</span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div>
+                        <div className="text-xs text-muted-foreground">Transaktion</div>
+                        <div className="font-medium">{r.transactionDescription}</div>
+                        <div className="text-xs">{r.transactionAmount.toFixed(2)} €</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Rechnung</div>
+                        <div className="font-medium">{r.invoiceIssuer}</div>
+                        <div className="text-xs">
+                          {r.invoiceAmount.toFixed(2)} € · {r.invoiceDate}
+                        </div>
+                      </div>
+                    </div>
+                    {r.reason && (
+                      <div className="mt-2 text-xs italic text-muted-foreground">{r.reason}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -181,6 +181,22 @@ serve(async (req) => {
 
     let matchedCount = 0;
     let autoConfirmedCount = 0;
+    // Konkrete Liste aller neu zugeordneten Transaktionen — damit der User
+    // im UI sieht WAS gematcht wurde, nicht nur dass irgendwas passierte.
+    const matchedTransactions: Array<{
+      transactionId: string;
+      transactionDescription: string;
+      transactionAmount: number;
+      transactionDate: string;
+      invoiceId: string;
+      invoiceIssuer: string;
+      invoiceAmount: number;
+      invoiceDate: string;
+      confidence: number;
+      reason: string;
+      source: "deterministic" | "ai" | "amount-fallback";
+      status: "confirmed" | "matched";
+    }> = [];
     // KI-Telemetrie, damit das Frontend Silent-Failures erkennen kann.
     let aiAttempted = 0;
     let aiSucceeded = 0;
@@ -386,13 +402,14 @@ serve(async (req) => {
 
       if (slamDunks.length === 1) {
         const pick = slamDunks[0];
+        const reason = `Deterministisch: exakter Betrag ${pick.amount} + eindeutiger Aussteller-Match (${pick.issuer})`;
         const { error: upErr } = await supabaseClient
           .from("bank_transactions")
           .update({
             matched_invoice_id: pick.id,
             match_status: "confirmed",
             match_confidence: 100,
-            match_reason: `Deterministisch: exakter Betrag ${pick.amount} + eindeutiger Aussteller-Match (${pick.issuer})`,
+            match_reason: reason,
           })
           .eq("id", transaction.id);
         if (upErr) {
@@ -404,6 +421,20 @@ serve(async (req) => {
           deterministicMatched++;
           matchedCount++;
           autoConfirmedCount++;
+          matchedTransactions.push({
+            transactionId: transaction.id,
+            transactionDescription: transaction.description,
+            transactionAmount: transaction.amount,
+            transactionDate: transaction.date,
+            invoiceId: pick.id,
+            invoiceIssuer: pick.issuer,
+            invoiceAmount: Number(pick.amount),
+            invoiceDate: pick.date,
+            confidence: 100,
+            reason,
+            source: "deterministic",
+            status: "confirmed",
+          });
           console.log(
             `DETERMINISTIC tx ${transaction.id} → invoice ${pick.id} (${pick.issuer} ${pick.amount})`,
           );
@@ -581,6 +612,21 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                       );
                       matchedCount++;
                       if (isAutoConfirm) autoConfirmedCount++;
+                      const matchedInv = potentialMatches.find((c: any) => c.id === trimmedId);
+                      matchedTransactions.push({
+                        transactionId: transaction.id,
+                        transactionDescription: transaction.description,
+                        transactionAmount: transaction.amount,
+                        transactionDate: transaction.date,
+                        invoiceId: trimmedId!,
+                        invoiceIssuer: matchedInv?.issuer ?? "?",
+                        invoiceAmount: Number(matchedInv?.amount ?? 0),
+                        invoiceDate: matchedInv?.date ?? "",
+                        confidence: confidenceNum,
+                        reason: (result.reason ?? "").toString(),
+                        source: "ai",
+                        status: isAutoConfirm ? "confirmed" : "matched",
+                      });
                     }
                     continue;
                   }
@@ -635,6 +681,20 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
         } else {
           matchedCount++;
           autoConfirmedCount++;
+          matchedTransactions.push({
+            transactionId: transaction.id,
+            transactionDescription: transaction.description,
+            transactionAmount: transaction.amount,
+            transactionDate: transaction.date,
+            invoiceId: match.id,
+            invoiceIssuer: match.issuer,
+            invoiceAmount: Number(match.amount),
+            invoiceDate: match.date,
+            confidence: 100,
+            reason: "Exakter Betragstreffer (eindeutig)",
+            source: "amount-fallback",
+            status: "confirmed",
+          });
         }
         continue;
       }
@@ -645,7 +705,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
         success: true,
         // Version-Tag: bei "0 Treffer" sofort im Network-Tab erkennbar ob
         // ueberhaupt die neue Edge-Function-Version live ist.
-        version: "2026-04-15-deterministic-v1",
+        version: "2026-04-15-results-v2",
         matchedCount,
         autoConfirmedCount,
         processedCount: transactions.length,
@@ -669,6 +729,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
           aiRejectedLowConfidence,
           dbUpdateErrors,
         },
+        matchedTransactions,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
