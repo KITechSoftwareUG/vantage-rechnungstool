@@ -160,26 +160,63 @@ export function ReviewQueue() {
       // Vollstaendig entfernen: Invoice-Record + Storage-File +
       // Ingestion-Log-Eintrag + Drive-Marker. Sonst muss der User die gleiche
       // Datei spaeter manuell nochmal aus dem Einspeisungs-Tracker loeschen.
+      //
+      // Fix B: Ingestion-Log-ID ZUERST queryen (vor invoice-delete), damit
+      // wir nach dem invoice-delete deterministisch aufraeumen koennen und
+      // nicht von Race Conditions mit RLS-Kaskaden abhaengig sind.
+      const { data: logRows } = await supabase
+        .from("document_ingestion_log")
+        .select("id")
+        .eq("document_id", id);
+      const logIds = (logRows || []).map((r: any) => r.id);
+
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
-      // Ingestion-Log-Eintrag fuer genau dieses Dokument entfernen (Drive-
-      // Poller oder manueller Upload hat einen Log-Eintrag mit document_id=id
-      // angelegt). Fire-and-forget.
-      void supabase.from("document_ingestion_log").delete().eq("document_id", id).then(
-        () => undefined,
-        () => undefined,
-      );
-      // Storage-Cleanup nur nach erfolgreichem DB-Delete, als fire-and-forget.
-      // Scheitert das Storage-Remove, ist das kein User-sichtbarer Fehler.
+
+      // Fix B: Log-Delete mit 1 Retry, kein Toast bei Failure.
+      if (logIds.length) {
+        const deleteLog = () =>
+          supabase.from("document_ingestion_log").delete().in("id", logIds);
+        let { error: logErr } = await deleteLog();
+        if (logErr) {
+          const retry = await deleteLog();
+          logErr = retry.error;
+        }
+        if (logErr) {
+          console.error("Ingestion-Log-Delete fehlgeschlagen:", logErr);
+        }
+      }
+
+      // Fix A: Storage-Cleanup mit 3 Retries (500ms, 1500ms, 4500ms).
+      // Scheitert alles, loggen wir + zeigen eine non-blocking Warn-Toast,
+      // der DB-Delete bleibt aber erfolgreich.
       if (inv && user) {
         const paths = buildStoragePaths([
           { userId: user.id, year: inv.year, month: inv.month, fileName: inv.fileName, fileUrl: inv.fileUrl },
         ]);
         if (paths.length) {
-          void supabase.storage.from("documents").remove(paths).then(
-            () => undefined,
-            () => undefined
-          );
+          // Bis zu 3 Retries mit 500/1500/4500 ms Backoff vor jedem Retry.
+          const retryDelays = [500, 1500, 4500];
+          let lastError: unknown = null;
+          let removed = false;
+          for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+            if (attempt > 0) {
+              await new Promise((r) => setTimeout(r, retryDelays[attempt - 1]));
+            }
+            const { error: rmErr } = await supabase.storage.from("documents").remove(paths);
+            if (!rmErr) {
+              removed = true;
+              break;
+            }
+            lastError = rmErr;
+          }
+          if (!removed) {
+            console.error("Storage-Remove fehlgeschlagen nach 3 Retries:", lastError, paths);
+            toast({
+              title: "Datei konnte nicht aus Storage entfernt werden — bitte Admin informieren",
+              variant: "destructive",
+            });
+          }
         }
       }
     },

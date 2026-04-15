@@ -183,16 +183,34 @@ export function useMergeDuplicate() {
         if (reassignError) throw reassignError;
       }
 
+      // Fix B: Ingestion-Log-IDs ZUERST queryen (vor invoice-delete), damit
+      // wir nach dem invoice-delete deterministisch per id aufraeumen koennen.
+      const { data: logRows } = await supabase
+        .from("document_ingestion_log")
+        .select("id")
+        .eq("document_id", duplicateId);
+      const logIds = (logRows || []).map((r: any) => r.id);
+
       const { error: deleteError } = await supabase
         .from("invoices")
         .delete()
         .eq("id", duplicateId);
       if (deleteError) throw deleteError;
 
-      await supabase
-        .from("document_ingestion_log")
-        .delete()
-        .eq("document_id", duplicateId);
+      // Fix B: Log-Delete awaiten mit 1 Retry. Kein Toast bei Failure —
+      // nicht kritisch, aber console.error fuer Debug.
+      if (logIds.length) {
+        const deleteLog = () =>
+          supabase.from("document_ingestion_log").delete().in("id", logIds);
+        let { error: logErr } = await deleteLog();
+        if (logErr) {
+          const retry = await deleteLog();
+          logErr = retry.error;
+        }
+        if (logErr) {
+          console.error("Ingestion-Log-Delete (merge) fehlgeschlagen:", logErr);
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
