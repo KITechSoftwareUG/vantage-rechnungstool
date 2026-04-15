@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, CheckCircle, AlertCircle, Sparkles, Building, Search, FileText, RefreshCw, ChevronDown, ChevronRight, Calendar, X, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,6 +82,7 @@ export default function MatchingPage() {
   const { data: invoices = [] } = useInvoices();
   const bulkUnmatch = useBulkUnmatch();
   const restoreSnapshots = useRestoreMatchSnapshots();
+  const queryClient = useQueryClient();
 
   // Helper: nimmt einen Snapshot der Match-Felder einer Transaktion
   // (vor einer destruktiven Bulk-Aktion). Wird vom Undo-Toast genutzt.
@@ -198,6 +200,21 @@ export default function MatchingPage() {
     autoMatchAbortRef.current = new AbortController();
     setAutoMatchProgress({ batch: 0, processed: 0, confirmed: 0 });
     setIsAutoMatching(true);
+
+    // UI-Freeze: Snapshot der bank_transactions-Queries. Irgendwas
+    // (Realtime, Window-Focus, staleTime:0, ...) sorgt dafuer, dass die
+    // Liste waehrend des Laufs gruen "durchtropft". Das wollten wir in
+    // Commit 5e3f77d verhindern — hier erzwingen wir es explizit:
+    // laufende Refetches werden gecancelt, und die Cache-Daten werden
+    // nach jeder Welle aus dem Snapshot zurueckgeschrieben. Erst wenn der
+    // User das Result-Modal schliesst, wird wieder echt nachgeladen.
+    const txSnapshots = queryClient.getQueriesData({ queryKey: ["bank_transactions"] }) as [readonly unknown[], unknown][];
+    await queryClient.cancelQueries({ queryKey: ["bank_transactions"] });
+    const restoreTxSnapshots = () => {
+      for (const [key, data] of txSnapshots) {
+        if (data !== undefined) queryClient.setQueryData(key, data);
+      }
+    };
     // Edge Function verarbeitet aus Wall-Clock-Gründen nur N Transaktionen
     // pro Aufruf. Wir loopen, bis sie `remaining: 0` meldet. Safety-Cap
     // verhindert eine Endlosschleife bei einem fehlerhaften Backend.
@@ -319,6 +336,12 @@ export default function MatchingPage() {
           confirmed: totalAutoConfirmed,
         });
 
+        // Cache auf Snapshot zurueckrollen: falls irgendein Mechanismus
+        // (Realtime/Focus-Refetch/etc.) zwischenzeitlich frischere DB-Daten
+        // eingespielt hat, ueberschreiben wir sie wieder mit dem Start-Stand.
+        // Sichtbar wird der neue Stand erst beim Refetch nach Modal-Close.
+        restoreTxSnapshots();
+
         if (wasCancelled) break waveLoop;
 
         // Terminierung: keine offene Arbeit mehr. `remaining` ist der globale
@@ -373,6 +396,9 @@ export default function MatchingPage() {
     } catch (error: any) {
       toast({ title: "Fehler beim Auto-Matching", description: error.message, variant: "destructive" });
     } finally {
+      // Letzter Restore bevor der Modal aufgeht — garantiert keinen Flash
+      // zwischen Ende des Runs und User-Interaktion mit dem Modal.
+      restoreTxSnapshots();
       setIsAutoMatching(false);
       setAutoMatchProgress(null);
       autoMatchAbortRef.current = null;
