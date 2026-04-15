@@ -62,6 +62,13 @@ export default function MatchingPage() {
     dbErrors: number;
     edgeVersion: string | null;
     aiModel: string | null;
+    earlyReturnReason: string | null;
+    rawCounts: {
+      unmatchedTransactions?: number;
+      allInvoices?: number;
+      unmatchedInvoices?: number;
+      invoicesAfterDedup?: number;
+    } | null;
   } | null>(null);
   const { data: invoices = [] } = useInvoices();
   const bulkConfirm = useBulkConfirmMatches();
@@ -236,6 +243,13 @@ export default function MatchingPage() {
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
     let dbUpdateErrors = 0;
+    let earlyReturnReason: string | null = null;
+    let rawCounts: {
+      unmatchedTransactions?: number;
+      allInvoices?: number;
+      unmatchedInvoices?: number;
+      invoicesAfterDedup?: number;
+    } | null = null;
     const allResults: AutoMatchResult[] = [];
 
     try {
@@ -275,6 +289,8 @@ export default function MatchingPage() {
         if (Array.isArray(data?.matchedTransactions)) {
           allResults.push(...(data.matchedTransactions as AutoMatchResult[]));
         }
+        if (data?.earlyReturnReason) earlyReturnReason = data.earlyReturnReason;
+        if (data?.rawCounts) rawCounts = data.rawCounts;
 
         const remaining: number = data?.remaining ?? 0;
         if (initialBacklog === null) {
@@ -314,6 +330,8 @@ export default function MatchingPage() {
           dbErrors: dbUpdateErrors,
           edgeVersion,
           aiModel,
+          earlyReturnReason,
+          rawCounts,
         });
         // Kurzer Toast als Bestaetigung, das Modal hat die Details.
         toast({
@@ -702,6 +720,20 @@ export default function MatchingPage() {
             {autoMatchResults && autoMatchResults.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
                 Keine neuen Zuordnungen in diesem Lauf.
+                {autoMatchSummary?.earlyReturnReason && (
+                  <div className="mx-auto mt-4 max-w-md rounded-md border border-warning/40 bg-warning/5 p-3 text-left text-xs">
+                    <div className="font-medium text-warning">Function konnte nichts verarbeiten:</div>
+                    <div className="mt-1 text-foreground">{autoMatchSummary.earlyReturnReason}</div>
+                    {autoMatchSummary.rawCounts && (
+                      <div className="mt-2 font-mono text-[11px] text-muted-foreground">
+                        TX-unmatched={autoMatchSummary.rawCounts.unmatchedTransactions ?? "?"} ·
+                        Invoices-total={autoMatchSummary.rawCounts.allInvoices ?? "?"} ·
+                        Invoices-unmatched={autoMatchSummary.rawCounts.unmatchedInvoices ?? "?"} ·
+                        nach-Dedup={autoMatchSummary.rawCounts.invoicesAfterDedup ?? "?"}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {autoMatchSummary && autoMatchSummary.processed > 0 && (
                   <div className="mt-2 text-xs">
                     Mögliche Gründe siehst du oben in den Pfad-Zählern.

@@ -17,7 +17,7 @@ const OPENAI_TIMEOUT_MS = 20000;
 
 // Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
 // neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-results-v3";
+const EDGE_VERSION = "2026-04-15-diagnostic-v4";
 
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
@@ -142,10 +142,26 @@ serve(async (req) => {
     const remaining = Math.max(0, totalUnmatched - transactions.length);
 
     if (transactions.length === 0 || invoices.length === 0) {
+      // Diagnostik: WARUM hat die Function nichts zu tun? Das war vorher
+      // unsichtbar — Frontend bekam nur stumm 0 zurueck.
+      const reason =
+        transactions.length === 0 && invoices.length === 0
+          ? "Keine offenen Transaktionen UND keine unmatched Rechnungen sichtbar"
+          : transactions.length === 0
+            ? `Keine 'unmatched' Transaktionen sichtbar (Auth-User sieht 0 unmatched). Insgesamt: ${totalUnmatched}`
+            : `Keine unmatched Rechnungen sichtbar (allInvoicesRaw=${allInvoicesRaw.length}, nach Match-Filter=${invoicesAfterMatchFilter.length}, nach Dedup=${invoices.length})`;
+      console.warn(`auto-match early-return: ${reason}`);
       return new Response(
         JSON.stringify({
           success: true,
           version: EDGE_VERSION,
+          earlyReturnReason: reason,
+          rawCounts: {
+            unmatchedTransactions: totalUnmatched,
+            allInvoices: allInvoicesRaw.length,
+            unmatchedInvoices: invoicesAfterMatchFilter.length,
+            invoicesAfterDedup: invoices.length,
+          },
           matchedCount: 0,
           autoConfirmedCount: 0,
           processedCount: 0,
