@@ -334,9 +334,17 @@ export default function MatchingPage() {
           rawCounts,
         });
         // Kurzer Toast als Bestaetigung, das Modal hat die Details.
+        // Wir zaehlen hier nur confirmed — Vorschlaege erscheinen separat im
+        // Vorschlaege-Tab und sollen den User nicht doppelt informieren.
         toast({
-          title: totalMatched === 0 ? "Keine neuen Treffer" : `${totalMatched} neu zugeordnet`,
-          description: `${totalProcessed} TX geprüft. Klick für Details.`,
+          title:
+            totalAutoConfirmed === 0
+              ? "Keine automatischen Treffer"
+              : `${totalAutoConfirmed} automatisch zugeordnet`,
+          description:
+            suggested > 0
+              ? `${totalProcessed} TX geprüft · ${suggested} weitere als Vorschlag`
+              : `${totalProcessed} TX geprüft`,
         });
       }
       refetch();
@@ -688,11 +696,13 @@ export default function MatchingPage() {
               <DialogDescription asChild>
                 <div className="space-y-1 text-xs">
                   <div>
-                    <span className="font-medium text-foreground">{autoMatchResults?.length ?? 0}</span>
-                    {" neu zugeordnet · "}
-                    <span className="text-success">{autoMatchSummary.confirmed} bestätigt</span>
-                    {" · "}
-                    <span className="text-primary">{autoMatchSummary.suggested} als Vorschlag</span>
+                    <span className="text-success font-medium">{autoMatchSummary.confirmed} automatisch bestätigt</span>
+                    {autoMatchSummary.suggested > 0 && (
+                      <span className="text-muted-foreground">
+                        {" · "}
+                        +{autoMatchSummary.suggested} Vorschläge (siehe Vorschläge-Tab)
+                      </span>
+                    )}
                     {" · "}
                     {autoMatchSummary.processed} TX geprüft
                   </div>
@@ -717,7 +727,12 @@ export default function MatchingPage() {
           </DialogHeader>
 
           <div className="overflow-y-auto" style={{ maxHeight: "60vh" }}>
-            {autoMatchResults && autoMatchResults.length === 0 ? (
+            {(() => {
+              // Modal zeigt nur die automatisch bestaetigten Treffer.
+              // Vorschlaege bleiben in der DB als matched, sind aber im
+              // Vorschlaege-Tab sichtbar — hier wuerden sie nur ablenken.
+              const confirmedOnly = (autoMatchResults ?? []).filter((r) => r.status === "confirmed");
+              return confirmedOnly.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
                 Keine neuen Zuordnungen in diesem Lauf.
                 {autoMatchSummary?.earlyReturnReason && (
@@ -742,20 +757,14 @@ export default function MatchingPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {autoMatchResults?.map((r) => (
+                {confirmedOnly.map((r) => (
                   <div
                     key={r.transactionId}
                     className="rounded-lg border border-border/60 bg-card p-3 text-sm"
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-                          r.status === "confirmed"
-                            ? "bg-success/10 text-success"
-                            : "bg-primary/10 text-primary"
-                        }`}
-                      >
-                        {r.status === "confirmed" ? "Bestätigt" : "Vorschlag"} · {r.confidence}%
+                      <span className="rounded bg-success/10 px-1.5 py-0.5 text-xs font-medium text-success">
+                        Bestätigt · {r.confidence}%
                       </span>
                       <span
                         className={`rounded px-1.5 py-0.5 text-xs ${
@@ -794,7 +803,8 @@ export default function MatchingPage() {
                   </div>
                 ))}
               </div>
-            )}
+              );
+            })()}
           </div>
         </DialogContent>
       </Dialog>

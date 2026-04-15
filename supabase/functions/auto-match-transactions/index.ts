@@ -17,7 +17,7 @@ const OPENAI_TIMEOUT_MS = 20000;
 
 // Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
 // neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-diagnostic-v5";
+const EDGE_VERSION = "2026-04-15-confirmed-only-v6";
 
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
