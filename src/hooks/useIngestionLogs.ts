@@ -134,11 +134,14 @@ export function useIngestionLogs() {
         .limit(200);
       if (error) throw error;
 
-      const rawLogs = data as IngestionLog[];
+      // Kontoauszüge werden in der eigenen Kontoauszüge-Ansicht angezeigt und
+      // hier aus der "Eingespeiste Dokumente"-Liste ausgeblendet.
+      const rawLogs = (data as IngestionLog[]).filter(
+        (l) => l.document_type !== "bank_statement"
+      );
 
       // Enrich with linked document status
-      const invoiceIds = rawLogs.filter(l => l.document_id && l.document_type !== "bank_statement").map(l => l.document_id!);
-      const statementIds = rawLogs.filter(l => l.document_id && l.document_type === "bank_statement").map(l => l.document_id!);
+      const invoiceIds = rawLogs.filter(l => l.document_id).map(l => l.document_id!);
 
       const statusMap: Record<string, string> = {};
 
@@ -148,14 +151,6 @@ export function useIngestionLogs() {
           .select("id, status")
           .in("id", invoiceIds);
         invoices?.forEach(inv => { statusMap[inv.id] = inv.status; });
-      }
-
-      if (statementIds.length > 0) {
-        const { data: statements } = await supabase
-          .from("bank_statements")
-          .select("id, status")
-          .in("id", statementIds);
-        statements?.forEach(st => { statusMap[st.id] = st.status; });
       }
 
       return rawLogs.map(log => ({

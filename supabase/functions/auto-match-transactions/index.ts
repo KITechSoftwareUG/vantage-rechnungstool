@@ -414,12 +414,24 @@ ${potentialMatches.map((inv: any) => `- ID: ${inv.id} | Aussteller: ${inv.issuer
             const data = await response.json();
             const content = data.choices?.[0]?.message?.content;
 
+            // Debug: erste 3 AI-Antworten pro Invocation verbatim loggen.
+            // Unverzichtbar zum Debuggen von "0 Treffer" trott vieler Kandidaten.
+            if (aiAttempted <= 3) {
+              console.log(
+                `[AI-DEBUG #${aiAttempted}] tx="${transaction.description}" (${matchAmount}) candidates=${potentialMatches.length} → content:`,
+                (content ?? "").slice(0, 500),
+              );
+            }
+
             if (content) {
               try {
                 const jsonMatch = content.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                   const result = JSON.parse(jsonMatch[0]);
                   aiSucceeded++;
+                  if (aiAttempted <= 3) {
+                    console.log(`[AI-DEBUG #${aiAttempted}] parsed:`, JSON.stringify(result));
+                  }
 
                   if (result.matchedInvoiceId && result.confidence >= SUGGEST_THRESHOLD) {
                     // Hohe Confidence → automatisch als bestätigt setzen.
@@ -541,7 +553,11 @@ function resolveLLM(): LLMConfig | null {
       apiKey: geminiKey,
       // Google stellt einen OpenAI-kompatiblen Endpoint unter /v1beta/openai bereit.
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash",
+      // gemini-2.0-flash ist bewusst gewaehlt statt 2.5-flash: 2.5 laeuft per
+      // Default im Thinking-Mode (langsam, hoher Token-Consume, fuer unser
+      // strukturiertes JSON-Matching kein Vorteil). 2.0-flash ist schnell und
+      // deterministisch genug.
+      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.0-flash",
     };
   }
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
