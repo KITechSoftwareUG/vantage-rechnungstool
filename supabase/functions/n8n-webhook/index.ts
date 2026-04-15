@@ -259,18 +259,60 @@ Deno.serve(async (req) => {
     const month =
       !isNaN(monthAsNumber) && monthAsNumber >= 1 && monthAsNumber <= 12 ? monthAsNumber : monthMap[monthRaw];
 
-    const userId = url.searchParams.get("user_id");
     const driveFileId = url.searchParams.get("drive_file_id");
     const originalFileName = url.searchParams.get("file_name") || url.searchParams.get("fileName") || "";
     const contentType = req.headers.get("content-type") || "";
 
+    // user_id MUSS aus dem JWT kommen — nicht aus Body/Query. Einzige Ausnahme:
+    // Service-Role-Calls (z. B. Python-Drive-Poller), die den SUPABASE_SERVICE_
+    // ROLE_KEY als Bearer mitschicken; dort akzeptieren wir user_id aus der
+    // Query, weil der Caller keine User-Session hat.
+    const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+    const bearerToken = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const isServiceRole = !!bearerToken && !!serviceRoleKey && bearerToken === serviceRoleKey;
+
+    let userId: string | null = null;
+    if (isServiceRole) {
+      userId = url.searchParams.get("user_id");
+    } else {
+      // JWT validieren via Supabase-Auth (anon-Client mit Bearer-Token).
+      if (!bearerToken) {
+        return new Response(JSON.stringify({ success: false, error: "Missing Authorization header" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      try {
+        const authClient = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+          { global: { headers: { Authorization: `Bearer ${bearerToken}` } } },
+        );
+        const { data: userData, error: userError } = await authClient.auth.getUser(bearerToken);
+        if (userError || !userData?.user?.id) {
+          return new Response(JSON.stringify({ success: false, error: "Invalid JWT" }), {
+            status: 401,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        userId = userData.user.id;
+      } catch (authErr) {
+        console.error("JWT validation error:", authErr);
+        return new Response(JSON.stringify({ success: false, error: "JWT validation failed" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     console.log("=== N8N WEBHOOK ===");
     console.log("Category:", category, "Year:", year, "Month:", month);
-    console.log("User ID:", userId, "Original filename:", originalFileName);
+    console.log("User ID:", userId, "Original filename:", originalFileName, "ServiceRole:", isServiceRole);
 
     // Validate required parameters
     if (!userId) {
-      return new Response(JSON.stringify({ success: false, error: "Missing user_id parameter" }), {
+      return new Response(JSON.stringify({ success: false, error: "Missing user_id" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -327,11 +369,33 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Dedup bewusst NICHT am Upload: alle Rechnungen duerfen mehrfach rein,
-    // Duplikat-Erkennung erfolgt spaeter im Matching-Tool. fileHash wird
-    // trotzdem berechnet und in den invoices-Record geschrieben, damit die
-    // Matching-UI bit-identische Doppel schnell erkennen kann.
+    // Content-basierte Dedup: bit-identische Re-Uploads werden am Ingest
+    // geblockt — kein Storage-Upload, keine OCR, keine neue DB-Zeile. Greift
+    // nur bei invoice/commission (Tabelle `invoices` hat file_hash);
+    // `bank_statements` hat keinen file_hash → Kontoauszuege werden nicht
+    // dedupliziert (Monats-Re-Ingest ist gewollt).
     const fileHash = await sha256Hex(fileBuffer);
+
+    if (docType !== "statement") {
+      const { data: existingInvoice } = await supabase
+        .from("invoices")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("file_hash", fileHash)
+        .limit(1);
+      if (existingInvoice && existingInvoice.length > 0) {
+        console.log("Hash-Dedup: duplicate invoice for hash", fileHash, "existing_id:", existingInvoice[0].id);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            duplicate: true,
+            existing_id: existingInvoice[0].id,
+            message: "Bit-identisches Duplikat — Ingest uebersprungen",
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
 
     // Upload file to storage with temp name first
     const timestamp = Date.now();
@@ -457,27 +521,30 @@ Deno.serve(async (req) => {
       }
     } catch (parseError) {
       console.error("Failed to parse OCR response:", parseError);
-      if (docType !== "statement") {
-        extractedData = {
-          date: `${year}-${String(month).padStart(2, "0")}-01`,
-          issuer: "Unbekannt",
-          amount: 0,
-          currency: "EUR",
-          type: category === "eingang" ? "outgoing" : "incoming",
-        };
-      } else {
-        extractedData = {
-          summary: {
-            bank: "Unbekannt",
-            bankType: categoryToBankType[category] || "volksbank",
-            accountNumber: "Unbekannt",
-            date: `${year}-${String(month).padStart(2, "0")}-01`,
-            openingBalance: 0,
-            closingBalance: 0,
-          },
-          transactions: [],
-        };
+      // Kein Stub-Record mehr: wenn OCR kein verwertbares JSON liefert,
+      // markieren wir den Ingest als error mit dem Raw-Response im
+      // warning_message (max 500 Zeichen) und brechen mit 422 ab. Der Storage-
+      // Blob wird aufgeraeumt, damit keine Waisen entstehen.
+      const rawSnippet = String(aiContent).slice(0, 500);
+      if (logEntry) {
+        await supabase
+          .from("document_ingestion_log")
+          .update({
+            status: "error",
+            error_message: "OCR-Antwort konnte nicht als JSON geparst werden",
+            warning_message: `OCR-Parse-Fail. Raw (500 chars): ${rawSnippet}`,
+          })
+          .eq("id", logEntry.id);
       }
+      await supabase.storage.from("documents").remove([tempStoragePath]);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "OCR response could not be parsed as JSON",
+          raw_snippet: rawSnippet,
+        }),
+        { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     // ===== VERIFICATION PASS (Kontoauszüge) =====
@@ -486,6 +553,7 @@ Deno.serve(async (req) => {
     // Reihenfolge, in der die Buchungen im Auszug stehen. Diskrepanzen landen
     // als warning_message am Ingestion-Log, damit Alex sie prüfen kann.
     let verificationWarning: string | null = null;
+    let verificationTimedOut = false;
     if (docType === "statement") {
       const initialTx = Array.isArray(extractedData.transactions) ? extractedData.transactions : [];
 
@@ -567,9 +635,13 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
       } catch (verifyError) {
         const isAbort = verifyError instanceof Error && verifyError.name === "AbortError";
         console.error("Verification pass error:", isAbort ? "timeout" : verifyError);
-        verificationWarning = isAbort
-          ? "Verifikationslauf nach 45s abgebrochen — nur erster OCR-Pass verwendet."
-          : "Verifikationslauf fehlgeschlagen — nur erster OCR-Pass verwendet.";
+        if (isAbort) {
+          verificationTimedOut = true;
+          verificationWarning =
+            "Verifikationslauf nach 45s abgebrochen — bitte Transaktionsliste pruefen bevor Matching lauft";
+        } else {
+          verificationWarning = "Verifikationslauf fehlgeschlagen — nur erster OCR-Pass verwendet.";
+        }
       } finally {
         clearTimeout(verifyTimer);
       }
@@ -745,7 +817,10 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
           // Kontoauszüge werden nicht manuell bestätigt — der zweite OCR-Pass
           // oben hat die Transaktionen bereits gegengeprüft. Direkt auf "ready",
           // damit sie nicht im "Zur Überprüfung"-Zähler hängen bleiben.
-          status: "ready",
+          // Ausnahme: Verifikations-Pass lief ins 45s-Timeout → status auf
+          // pending_manual_review, damit Alex die Liste ansieht bevor das
+          // Matching darauf losgeht.
+          status: verificationTimedOut ? "pending_manual_review" : "ready",
           source_endpoint: `n8n/${category}`,
         })
         .select("id")
