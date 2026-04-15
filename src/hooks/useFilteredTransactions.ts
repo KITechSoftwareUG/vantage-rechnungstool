@@ -63,18 +63,7 @@ export function useFilteredTransactions() {
   const sortedTransactions = useMemo(() => {
     return [...transactions]
       .filter((t: any) => t.matchStatus !== "recurring" && t.matchStatus !== "ignored")
-      .sort((a: any, b: any) => {
-        const statusOrder: Record<string, number> = {
-          matched: 0,
-          unmatched: 1,
-          no_match: 2,
-          confirmed: 3,
-        };
-        const orderA = statusOrder[a.matchStatus] ?? 4;
-        const orderB = statusOrder[b.matchStatus] ?? 4;
-        if (orderA !== orderB) return orderA - orderB;
-        return new Date(b.date).getTime() - new Date(a.date).getTime();
-      });
+      .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [transactions]);
 
   const filteredTransactions = useMemo(() => {
