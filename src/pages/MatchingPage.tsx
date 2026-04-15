@@ -344,8 +344,16 @@ export default function MatchingPage() {
           if (Array.isArray(data.matchedTransactions)) {
             allResults.push(...(data.matchedTransactions as AutoMatchResult[]));
           }
-          if (data.earlyReturnReason) earlyReturnReason = data.earlyReturnReason;
-          if (data.rawCounts) rawCounts = data.rawCounts;
+          // earlyReturnReason / rawCounts nur uebernehmen, wenn dieser konkrete
+          // Call NICHT gearbeitet hat. Bei 4-fach-Parallelitaet claimed oft
+          // ein Call alle TX, die anderen 3 sehen dann legitim 0 — deren
+          // earlyReturnReason wuerde sonst die produktive Arbeit "uebermalen".
+          if (data.earlyReturnReason && (data.processedCount ?? 0) === 0) {
+            earlyReturnReason = data.earlyReturnReason;
+          }
+          if (data.rawCounts && (data.processedCount ?? 0) === 0) {
+            rawCounts = data.rawCounts;
+          }
 
           lastRemaining = data.remaining ?? 0;
           if (initialBacklog === null) {
@@ -386,6 +394,13 @@ export default function MatchingPage() {
           variant: "destructive",
         });
       } else {
+        // Wenn irgendein Call produktiv war, ist die Gesamt-Run-Diagnose nicht
+        // "Function konnte nichts verarbeiten" — egal was parallele Idle-Calls
+        // berichtet haben. Nur wenn der gesamte Run 0 TX angefasst hat, bleibt
+        // die Diagnose-Meldung aussagekraeftig.
+        const displayEarlyReturnReason = totalProcessed > 0 ? null : earlyReturnReason;
+        const displayRawCounts = totalProcessed > 0 ? null : rawCounts;
+
         // Result-Modal: zeigt jede einzelne neu zugeordnete TX. Damit sieht der
         // User auf einen Blick was passiert ist, statt nur eine abstrakte Zahl.
         setAutoMatchResults(allResults);
@@ -401,8 +416,8 @@ export default function MatchingPage() {
           dbErrors: dbUpdateErrors,
           edgeVersion,
           aiModel,
-          earlyReturnReason,
-          rawCounts,
+          earlyReturnReason: displayEarlyReturnReason,
+          rawCounts: displayRawCounts,
         });
         // Kurzer Toast als Bestaetigung, das Modal hat die Details.
         const cancelNote = wasCancelled ? " (abgebrochen)" : "";
