@@ -51,6 +51,11 @@ export default function MatchingPage() {
   // Batch. So reagiert "Abbrechen" sofort, nicht erst nach dem aktuellen Batch.
   const autoMatchCancelRef = useRef(false);
   const autoMatchAbortRef = useRef<AbortController | null>(null);
+  // Resolve-Funktion des Cancel-Promise. Bei Klick auf "Abbrechen" wird sie
+  // synchron aufgerufen — die laufende Welle verliert dadurch sofort das
+  // Promise.race, und die UI reagiert ohne auf supabase.functions.invoke zu
+  // warten (das honoriert den AbortSignal nicht zuverlaessig).
+  const autoMatchCancelResolveRef = useRef<(() => void) | null>(null);
   const [autoMatchProgress, setAutoMatchProgress] = useState<{
     batch: number;
     processed: number;
@@ -273,7 +278,25 @@ export default function MatchingPage() {
           }
         });
 
-        const results = await Promise.all(wavePromises);
+        // Race: entweder alle 4 Calls antworten, oder der User klickt Abbrechen.
+        // Das Cancel-Promise wird im onClick-Handler synchron resolved, damit
+        // die UI nicht auf die laufenden Edge-Function-Calls wartet.
+        const cancelPromise = new Promise<"cancelled">((resolve) => {
+          autoMatchCancelResolveRef.current = () => resolve("cancelled");
+        });
+        const raceResult = await Promise.race([
+          Promise.all(wavePromises).then((r) => ({ kind: "done" as const, results: r })),
+          cancelPromise.then(() => ({ kind: "cancelled" as const })),
+        ]);
+        autoMatchCancelResolveRef.current = null;
+        if (raceResult.kind === "cancelled") {
+          wasCancelled = true;
+          // In-flight Calls laufen im Hintergrund weiter; ihre Claims werden
+          // entweder normal commited (confirmed) oder nach 3min via Stale-
+          // Recovery freigegeben. Wir warten NICHT auf sie.
+          break waveLoop;
+        }
+        const results = raceResult.results;
 
         let waveProcessed = 0;
         let lastRemaining = 0;
@@ -485,6 +508,9 @@ export default function MatchingPage() {
                 onClick={() => {
                   autoMatchCancelRef.current = true;
                   autoMatchAbortRef.current?.abort();
+                  // Entscheidend: synchron das Cancel-Promise aufloesen,
+                  // damit die laufende Welle sofort aus Promise.race faellt.
+                  autoMatchCancelResolveRef.current?.();
                 }}
                 disabled={autoMatchCancelRef.current}
                 className="gap-2"
