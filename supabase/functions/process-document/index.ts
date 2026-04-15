@@ -274,6 +274,13 @@ Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-
 
     // Parse JSON from response
     let extractedData;
+    // parseWarning: fuer den Consumer (n8n-webhook) ein klarer Marker, dass
+    // der AI-Parse fehlgeschlagen ist. Der Consumer MUSS den Datensatz in die
+    // Review-Queue schreiben und warning_message am ingestion_log setzen,
+    // damit die UI das als "manuelle Pruefung noetig" erkennt. Ohne diesen
+    // Marker war der Fallback-Write bisher still — amount=0 landete ohne
+    // sichtbaren Hinweis in der DB.
+    let parseWarning: string | null = null;
     try {
       // Try to find JSON in the response
       const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -289,10 +296,15 @@ Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-
         extractedData = {
           date: new Date().toISOString().split("T")[0],
           issuer: "Unbekannt",
-          amount: 0,
+          // amount: null statt 0 signalisiert "nicht erkannt". Schreibt der
+          // Consumer in ein NOT-NULL-Feld, kann er auf 0 zurueckfallen, muss
+          // aber warning_message setzen.
+          amount: null,
           currency: "EUR",
           type: documentType === "commission" ? "incoming" : "outgoing",
         };
+        parseWarning =
+          "Betrag konnte nicht automatisch erkannt werden — bitte manuell pruefen";
       } else {
         extractedData = {
           summary: {
@@ -305,6 +317,27 @@ Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-
           },
           transactions: [],
         };
+        parseWarning =
+          "Kontoauszug konnte nicht automatisch geparst werden — keine Transaktionen extrahiert, bitte manuell pruefen";
+      }
+    }
+
+    // Hard-Post-Fallback fuer invoices/commissions: auch wenn der JSON-Parse
+    // funktioniert hat, aber der Betrag 0 oder null ist, ist das ein Zeichen
+    // fuer OCR-Failure → Review-Flag setzen.
+    if (documentType !== "statement") {
+      const amt = (extractedData as any)?.amount;
+      if (amt === null || amt === undefined || Number(amt) === 0) {
+        parseWarning =
+          parseWarning ??
+          "Betrag konnte nicht automatisch erkannt werden — bitte manuell pruefen";
+      }
+    } else {
+      const txs = (extractedData as any)?.transactions;
+      if (!Array.isArray(txs) || txs.length === 0) {
+        parseWarning =
+          parseWarning ??
+          "Kontoauszug ohne erkennbare Transaktionen — bitte manuell pruefen";
       }
     }
 
@@ -323,9 +356,18 @@ Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-
       };
     }
 
-    return new Response(JSON.stringify({ success: true, data: extractedData }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: extractedData,
+        // parseWarning durchreichen. n8n-webhook/index.ts haengt das ans
+        // warning_message am ingestion_log an, damit der Review-Queue-Eintrag
+        // als "manuelle Pruefung noetig" sichtbar wird.
+        parseWarning,
+        needsReview: parseWarning !== null,
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   } catch (error) {
     console.error("OCR processing error:", error);
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "OCR processing failed" }), {

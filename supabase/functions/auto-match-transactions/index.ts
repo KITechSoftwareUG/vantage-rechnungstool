@@ -22,9 +22,22 @@ const EDGE_VERSION = "2026-04-15-parallel-claim-v11-hashdedup-tolerance";
 // Stale-Claim-Recovery: Wenn eine fruehere Invocation gecrasht ist, koennen
 // Transaktionen mit `match_status='ai_processing'` haengen bleiben. Alles
 // aelter als diese Schwelle wird beim naechsten Function-Start wieder auf
-// 'unmatched' gesetzt. Wall-Clock einer Invocation ist ~100s, 3min ist
-// konservativ genug, um keine laufende Invocation zu stoeren.
+// 'unmatched' gesetzt. 60s sind kurz genug, dass ein User nach einem Crash
+// nicht lange wartet, und lang genug, dass ein normaler Per-TX-LLM-Call
+// (timeout 20s) nicht abgeraeumt wird.
 const STALE_CLAIM_MS = 60 * 1000;
+
+// Amount-Toleranz fuer Matching. Same-Currency (EUR <-> EUR, keine FX-Info
+// auf der TX) ist 5% — enger, weil nur Rundung / Gebuehren erlaubt sind.
+// FX-Faelle (original_currency gesetzt, d.h. Amex/Karte hat in Fremdwaehrung
+// gebucht) duerfen bis 10% abweichen, weil Wechselkurs-Spreads das rechtfertigen.
+const AMOUNT_TOLERANCE_SAME_CURRENCY = 0.05;
+const AMOUNT_TOLERANCE_FX = 0.10;
+function resolveAmountTolerance(transaction: any): number {
+  const origCcyRaw = (transaction?.original_currency ?? "").toString();
+  const hasForeignCurrency = origCcyRaw.trim().length > 0 && !/\bEUR\b/i.test(origCcyRaw);
+  return hasForeignCurrency ? AMOUNT_TOLERANCE_FX : AMOUNT_TOLERANCE_SAME_CURRENCY;
+}
 
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
@@ -476,13 +489,11 @@ serve(async (req) => {
           nameScore = Math.max(fractionScore, bestTokenScore);
         }
 
-        // Amount matching with tolerance. 5% fuer same-currency EUR-Matches
-        // (reine Rundung / Gebuehren), 10% nur wenn FX-Konvertierung im Spiel
-        // ist (Amex mit original_currency oder Invoice nicht in EUR) — dort
-        // kostet der Wechselkurs-Spread mehr als ein paar Cent.
-        const invoiceCurrency = (inv.currency || "EUR").toUpperCase();
-        const isFxCase = isAmexWithCurrencyConversion || invoiceCurrency !== "EUR";
-        const tolerancePct = isFxCase ? 0.1 : 0.05;
+        // Amount matching with tolerance, zentral ueber resolveAmountTolerance.
+        // Same-Currency (kein original_currency auf der TX): 5% — nur Rundung
+        // & Gebuehren. FX-Fall (TX hat original_currency != EUR): 10%, weil
+        // Wechselkurs-Spread mehr als ein paar Cent kostet.
+        const tolerancePct = resolveAmountTolerance(transaction);
         const amountDiff = Math.abs(matchAmount - inv.amount);
         const amountTolerance = Math.max(matchAmount, inv.amount) * tolerancePct;
         const exactMatch = amountDiff < 0.01;
@@ -565,6 +576,11 @@ serve(async (req) => {
       if (slamDunks.length === 1) {
         const pick = slamDunks[0];
         const reason = `Deterministisch: exakter Betrag ${pick.amount} + eindeutiger Aussteller-Match (${pick.issuer})`;
+        // Invoice-Exklusivitaet: Die Partial-Unique-Migration (matched_invoice_id
+        // UNIQUE WHERE match_status='confirmed') wirft 23505, wenn diese
+        // Rechnung bereits anderswo confirmed-gematcht ist. Das darf die
+        // Invocation nicht killen — TX auf 'unmatched' zuruecksetzen, Fall
+        // loggen, mit naechster TX weiter.
         const { error: upErr } = await supabaseClient
           .from("bank_transactions")
           .update({
@@ -575,6 +591,18 @@ serve(async (req) => {
           })
           .eq("id", transaction.id);
         if (upErr) {
+          const isUniqueViolation = (upErr as any)?.code === "23505" ||
+            /duplicate key|unique/i.test(upErr.message ?? "");
+          if (isUniqueViolation) {
+            console.warn(
+              `invoice already confirmed elsewhere: tx ${transaction.id} -> invoice ${pick.id} (${pick.issuer}) — rolling back to unmatched`,
+            );
+            await supabaseClient
+              .from("bank_transactions")
+              .update({ match_status: "unmatched" })
+              .eq("id", transaction.id);
+            continue;
+          }
           dbUpdateErrors++;
           console.error(`DB update FAILED for tx ${transaction.id} (deterministic): ${upErr.message}`);
         } else {
@@ -740,14 +768,16 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                     // 97% Confidence — Aussteller komplett anders, Betrag um 38%
                     // off, KI hat die Begruendung frei erfunden. Wir trauen der
                     // Confidence allein nicht mehr und erzwingen harte Kriterien:
-                    //   (a) Betrag exakt (±0.01), ODER
-                    //   (b) Betrag innerhalb 10% Toleranz (FX) UND Issuer-Token
-                    //       (Substring laenger als 4 Zeichen) im Verwendungszweck.
+                    //   HARD GATE (unabhaengig von Name): Betrag muss innerhalb
+                    //   der zentralen Toleranz (5% same-ccy, 10% FX) liegen.
+                    //   SOFT GATE: exakter Betrag (±0.01) ODER Betrag in Toleranz
+                    //   UND Issuer-Token (>=4 Zeichen) im Verwendungszweck.
                     // Alles andere wird unabhaengig von der KI-Confidence verworfen.
                     const matchedInv = potentialMatches.find((c: any) => c.id === trimmedId);
                     const invAmount = Number(matchedInv?.amount ?? 0);
                     const aiAmountDiff = Math.abs(matchAmount - invAmount);
-                    const aiAmountTolerance = Math.max(matchAmount, invAmount) * 0.1;
+                    const aiTolerancePct = resolveAmountTolerance(transaction);
+                    const aiAmountTolerance = Math.max(matchAmount, invAmount) * aiTolerancePct;
                     const aiExactAmount = aiAmountDiff < 0.01;
                     const aiCloseAmount = aiAmountDiff <= aiAmountTolerance;
                     const issuerLowerSan = (matchedInv?.issuer ?? "").toLowerCase();
@@ -756,15 +786,24 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                       .split(/[\s,.\-_/]+/)
                       .filter((t: string) => t.length >= 4)
                       .some((t: string) => descLowerSan.includes(t));
+                    // Hard post-validation: Betrag ausserhalb Toleranz → immer
+                    // rejecten, egal was die KI fuer eine Confidence liefert.
+                    // Das ist der Schutzwall gegen frei erfundene hoch-confident
+                    // Matches bei komplett abweichenden Betraegen.
                     const sanityPass = aiExactAmount || (aiCloseAmount && issuerHasTokenInDesc);
                     if (!sanityPass) {
                       aiRejectedSanity++;
                       console.warn(
-                        `AI HALLUCINATION REJECTED tx="${transaction.description.slice(0, 60)}" (${matchAmount}€) -> "${matchedInv?.issuer}" (${invAmount}€) at conf=${confidenceNum}%: amountDiff=${aiAmountDiff.toFixed(2)}, exactAmount=${aiExactAmount}, closeAmount=${aiCloseAmount}, issuerToken=${issuerHasTokenInDesc}`,
+                        `AI HALLUCINATION REJECTED tx="${transaction.description.slice(0, 60)}" (${matchAmount}€) -> "${matchedInv?.issuer}" (${invAmount}€) at conf=${confidenceNum}%: amountDiff=${aiAmountDiff.toFixed(2)}, tolerancePct=${aiTolerancePct}, exactAmount=${aiExactAmount}, closeAmount=${aiCloseAmount}, issuerToken=${issuerHasTokenInDesc}`,
                       );
                       continue;
                     }
 
+                    // Invoice-Exklusivitaet (Partial-Unique-Constraint): falls
+                    // die Rechnung bereits anderswo confirmed-gematcht ist,
+                    // wirft Postgres 23505. Wir fangen das ab, setzen die TX
+                    // zurueck auf 'unmatched' und machen mit der naechsten TX
+                    // weiter — sonst haengt die ganze Invocation.
                     const { error: upErr } = await supabaseClient
                       .from("bank_transactions")
                       .update({
@@ -776,6 +815,18 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                       .eq("id", transaction.id);
 
                     if (upErr) {
+                      const isUniqueViolation = (upErr as any)?.code === "23505" ||
+                        /duplicate key|unique/i.test(upErr.message ?? "");
+                      if (isUniqueViolation) {
+                        console.warn(
+                          `invoice already confirmed elsewhere: tx ${transaction.id} -> invoice ${trimmedId} — rolling back to unmatched`,
+                        );
+                        await supabaseClient
+                          .from("bank_transactions")
+                          .update({ match_status: "unmatched" })
+                          .eq("id", transaction.id);
+                        continue;
+                      }
                       dbUpdateErrors++;
                       console.error(`DB update FAILED for tx ${transaction.id} (AI match): ${upErr.message}`);
                     } else {

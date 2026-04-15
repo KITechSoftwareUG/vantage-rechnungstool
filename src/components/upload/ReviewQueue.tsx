@@ -157,23 +157,50 @@ export function ReviewQueue() {
   const discardMutation = useMutation({
     mutationFn: async (id: string) => {
       const inv = pendingInvoices.find((p) => p.id === id);
-      // Vollstaendig entfernen: Invoice-Record + Storage-File +
-      // Ingestion-Log-Eintrag + Drive-Marker. Sonst muss der User die gleiche
-      // Datei spaeter manuell nochmal aus dem Einspeisungs-Tracker loeschen.
+      // Vollstaendig entfernen: Storage-File zuerst (best-effort mit 1 Retry),
+      // dann Invoice-Record, dann Ingestion-Log-Eintrag.
       //
-      // Fix B: Ingestion-Log-ID ZUERST queryen (vor invoice-delete), damit
-      // wir nach dem invoice-delete deterministisch aufraeumen koennen und
-      // nicht von Race Conditions mit RLS-Kaskaden abhaengig sind.
+      // Ingestion-Log-IDs ZUERST queryen (vor Deletes), damit wir nach dem
+      // Invoice-Delete deterministisch aufraeumen koennen und nicht von Race
+      // Conditions mit RLS-Kaskaden abhaengig sind.
       const { data: logRows } = await supabase
         .from("document_ingestion_log")
         .select("id")
         .eq("document_id", id);
       const logIds = (logRows || []).map((r: any) => r.id);
 
+      // Schritt 1: Storage-Cleanup best-effort mit 1 Retry.
+      // Selbst wenn das fehlschlaegt, loeschen wir die DB-Zeile trotzdem
+      // (der User will den Eintrag loswerden) — warnen aber via Toast.
+      let storageCleanupFailed = false;
+      let storagePathsAttempted: string[] = [];
+      if (inv && user) {
+        storagePathsAttempted = buildStoragePaths([
+          { userId: user.id, year: inv.year, month: inv.month, fileName: inv.fileName, fileUrl: inv.fileUrl },
+        ]);
+        if (storagePathsAttempted.length) {
+          const tryRemove = () => supabase.storage.from("documents").remove(storagePathsAttempted);
+          let { error: rmErr } = await tryRemove();
+          if (rmErr) {
+            const retry = await tryRemove();
+            rmErr = retry.error;
+          }
+          if (rmErr) {
+            storageCleanupFailed = true;
+            console.error(
+              `Storage cleanup failed for path ${storagePathsAttempted.join(", ")} — orphan file may remain`,
+              rmErr
+            );
+          }
+        }
+      }
+
+      // Schritt 2: Invoice-Delete. Wenn das failt, NICHT das ingestion-log
+      // loeschen — sonst ist der Log-Eintrag weg aber die Invoice-Zeile steht.
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
 
-      // Fix B: Log-Delete mit 1 Retry, kein Toast bei Failure.
+      // Schritt 3: Ingestion-Log-Delete mit 1 Retry, kein throw bei Failure.
       if (logIds.length) {
         const deleteLog = () =>
           supabase.from("document_ingestion_log").delete().in("id", logIds);
@@ -183,41 +210,20 @@ export function ReviewQueue() {
           logErr = retry.error;
         }
         if (logErr) {
-          console.error("Ingestion-Log-Delete fehlgeschlagen:", logErr);
+          console.error("Ingestion-Log-Delete fehlgeschlagen nach erfolgreichem Invoice-Delete:", logErr);
+          toast({
+            title: "Hinweis",
+            description: "Rechnung verworfen, aber Einspeisungs-Log-Eintrag konnte nicht entfernt werden.",
+          });
         }
       }
 
-      // Fix A: Storage-Cleanup mit 3 Retries (500ms, 1500ms, 4500ms).
-      // Scheitert alles, loggen wir + zeigen eine non-blocking Warn-Toast,
-      // der DB-Delete bleibt aber erfolgreich.
-      if (inv && user) {
-        const paths = buildStoragePaths([
-          { userId: user.id, year: inv.year, month: inv.month, fileName: inv.fileName, fileUrl: inv.fileUrl },
-        ]);
-        if (paths.length) {
-          // Bis zu 3 Retries mit 500/1500/4500 ms Backoff vor jedem Retry.
-          const retryDelays = [500, 1500, 4500];
-          let lastError: unknown = null;
-          let removed = false;
-          for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
-            if (attempt > 0) {
-              await new Promise((r) => setTimeout(r, retryDelays[attempt - 1]));
-            }
-            const { error: rmErr } = await supabase.storage.from("documents").remove(paths);
-            if (!rmErr) {
-              removed = true;
-              break;
-            }
-            lastError = rmErr;
-          }
-          if (!removed) {
-            console.error("Storage-Remove fehlgeschlagen nach 3 Retries:", lastError, paths);
-            toast({
-              title: "Datei konnte nicht aus Storage entfernt werden — bitte Admin informieren",
-              variant: "destructive",
-            });
-          }
-        }
+      // Schritt 4: Storage-Warnung erst jetzt, nachdem DB-Delete sicher durch ist.
+      if (storageCleanupFailed) {
+        toast({
+          title: "Datei wurde als verworfen markiert, aber die physische Datei konnte nicht gelöscht werden. Admin informieren.",
+          variant: "destructive",
+        });
       }
     },
     onMutate: async (id: string) => {
@@ -306,16 +312,13 @@ export function ReviewQueue() {
     mutationFn: async () => {
       const snapshot = pendingInvoices.slice();
       const ids = snapshot.map((inv) => inv.id);
-      const { error } = await supabase.from("invoices").delete().in("id", ids);
-      if (error) throw error;
-      // Zugehoerige Ingestion-Log-Eintraege mit weg, damit die verworfenen
-      // Rechnungen nicht weiter im Einspeisungs-Tracker auftauchen.
-      void supabase.from("document_ingestion_log").delete().in("document_id", ids).then(
-        () => undefined,
-        () => undefined,
-      );
+
+      // Schritt 1: Storage-Cleanup best-effort mit 1 Retry (vor DB-Delete,
+      // gleiche Reihenfolge wie Single-Discard).
+      let storageCleanupFailed = false;
+      let storagePathsAttempted: string[] = [];
       if (user) {
-        const paths = buildStoragePaths(
+        storagePathsAttempted = buildStoragePaths(
           snapshot.map((inv) => ({
             userId: user.id,
             year: inv.year,
@@ -324,12 +327,48 @@ export function ReviewQueue() {
             fileUrl: inv.fileUrl,
           }))
         );
-        if (paths.length) {
-          void supabase.storage.from("documents").remove(paths).then(
-            () => undefined,
-            () => undefined
-          );
+        if (storagePathsAttempted.length) {
+          const tryRemove = () => supabase.storage.from("documents").remove(storagePathsAttempted);
+          let { error: rmErr } = await tryRemove();
+          if (rmErr) {
+            const retry = await tryRemove();
+            rmErr = retry.error;
+          }
+          if (rmErr) {
+            storageCleanupFailed = true;
+            console.error(
+              `Storage cleanup failed for paths ${storagePathsAttempted.join(", ")} — orphan files may remain`,
+              rmErr
+            );
+          }
         }
+      }
+
+      // Schritt 2: Invoice-Delete. Bei Fehler kein Log-Delete.
+      const { error } = await supabase.from("invoices").delete().in("id", ids);
+      if (error) throw error;
+
+      // Schritt 3: Ingestion-Log-Delete mit 1 Retry, kein throw bei Failure.
+      const deleteLog = () =>
+        supabase.from("document_ingestion_log").delete().in("document_id", ids);
+      let { error: logErr } = await deleteLog();
+      if (logErr) {
+        const retry = await deleteLog();
+        logErr = retry.error;
+      }
+      if (logErr) {
+        console.error("Ingestion-Log-Delete fehlgeschlagen nach erfolgreichem Invoice-Delete:", logErr);
+        toast({
+          title: "Hinweis",
+          description: "Rechnungen verworfen, aber Einspeisungs-Log-Eintraege konnten nicht entfernt werden.",
+        });
+      }
+
+      if (storageCleanupFailed) {
+        toast({
+          title: "Dateien wurden als verworfen markiert, aber die physischen Dateien konnten nicht gelöscht werden. Admin informieren.",
+          variant: "destructive",
+        });
       }
     },
     onMutate: async () => {

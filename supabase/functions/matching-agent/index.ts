@@ -64,7 +64,7 @@ serve(async (req) => {
       supabase
         .from("bank_transactions")
         .select("matched_invoice_id")
-        .in("match_status", ["matched", "confirmed"])
+        .in("match_status", ["confirmed"])
         .not("matched_invoice_id", "is", null),
     );
     const alreadyMatched = new Set(matchedRows.map((r: any) => r.matched_invoice_id));
@@ -350,10 +350,12 @@ function scoreCandidates(tx: any, candidates: any[]): any[] {
         else if (Math.abs(txAmount - invAmount) / invAmount < 0.05) score += 15;
       }
 
-      // Datum-Nähe (30 Tage Fenster)
+      // Datum-Nähe (60 Tage Fenster — muss >= LLM-Prompt-Fenster (45 Tage)
+      // sein, sonst filtert der Prefilter Kandidaten weg, die der LLM noch
+      // akzeptieren würde, z.B. 30+ Tage Zahlungsziel).
       const invDate = new Date(inv.date).getTime();
       const days = Math.abs(txDate - invDate) / 86400000;
-      if (days <= 30) score += 10 - Math.min(10, Math.floor(days / 3));
+      if (days <= 60) score += 10 - Math.min(10, Math.floor(days / 6));
 
       return { ...inv, _score: score };
     })
