@@ -30,27 +30,25 @@ function extractStoragePath(fileUrl: string | null | undefined): string | null {
   return null;
 }
 
-async function removeStorageObjectsForInvoiceIds(ids: string[]) {
-  if (ids.length === 0) return;
-  const { data, error } = await supabase
-    .from("invoices")
-    .select("user_id, year, month, file_name, file_url")
-    .in("id", ids);
-  if (error || !data) return;
+interface StorageRef {
+  userId: string;
+  year: number;
+  month: number;
+  fileName: string;
+  fileUrl?: string | null;
+}
 
+function buildStoragePaths(refs: StorageRef[]): string[] {
   const paths = new Set<string>();
-  for (const row of data) {
-    const fromUrl = extractStoragePath(row.file_url);
+  for (const ref of refs) {
+    const fromUrl = extractStoragePath(ref.fileUrl);
     if (fromUrl) paths.add(fromUrl);
-    if (row.user_id && row.year != null && row.month != null && row.file_name) {
-      paths.add(`${row.user_id}/${row.year}/${row.month}/${row.file_name}`);
-      paths.add(`${row.user_id}/${row.year}/${String(row.month).padStart(2, "0")}/${row.file_name}`);
+    if (ref.userId && ref.year != null && ref.month != null && ref.fileName) {
+      paths.add(`${ref.userId}/${ref.year}/${ref.month}/${ref.fileName}`);
+      paths.add(`${ref.userId}/${ref.year}/${String(ref.month).padStart(2, "0")}/${ref.fileName}`);
     }
   }
-  if (paths.size === 0) return;
-  // Storage-Fehler nicht propagieren: wenn die Datei schon weg ist, soll der
-  // DB-Delete trotzdem laufen. Der Bucket darf nicht zur Blockade werden.
-  await supabase.storage.from("documents").remove(Array.from(paths));
+  return Array.from(paths);
 }
 
 interface PendingInvoice {
