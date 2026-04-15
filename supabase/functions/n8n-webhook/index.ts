@@ -6,6 +6,39 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// AI-Provider-Resolver: bevorzugt GEMINI_API_KEY (direkter Google-Endpoint,
+// unabhaengig von Lovable-AI-Credits). Faellt auf Lovable-AI-Gateway zurueck,
+// falls GEMINI_API_KEY nicht gesetzt ist. Einheitliche Model-Namen in beiden
+// Welten via Mapping.
+type AIConfig = {
+  apiKey: string;
+  baseUrl: string;
+  mapModel: (logical: "flash" | "pro") => string;
+  providerLabel: "gemini" | "lovable";
+};
+
+function resolveAIConfig(): AIConfig | null {
+  const geminiKey = Deno.env.get("GEMINI_API_KEY");
+  if (geminiKey) {
+    return {
+      apiKey: geminiKey,
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      mapModel: (logical) => (logical === "pro" ? "gemini-2.5-pro" : "gemini-2.5-flash"),
+      providerLabel: "gemini",
+    };
+  }
+  const lovableKey = Deno.env.get("LOVABLE_API_KEY");
+  if (lovableKey) {
+    return {
+      apiKey: lovableKey,
+      baseUrl: "https://ai.gateway.lovable.dev/v1",
+      mapModel: (logical) => (logical === "pro" ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash"),
+      providerLabel: "lovable",
+    };
+  }
+  return null;
+}
+
 // Map German month names to numbers
 const monthMap: Record<string, number> = {
   januar: 1,
@@ -389,15 +422,14 @@ Deno.serve(async (req) => {
     }
 
     // ===== OCR PROCESSING =====
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      // Update log status
+    const aiConfig = resolveAIConfig();
+    if (!aiConfig) {
       if (logEntry) {
         await supabase
           .from("document_ingestion_log")
           .update({
             status: "error",
-            error_message: "LOVABLE_API_KEY not configured",
+            error_message: "Kein AI-Key konfiguriert (weder GEMINI_API_KEY noch LOVABLE_API_KEY)",
           })
           .eq("id", logEntry.id);
       }
@@ -411,19 +443,19 @@ Deno.serve(async (req) => {
     const mimeType = contentType || "application/pdf";
     const prompt = getOcrPrompt(docType);
 
-    console.log("Starting OCR for:", docType);
+    console.log(`Starting OCR for ${docType} via ${aiConfig.providerLabel}`);
 
-    const aiResponse = await fetchWithRetry("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const aiResponse = await fetchWithRetry(`${aiConfig.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${aiConfig.apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         // `commission` = Provisionsabrechnungen sind mehrseitig und zahlen-
         // lastig; hier lohnt sich Pro. Rechnungen & Kontoauszüge sind mit
         // Flash genauso zuverlässig und ~3-5× schneller.
-        model: docType === "commission" ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash",
+        model: aiConfig.mapModel(docType === "commission" ? "pro" : "flash"),
         messages: [
           {
             role: "user",
@@ -538,16 +570,16 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
       const verifyCtrl = new AbortController();
       const verifyTimer = setTimeout(() => verifyCtrl.abort(), VERIFY_TIMEOUT_MS);
       try {
-        const verifyResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        const verifyResponse = await fetch(`${aiConfig.baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            Authorization: `Bearer ${aiConfig.apiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
             // Zweiter Pass: Pro-Modell, weil hier Vollständigkeit + Reihenfolge
             // über Einzelheiten entscheiden, nicht Geschwindigkeit.
-            model: "google/gemini-2.5-pro",
+            model: aiConfig.mapModel("pro"),
             messages: [
               {
                 role: "user",

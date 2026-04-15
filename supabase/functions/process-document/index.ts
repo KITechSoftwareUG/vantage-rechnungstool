@@ -5,6 +5,37 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// AI-Provider-Resolver: bevorzugt GEMINI_API_KEY (direkter Google-Endpoint),
+// Lovable-AI-Gateway als Fallback. Siehe Kommentar in n8n-webhook/index.ts.
+type AIConfig = {
+  apiKey: string;
+  baseUrl: string;
+  mapModel: (logical: "flash" | "pro") => string;
+  providerLabel: "gemini" | "lovable";
+};
+
+function resolveAIConfig(): AIConfig | null {
+  const geminiKey = Deno.env.get("GEMINI_API_KEY");
+  if (geminiKey) {
+    return {
+      apiKey: geminiKey,
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      mapModel: (logical) => (logical === "pro" ? "gemini-2.5-pro" : "gemini-2.5-flash"),
+      providerLabel: "gemini",
+    };
+  }
+  const lovableKey = Deno.env.get("LOVABLE_API_KEY");
+  if (lovableKey) {
+    return {
+      apiKey: lovableKey,
+      baseUrl: "https://ai.gateway.lovable.dev/v1",
+      mapModel: (logical) => (logical === "pro" ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash"),
+      providerLabel: "lovable",
+    };
+  }
+  return null;
+}
+
 // Convert ArrayBuffer to base64 in chunks to avoid stack overflow
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -73,9 +104,9 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const aiConfig = resolveAIConfig();
+    if (!aiConfig) {
+      throw new Error("Kein AI-Key konfiguriert (weder GEMINI_API_KEY noch LOVABLE_API_KEY)");
     }
 
     // Convert file to base64 using chunked approach
@@ -187,15 +218,15 @@ Beispiel: {"date":"2024-03-31","issuer":"Fonds Finanz","invoiceNumber":"PA-2024-
     console.log(`Processing ${documentType} OCR for file: ${file.name}, size: ${arrayBuffer.byteLength} bytes`);
 
     const response = await fetchWithRetry(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
+      `${aiConfig.baseUrl}/chat/completions`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          Authorization: `Bearer ${aiConfig.apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-2.5-pro",
+          model: aiConfig.mapModel("pro"),
           messages: [
             {
               role: "user",
