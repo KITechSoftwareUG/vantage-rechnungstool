@@ -17,7 +17,7 @@ const OPENAI_TIMEOUT_MS = 20000;
 
 // Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
 // neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-confirmed-only-v6";
+const EDGE_VERSION = "2026-04-15-no-amount-fallback-v7";
 
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
@@ -216,7 +216,7 @@ serve(async (req) => {
       invoiceDate: string;
       confidence: number;
       reason: string;
-      source: "deterministic" | "ai" | "amount-fallback";
+      source: "deterministic" | "ai";
       status: "confirmed" | "matched";
     }> = [];
     // KI-Telemetrie, damit das Frontend Silent-Failures erkennen kann.
@@ -666,44 +666,11 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
         }
       }
 
-      // Letzter Fallback: KI war nicht erreichbar ODER hat null geliefert,
-      // und es gibt genau EINE Rechnung mit exaktem Betrag in der gesamten
-      // (unmatched, dedupten) Invoice-Liste → eindeutiger Betragstreffer.
-      const exactMatches = invoices.filter((inv: any) => Math.abs(matchAmount - inv.amount) < 0.01);
-      if (exactMatches.length === 1) {
-        const match = exactMatches[0];
-        const { error: upErr } = await supabaseClient
-          .from("bank_transactions")
-          .update({
-            matched_invoice_id: match.id,
-            match_status: "confirmed",
-            match_confidence: 100,
-            match_reason: "Exakter Betragstreffer (eindeutig)",
-          })
-          .eq("id", transaction.id);
-        if (upErr) {
-          dbUpdateErrors++;
-          console.error(`DB update FAILED for tx ${transaction.id} (amount-only fallback): ${upErr.message}`);
-        } else {
-          matchedCount++;
-          autoConfirmedCount++;
-          matchedTransactions.push({
-            transactionId: transaction.id,
-            transactionDescription: transaction.description,
-            transactionAmount: transaction.amount,
-            transactionDate: transaction.date,
-            invoiceId: match.id,
-            invoiceIssuer: match.issuer,
-            invoiceAmount: Number(match.amount),
-            invoiceDate: match.date,
-            confidence: 100,
-            reason: "Exakter Betragstreffer (eindeutig)",
-            source: "amount-fallback",
-            status: "confirmed",
-          });
-        }
-        continue;
-      }
+      // Kein Amount-only-Fallback mehr: hat zu Falsch-Treffern gefuehrt
+      // (z.B. Apple 9.99 EUR <-> Make 10.00 EUR nur weil zufaellig genau
+      // eine Rechnung mit aehnlichem Betrag uebrig war). Wenn weder
+      // deterministisch noch KI eine Zuordnung findet, bleibt die TX
+      // unmatched und wartet auf manuelle Pruefung.
     }
 
     return new Response(

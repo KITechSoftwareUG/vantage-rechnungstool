@@ -39,7 +39,7 @@ type AutoMatchResult = {
   invoiceDate: string;
   confidence: number;
   reason: string;
-  source: "deterministic" | "ai" | "amount-fallback";
+  source: "deterministic" | "ai";
   status: "confirmed" | "matched";
 };
 
@@ -770,16 +770,10 @@ export default function MatchingPage() {
                         className={`rounded px-1.5 py-0.5 text-xs ${
                           r.source === "deterministic"
                             ? "bg-info/10 text-info"
-                            : r.source === "ai"
-                              ? "bg-muted text-muted-foreground"
-                              : "bg-warning/10 text-warning"
+                            : "bg-muted text-muted-foreground"
                         }`}
                       >
-                        {r.source === "deterministic"
-                          ? "Deterministisch"
-                          : r.source === "ai"
-                            ? "KI"
-                            : "Betrags-Fallback"}
+                        {r.source === "deterministic" ? "Deterministisch" : "KI"}
                       </span>
                       <span className="ml-auto text-xs text-muted-foreground">{r.transactionDate}</span>
                     </div>
