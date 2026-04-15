@@ -566,11 +566,11 @@ function resolveLLM(): LLMConfig | null {
       apiKey: geminiKey,
       // Google stellt einen OpenAI-kompatiblen Endpoint unter /v1beta/openai bereit.
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      // gemini-2.0-flash ist bewusst gewaehlt statt 2.5-flash: 2.5 laeuft per
-      // Default im Thinking-Mode (langsam, hoher Token-Consume, fuer unser
-      // strukturiertes JSON-Matching kein Vorteil). 2.0-flash ist schnell und
-      // deterministisch genug.
-      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.0-flash",
+      // gemini-2.5-flash-lite: neu, guenstig, schnell, kein Thinking-Mode by
+      // default — ideal fuer strukturiertes JSON-Matching. gemini-2.0-flash ist
+      // fuer neue API-Keys nicht mehr verfuegbar (404), 2.5-flash laeuft per
+      // Default im teuren Thinking-Mode.
+      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash-lite",
     };
   }
   const openaiKey = Deno.env.get("OPENAI_API_KEY");

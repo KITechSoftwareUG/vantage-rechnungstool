@@ -274,7 +274,7 @@ function resolveLLM(): LLMConfig | null {
       provider: "gemini",
       apiKey: geminiKey,
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.0-flash",
+      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash-lite",
     };
   }
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
