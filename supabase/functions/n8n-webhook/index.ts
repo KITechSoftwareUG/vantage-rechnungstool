@@ -696,43 +696,96 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
 
     finalStoragePath = `${userId}/${year}/${month}/${finalFileName}`;
 
-    // Server-side move — ein einziger Storage-Call statt download+upload+delete.
-    // Bei Namens-Kollision (finalStoragePath existiert bereits, z.B. weil der
-    // User mehrere "Kopie von ..."-Varianten derselben Rechnung hochlaedt)
-    // haengen wir `_v2`, `_v3`, ... an, bis ein freier Name gefunden wird —
-    // statt stumm auf den Temp-Namen zurueckzufallen.
+    // Semantische Dedup NACH OCR: wenn eine Rechnung mit gleichem Datum +
+    // Aussteller + Betrag (und ggf. Rechnungs-Nr.) beim selben User schon
+    // existiert, ist das Upload-File ein Duplikat. Drive "Kopie von ..."-
+    // Kopien haben zwar oft abweichende file_hashes (Drive re-rendert PDFs),
+    // aber der OCR-Inhalt ist identisch. In dem Fall: Temp-File loeschen,
+    // im Log als Duplikat markieren, Original bleibt unter seinem sauberen
+    // Namen — KEIN _v2/_v3-Suffix, keine Zweitkopie.
     let moveErrorMessage: string | null = null;
-    if (finalStoragePath !== tempStoragePath) {
-      const baseName = finalFileName.replace(/\.[^.]+$/, "");
-      const ext = finalFileName.match(/\.[^.]+$/)?.[0] ?? "";
-      const folder = `${userId}/${year}/${month}`;
-      let moved = false;
-      let lastError: any = null;
-      for (let attempt = 1; attempt <= 10; attempt++) {
-        const candidateName = attempt === 1 ? finalFileName : `${baseName}_v${attempt}${ext}`;
-        const candidatePath = `${folder}/${candidateName}`;
-        const { error: moveError } = await supabase.storage
-          .from("documents")
-          .move(tempStoragePath, candidatePath);
-        if (!moveError) {
-          finalFileName = candidateName;
-          finalStoragePath = candidatePath;
-          moved = true;
-          console.log(`File renamed to: ${candidatePath} (attempt ${attempt})`);
-          break;
+    let semanticDuplicateId: string | null = null;
+
+    if (docType !== "statement") {
+      const ocrIssuer = (extractedData.issuer || "").trim();
+      const ocrDate = extractedData.date || null;
+      const ocrAmount = Math.abs(Number(extractedData.amount) || 0);
+      const ocrInvoiceNumber = (extractedData.invoiceNumber || "").trim();
+
+      if (ocrIssuer && ocrDate && ocrAmount > 0) {
+        // Erste Stufe: wenn Rechnungsnummer vorhanden, ist das Paar
+        // (invoice_number, issuer) nahezu eindeutig.
+        let dupQuery = supabase
+          .from("invoices")
+          .select("id, file_name")
+          .eq("user_id", userId)
+          .eq("issuer", ocrIssuer)
+          .eq("date", ocrDate)
+          .gte("amount", ocrAmount - 0.01)
+          .lte("amount", ocrAmount + 0.01)
+          .limit(1);
+        if (ocrInvoiceNumber) {
+          dupQuery = dupQuery.eq("invoice_number", ocrInvoiceNumber);
         }
-        lastError = moveError;
-        // Nur bei typischen Kollisions-Fehlern suffix-probieren; bei anderen
-        // Fehlern sofort abbrechen (keine Retries bei Auth/Permission-Problemen).
-        const msg = (moveError.message || "").toLowerCase();
-        const isCollision = msg.includes("already exists") || msg.includes("duplicate") || msg.includes("resource");
-        if (!isCollision) break;
+        const { data: semanticDup } = await dupQuery;
+        if (semanticDup && semanticDup.length > 0) {
+          semanticDuplicateId = semanticDup[0].id;
+          console.log(
+            `Semantic duplicate: ${ocrIssuer} ${ocrAmount} ${ocrDate} → existing invoice ${semanticDuplicateId} (${semanticDup[0].file_name})`,
+          );
+        }
       }
-      if (!moved) {
-        console.error("Storage move failed after retries, keeping temp path:", lastError);
-        moveErrorMessage = `Rename fehlgeschlagen (${lastError?.message ?? "unbekannt"}) — Datei behält Temp-Namen: ${tempFileName}`;
+    }
+
+    if (semanticDuplicateId) {
+      // Temp-File aus Storage entfernen (wir brauchen es nicht, Original liegt
+      // bereits unter sauberem Namen).
+      await supabase.storage.from("documents").remove([tempStoragePath]);
+      // Ingestion-Log als Duplikat markieren, falls logEntry existiert.
+      if (logEntry) {
+        await supabase
+          .from("document_ingestion_log")
+          .update({
+            status: "duplicate",
+            document_id: semanticDuplicateId,
+            warning_message: `Inhaltliches Duplikat erkannt (gleicher Aussteller/Datum/Betrag) — nicht erneut importiert`,
+          })
+          .eq("id", logEntry.id);
+      }
+      // Drive-File als prozessiert markieren, damit der Poller nicht erneut probiert.
+      if (driveFileId) {
+        await supabase.from("processed_drive_files").insert({
+          user_id: userId,
+          drive_file_id: driveFileId,
+          file_name: originalFileName || "",
+          folder_type: category,
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          success: true,
+          duplicate: true,
+          message: "Inhaltliches Duplikat — Original bleibt erhalten",
+          existingInvoiceId: semanticDuplicateId,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // Server-side move: Temp-Name → sauberer Name. Keine Retry-Logik mehr —
+    // Kollision darf hier nicht mehr auftreten, weil der Dup-Check oben
+    // bereits gegriffen haette. Falls doch: Fehler transparent anzeigen.
+    if (finalStoragePath !== tempStoragePath) {
+      const { error: moveError } = await supabase.storage
+        .from("documents")
+        .move(tempStoragePath, finalStoragePath);
+      if (moveError) {
+        console.error("Storage move failed:", moveError);
+        moveErrorMessage = `Rename fehlgeschlagen (${moveError.message}) — Datei behält Temp-Namen: ${tempFileName}`;
         finalFileName = tempFileName;
         finalStoragePath = tempStoragePath;
+      } else {
+        console.log("File renamed to:", finalStoragePath);
       }
     }
 
