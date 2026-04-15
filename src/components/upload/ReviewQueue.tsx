@@ -156,19 +156,43 @@ export function ReviewQueue() {
 
   const discardMutation = useMutation({
     mutationFn: async (id: string) => {
-      await removeStorageObjectsForInvoiceIds([id]);
+      const inv = pendingInvoices.find((p) => p.id === id);
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
+      // Storage-Cleanup nur nach erfolgreichem DB-Delete, als fire-and-forget.
+      // Scheitert das Storage-Remove, ist das kein User-sichtbarer Fehler.
+      if (inv && user) {
+        const paths = buildStoragePaths([
+          { userId: user.id, year: inv.year, month: inv.month, fileName: inv.fileName, fileUrl: inv.fileUrl },
+        ]);
+        if (paths.length) {
+          void supabase.storage.from("documents").remove(paths).then(
+            () => undefined,
+            () => undefined
+          );
+        }
+      }
+    },
+    onMutate: async (id: string) => {
+      setDiscardId(null);
+      await queryClient.cancelQueries({ queryKey: ["pending-invoices"] });
+      const previous = queryClient.getQueryData<PendingInvoice[]>(["pending-invoices", user?.id]);
+      queryClient.setQueryData<PendingInvoice[]>(
+        ["pending-invoices", user?.id],
+        (old) => (old || []).filter((p) => p.id !== id)
+      );
+      return { previous };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       toast({ title: "Rechnung verworfen" });
-      setDiscardId(null);
     },
-    onError: (error) => {
+    onError: (error, _id, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(["pending-invoices", user?.id], ctx.previous);
       toast({ title: "Fehler", description: error.message, variant: "destructive" });
-      setDiscardId(null);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
     },
   });
 
@@ -232,20 +256,45 @@ export function ReviewQueue() {
 
   const discardAllMutation = useMutation({
     mutationFn: async () => {
-      const ids = pendingInvoices.map((inv) => inv.id);
-      await removeStorageObjectsForInvoiceIds(ids);
+      const snapshot = pendingInvoices.slice();
+      const ids = snapshot.map((inv) => inv.id);
       const { error } = await supabase.from("invoices").delete().in("id", ids);
       if (error) throw error;
+      if (user) {
+        const paths = buildStoragePaths(
+          snapshot.map((inv) => ({
+            userId: user.id,
+            year: inv.year,
+            month: inv.month,
+            fileName: inv.fileName,
+            fileUrl: inv.fileUrl,
+          }))
+        );
+        if (paths.length) {
+          void supabase.storage.from("documents").remove(paths).then(
+            () => undefined,
+            () => undefined
+          );
+        }
+      }
+    },
+    onMutate: async () => {
+      setDiscardAll(false);
+      await queryClient.cancelQueries({ queryKey: ["pending-invoices"] });
+      const previous = queryClient.getQueryData<PendingInvoice[]>(["pending-invoices", user?.id]);
+      queryClient.setQueryData<PendingInvoice[]>(["pending-invoices", user?.id], []);
+      return { previous };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       toast({ title: "Alle Rechnungen verworfen" });
-      setDiscardAll(false);
     },
-    onError: (error) => {
+    onError: (error, _vars, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(["pending-invoices", user?.id], ctx.previous);
       toast({ title: "Fehler", description: error.message, variant: "destructive" });
-      setDiscardAll(false);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
     },
   });
 
