@@ -17,7 +17,14 @@ const OPENAI_TIMEOUT_MS = 20000;
 
 // Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
 // neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-no-suggestions-v8";
+const EDGE_VERSION = "2026-04-15-parallel-claim-v9";
+
+// Stale-Claim-Recovery: Wenn eine fruehere Invocation gecrasht ist, koennen
+// Transaktionen mit `match_status='ai_processing'` haengen bleiben. Alles
+// aelter als diese Schwelle wird beim naechsten Function-Start wieder auf
+// 'unmatched' gesetzt. Wall-Clock einer Invocation ist ~100s, 3min ist
+// konservativ genug, um keine laufende Invocation zu stoeren.
+const STALE_CLAIM_MS = 3 * 60 * 1000;
 
 // Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
 // Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
@@ -88,13 +95,17 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Hoisted damit der Catch-Block im Fehlerfall noch Claims releasen kann.
+  let supabaseClient: ReturnType<typeof createClient> | null = null;
+  let claimedForCleanup: any[] = [];
+
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       throw new Error("No authorization header");
     }
 
-    const supabaseClient = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_ANON_KEY") ?? "", {
+    supabaseClient = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_ANON_KEY") ?? "", {
       global: { headers: { Authorization: authHeader } },
     });
 
@@ -106,15 +117,107 @@ serve(async (req) => {
       throw new Error("Not authenticated");
     }
 
-    // Alle drei Selects MÜSSEN paginiert sein, sonst werden bei >1000 Rows
-    // stillschweigend Daten abgeschnitten.
-    const allTransactions = await fetchAllPaginated<any>(() =>
-      supabaseClient
+    // --- PARALLEL-SAFE CLAIM ------------------------------------------------
+    // Mehrere parallele Invocations (Frontend feuert 4x gleichzeitig) muessen
+    // disjunkte Transaktions-Sets bearbeiten. Ohne Claim wuerden alle Calls
+    // dieselben Top-50 auswaehlen → doppelte OpenAI-Calls, Last-Write-Wins,
+    // Geldverschwendung.
+    //
+    // Mechanismus:
+    //   (a) Stale-Recovery: abgestuerzte Claims freigeben.
+    //   (b) Kandidaten oversamplen (4x Batch-Size), damit bei Kollisionen
+    //       trotzdem ein voller Batch zusammenkommt.
+    //   (c) Atomischer UPDATE `unmatched → ai_processing` mit RETURNING.
+    //       PostgREST gibt via .select() nur die Zeilen zurueck, die wir
+    //       tatsaechlich beansprucht haben. Parallele Calls sehen hier
+    //       disjunkte Sets — Postgres macht pro Row genau einen Gewinner.
+    //
+    // Einschraenkung: Invoice-Level-Kollisionen (zwei parallele Calls waehlen
+    // dieselbe Rechnung fuer unterschiedliche TX) sind weiter moeglich, da
+    // Rechnungen nicht gelockt werden. In der Praxis selten; der User kann
+    // eine doppelt zugeordnete Rechnung manuell entflechten.
+
+    // (a) Stale-Recovery: Claims, die aelter sind als STALE_CLAIM_MS, zurueck
+    // auf 'unmatched' setzen. RLS schraenkt das automatisch auf den aktuellen
+    // User ein (Auth-Header wird durchgereicht).
+    const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
+    const { error: staleErr } = await supabaseClient
+      .from("bank_transactions")
+      .update({ match_status: "unmatched" })
+      .eq("match_status", "ai_processing")
+      .lt("updated_at", staleBefore);
+    if (staleErr) console.warn("Stale-claim release failed (non-fatal):", staleErr.message);
+
+    // (b) Kandidaten-IDs auswaehlen. Oversample: bei 4 parallelen Calls
+    // kollidieren alle auf denselben Top-N; jeder Call braucht eine groessere
+    // Pipeline, um trotzdem MAX_TRANSACTIONS_PER_INVOCATION claimen zu koennen.
+    const CLAIM_OVERSAMPLE = MAX_TRANSACTIONS_PER_INVOCATION * 4;
+    const { data: candidateRows, error: candErr } = await supabaseClient
+      .from("bank_transactions")
+      .select("id")
+      .eq("match_status", "unmatched")
+      .order("date", { ascending: false })
+      .limit(CLAIM_OVERSAMPLE);
+    if (candErr) throw candErr;
+    const candidateIds = (candidateRows || []).map((r: any) => r.id);
+
+    // (c) Atomischer Claim. Nur Rows, die noch 'unmatched' sind, werden auf
+    // 'ai_processing' gesetzt. Parallele Invocations gewinnen jeweils nur eine
+    // Teilmenge — das ist gewollt.
+    let claimed: any[] = [];
+    if (candidateIds.length > 0) {
+      // Wir claimen in Chunks, damit wir nicht ueber MAX_TRANSACTIONS_PER_INVOCATION
+      // hinausschiessen, falls keine Kollisionen auftreten.
+      const toClaim = candidateIds.slice(0, MAX_TRANSACTIONS_PER_INVOCATION);
+      const { data: claimResult, error: claimErr } = await supabaseClient
         .from("bank_transactions")
-        .select("*, bank_statements(bank_type)")
+        .update({ match_status: "ai_processing" })
         .eq("match_status", "unmatched")
-        .order("date", { ascending: false }),
-    );
+        .in("id", toClaim)
+        .select("*, bank_statements(bank_type)");
+      if (claimErr) throw claimErr;
+      claimed = claimResult || [];
+    }
+
+    // Fallback-Second-Try: wenn wir bei hoher Kollisionsrate aus den ersten
+    // MAX_TRANSACTIONS_PER_INVOCATION Kandidaten fast nichts bekommen haben,
+    // aber noch mehr im Oversample-Pool uebrig ist, zweite Claim-Runde mit den
+    // restlichen IDs. Verhindert leere Batches bei 4-fach-Parallelitaet.
+    if (claimed.length < MAX_TRANSACTIONS_PER_INVOCATION / 2 && candidateIds.length > MAX_TRANSACTIONS_PER_INVOCATION) {
+      const claimedSet = new Set(claimed.map((t: any) => t.id));
+      const rest = candidateIds
+        .filter((id) => !claimedSet.has(id))
+        .slice(0, MAX_TRANSACTIONS_PER_INVOCATION - claimed.length);
+      if (rest.length > 0) {
+        const { data: secondClaim, error: secondErr } = await supabaseClient
+          .from("bank_transactions")
+          .update({ match_status: "ai_processing" })
+          .eq("match_status", "unmatched")
+          .in("id", rest)
+          .select("*, bank_statements(bank_type)");
+        if (secondErr) console.warn("Second-try claim failed (non-fatal):", secondErr.message);
+        else if (secondClaim) claimed.push(...secondClaim);
+      }
+    }
+
+    // Zum Kompatibilitaets-Erhalt mit dem restlichen Code heisst der Batch
+    // weiter `allTransactions` — aber es ist jetzt nur unser geclaimter Teil.
+    const allTransactions = claimed;
+    claimedForCleanup = claimed;
+
+    // Release-Helper: nicht gematchte Claims zurueck auf 'unmatched' setzen.
+    // MUSS in jedem Return-Pfad (inkl. Fehler) aufgerufen werden, sonst bleiben
+    // TX bis zur Stale-Recovery (3min) in 'ai_processing' haengen.
+    const releaseUnmatchedClaims = async (matchedIds: Set<string>) => {
+      const toRelease = claimed.filter((t: any) => !matchedIds.has(t.id)).map((t: any) => t.id);
+      if (toRelease.length === 0) return;
+      const { error } = await supabaseClient
+        .from("bank_transactions")
+        .update({ match_status: "unmatched" })
+        .eq("match_status", "ai_processing")
+        .in("id", toRelease);
+      if (error) console.error("Release of unmatched claims failed:", error.message);
+    };
 
     const matchedInvoiceIds = await fetchAllPaginated<any>(() =>
       supabaseClient.from("bank_transactions").select("matched_invoice_id").not("matched_invoice_id", "is", null),
@@ -133,13 +236,19 @@ serve(async (req) => {
       `Invoices: ${allInvoicesRaw.length} total → ${invoicesAfterMatchFilter.length} unmatched → ${invoices.length} after dedup`,
     );
 
-    const totalUnmatched = allTransactions.length;
+    // Backlog-Zaehlung: wieviel `unmatched` haengt nach unserem Claim noch in
+    // der DB? Wir zaehlen NICHT unsere gerade geclaimten (die sind jetzt
+    // 'ai_processing'). Parallele Invocations eines anderen Claims sind dort
+    // ebenfalls exkludiert — `remaining` spiegelt echte Restarbeit wider, die
+    // weder wir noch ein paralleler Call gerade bearbeitet.
+    const { count: unmatchedAfterClaim } = await supabaseClient
+      .from("bank_transactions")
+      .select("id", { count: "exact", head: true })
+      .eq("match_status", "unmatched");
 
-    // Pro Invocation nur eine begrenzte Menge Transaktionen verarbeiten,
-    // damit wir nicht in den Wall-Clock-Timeout der Edge Function laufen.
-    // Das Frontend ruft die Function in einer Schleife auf, bis `remaining=0`.
-    const transactions = allTransactions.slice(0, MAX_TRANSACTIONS_PER_INVOCATION);
-    const remaining = Math.max(0, totalUnmatched - transactions.length);
+    const transactions = allTransactions;
+    const remaining = unmatchedAfterClaim ?? 0;
+    const totalUnmatched = remaining + transactions.length;
 
     if (transactions.length === 0 || invoices.length === 0) {
       // Diagnostik: WARUM hat die Function nichts zu tun? Das war vorher
@@ -151,6 +260,9 @@ serve(async (req) => {
             ? `Keine 'unmatched' Transaktionen sichtbar (Auth-User sieht 0 unmatched). Insgesamt: ${totalUnmatched}`
             : `Keine unmatched Rechnungen sichtbar (allInvoicesRaw=${allInvoicesRaw.length}, nach Match-Filter=${invoicesAfterMatchFilter.length}, nach Dedup=${invoices.length})`;
       console.warn(`auto-match early-return: ${reason}`);
+      // Nichts gematcht → alle Claims zurueckgeben, damit der naechste Call
+      // sie sieht (falls Invoices inzwischen dazu gekommen sind).
+      await releaseUnmatchedClaims(new Set());
       return new Response(
         JSON.stringify({
           success: true,
@@ -666,6 +778,19 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
       // unmatched und wartet auf manuelle Pruefung.
     }
 
+    // Release: Claims, die wir NICHT erfolgreich gematched haben, zurueck auf
+    // 'unmatched'. Sonst haengen sie in 'ai_processing' und waeren fuer den
+    // naechsten Call unsichtbar bis zur Stale-Recovery.
+    const matchedTxIds = new Set<string>(matchedTransactions.map((m: any) => m.transactionId));
+    await releaseUnmatchedClaims(matchedTxIds);
+
+    // `remaining` neu lesen nach Release — unsere freigegebenen TX sind jetzt
+    // wieder im Backlog fuer den naechsten Call.
+    const { count: finalRemaining } = await supabaseClient
+      .from("bank_transactions")
+      .select("id", { count: "exact", head: true })
+      .eq("match_status", "unmatched");
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -676,7 +801,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
         autoConfirmedCount,
         processedCount: transactions.length,
         totalUnmatched,
-        remaining,
+        remaining: finalRemaining ?? remaining,
         ai: {
           provider: llm.provider,
           model: llm.model,
@@ -702,6 +827,20 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("Auto-match error:", error);
+    // Claims freigeben, damit nicht bis zur Stale-Recovery (3min) blockiert.
+    // WHERE match_status='ai_processing' stellt sicher, dass erfolgreich
+    // gematchte ('confirmed') Rows nicht rueckgaengig gemacht werden.
+    if (supabaseClient && claimedForCleanup.length > 0) {
+      try {
+        await supabaseClient
+          .from("bank_transactions")
+          .update({ match_status: "unmatched" })
+          .eq("match_status", "ai_processing")
+          .in("id", claimedForCleanup.map((t: any) => t.id));
+      } catch (releaseErr) {
+        console.error("Claim-release on error path failed:", releaseErr);
+      }
+    }
     return new Response(JSON.stringify({ error: errorMessage, version: EDGE_VERSION }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -45,10 +45,16 @@ type AutoMatchResult = {
 export default function MatchingPage() {
   const { toast } = useToast();
   const [isAutoMatching, setIsAutoMatching] = useState(false);
-  // Cancel-Flag fuer Auto-Matching. Wird zwischen Batches geprueft — die
-  // gerade laufende Edge-Function-Invocation wird nicht abgebrochen, aber
-  // der Frontend-Loop stoppt sofort nach dem aktuellen Batch.
+  // Cancel-Flag + AbortController. Der Controller bricht den laufenden
+  // Edge-Function-HTTP-Request sofort ab, das Flag verhindert den naechsten
+  // Batch. So reagiert "Abbrechen" sofort, nicht erst nach dem aktuellen Batch.
   const autoMatchCancelRef = useRef(false);
+  const autoMatchAbortRef = useRef<AbortController | null>(null);
+  const [autoMatchProgress, setAutoMatchProgress] = useState<{
+    batch: number;
+    processed: number;
+    confirmed: number;
+  } | null>(null);
   const [agentOpen, setAgentOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [autoMatchResults, setAutoMatchResults] = useState<AutoMatchResult[] | null>(null);
@@ -189,6 +195,8 @@ export default function MatchingPage() {
 
   const handleAutoMatch = async () => {
     autoMatchCancelRef.current = false;
+    autoMatchAbortRef.current = new AbortController();
+    setAutoMatchProgress({ batch: 0, processed: 0, confirmed: 0 });
     setIsAutoMatching(true);
     // Edge Function verarbeitet aus Wall-Clock-Gründen nur N Transaktionen
     // pro Aufruf. Wir loopen, bis sie `remaining: 0` meldet. Safety-Cap
@@ -220,70 +228,106 @@ export default function MatchingPage() {
     } | null = null;
     const allResults: AutoMatchResult[] = [];
 
+    // 4-fach Parallelitaet: die Edge Function claimt pro Call atomisch bis zu
+    // 50 TX (match_status: unmatched → ai_processing). Parallele Calls sehen
+    // disjunkte Sets, dadurch ~4x Speedup. Details siehe Edge Function v9.
+    const CONCURRENCY = 4;
+
     let wasCancelled = false;
     try {
-      for (let batch = 0; batch < MAX_BATCHES; batch++) {
-        // Cancel VOR Batch-Start: noch nichts in der DB passiert, sauber raus.
+      waveLoop: for (let wave = 0; wave < MAX_BATCHES; wave++) {
         if (autoMatchCancelRef.current) {
           wasCancelled = true;
           break;
         }
-        const { data, error } = await supabase.functions.invoke("auto-match-transactions");
-        if (error) throw error;
-        if (data?.aiKeyMissing) {
-          toast({
-            title: "KI-Matching nicht konfiguriert",
-            description: "OPENAI_API_KEY fehlt in den Supabase-Edge-Function-Secrets. In Supabase Dashboard setzen und Function redeployen.",
-            variant: "destructive",
-          });
-          return;
+        const signal = autoMatchAbortRef.current?.signal;
+
+        // Welle von CONCURRENCY parallelen Calls. Alle teilen sich denselben
+        // AbortController → ein Cancel bricht alle 4 gleichzeitig ab.
+        const wavePromises = Array.from({ length: CONCURRENCY }, async () => {
+          try {
+            const res = await supabase.functions.invoke("auto-match-transactions", { signal });
+            return { data: res.data, error: res.error, aborted: false };
+          } catch (invokeErr: any) {
+            if (signal?.aborted || invokeErr?.name === "AbortError") {
+              return { data: null, error: null, aborted: true };
+            }
+            return { data: null, error: invokeErr, aborted: false };
+          }
+        });
+
+        const results = await Promise.all(wavePromises);
+
+        let waveProcessed = 0;
+        let lastRemaining = 0;
+        for (const r of results) {
+          if (r.aborted) {
+            wasCancelled = true;
+            continue;
+          }
+          if (r.error) throw r.error;
+          const data = r.data;
+          if (!data) continue;
+
+          if (data.aiKeyMissing) {
+            toast({
+              title: "KI-Matching nicht konfiguriert",
+              description:
+                "OPENAI_API_KEY fehlt in den Supabase-Edge-Function-Secrets. In Supabase Dashboard setzen und Function redeployen.",
+              variant: "destructive",
+            });
+            return;
+          }
+
+          totalMatched += data.matchedCount ?? 0;
+          totalAutoConfirmed += data.autoConfirmedCount ?? 0;
+          totalProcessed += data.processedCount ?? 0;
+          waveProcessed += data.processedCount ?? 0;
+
+          if (data.ai) {
+            aiAttempted += data.ai.attempted ?? 0;
+            aiSucceeded += data.ai.succeeded ?? 0;
+            aiTimeouts += data.ai.timeouts ?? 0;
+            aiHttpErrors += data.ai.httpErrors ?? 0;
+            aiParseErrors += data.ai.parseErrors ?? 0;
+            if (data.ai.lastError) lastAiError = data.ai.lastError;
+            if (data.ai.model) aiModel = data.ai.model;
+          }
+          if (data.version) edgeVersion = data.version;
+          if (data.decisions) {
+            deterministicMatched += data.decisions.deterministicMatched ?? 0;
+            aiReturnedNull += data.decisions.aiReturnedNull ?? 0;
+            aiRejectedInvalidId += data.decisions.aiRejectedInvalidId ?? 0;
+            aiRejectedLowConfidence += data.decisions.aiRejectedLowConfidence ?? 0;
+            dbUpdateErrors += data.decisions.dbUpdateErrors ?? 0;
+          }
+          if (Array.isArray(data.matchedTransactions)) {
+            allResults.push(...(data.matchedTransactions as AutoMatchResult[]));
+          }
+          if (data.earlyReturnReason) earlyReturnReason = data.earlyReturnReason;
+          if (data.rawCounts) rawCounts = data.rawCounts;
+
+          lastRemaining = data.remaining ?? 0;
+          if (initialBacklog === null) {
+            initialBacklog = (data.totalUnmatched ?? 0) as number;
+          }
         }
 
-        totalMatched += data?.matchedCount ?? 0;
-        totalAutoConfirmed += data?.autoConfirmedCount ?? 0;
-        totalProcessed += data?.processedCount ?? 0;
+        setAutoMatchProgress({
+          batch: wave + 1,
+          processed: totalProcessed,
+          confirmed: totalAutoConfirmed,
+        });
 
-        if (data?.ai) {
-          aiAttempted += data.ai.attempted ?? 0;
-          aiSucceeded += data.ai.succeeded ?? 0;
-          aiTimeouts += data.ai.timeouts ?? 0;
-          aiHttpErrors += data.ai.httpErrors ?? 0;
-          aiParseErrors += data.ai.parseErrors ?? 0;
-          if (data.ai.lastError) lastAiError = data.ai.lastError;
-          if (data.ai.model) aiModel = data.ai.model;
-        }
-        if (data?.version) edgeVersion = data.version;
-        if (data?.decisions) {
-          deterministicMatched += data.decisions.deterministicMatched ?? 0;
-          aiReturnedNull += data.decisions.aiReturnedNull ?? 0;
-          aiRejectedInvalidId += data.decisions.aiRejectedInvalidId ?? 0;
-          aiRejectedLowConfidence += data.decisions.aiRejectedLowConfidence ?? 0;
-          dbUpdateErrors += data.decisions.dbUpdateErrors ?? 0;
-        }
-        if (Array.isArray(data?.matchedTransactions)) {
-          allResults.push(...(data.matchedTransactions as AutoMatchResult[]));
-        }
-        if (data?.earlyReturnReason) earlyReturnReason = data.earlyReturnReason;
-        if (data?.rawCounts) rawCounts = data.rawCounts;
+        if (wasCancelled) break waveLoop;
 
-        const remaining: number = data?.remaining ?? 0;
-        if (initialBacklog === null) {
-          initialBacklog = (data?.totalUnmatched ?? 0) as number;
-        }
-
-        // KEIN Zwischenstand-Refetch mehr: die Liste darf waehrend des
-        // Matching-Laufs nicht mitten im Scrollen aktualisiert werden.
-        // Refetch passiert erst, wenn der User das Ergebnis-Modal schliesst.
-
-        // Cancel NACH Batch-Response: dieser Batch ist bereits in der DB,
-        // die Ergebnisse wurden oben akkumuliert → wir zeigen sie, brechen
-        // aber den naechsten Batch ab.
-        if (autoMatchCancelRef.current) {
-          wasCancelled = true;
-          break;
-        }
-
-        if (remaining === 0 || (data?.processedCount ?? 0) === 0) break;
+        // Terminierung: keine offene Arbeit mehr. `remaining` ist der globale
+        // DB-Backlog — nicht pro Call. Wenn alle Calls 0 verarbeitet haben UND
+        // noch was uebrig ist, liegt ein Problem vor (z.B. alle TX stecken in
+        // ai_processing durch einen parallelen Run eines anderen Tabs). Safety-
+        // Cap MAX_BATCHES faengt das ab; Stale-Recovery (3min) loest es dauerhaft.
+        if (lastRemaining === 0) break;
+        if (waveProcessed === 0) break;
       }
 
       const aiErrorsTotal = aiTimeouts + aiHttpErrors + aiParseErrors;
@@ -330,6 +374,8 @@ export default function MatchingPage() {
       toast({ title: "Fehler beim Auto-Matching", description: error.message, variant: "destructive" });
     } finally {
       setIsAutoMatching(false);
+      setAutoMatchProgress(null);
+      autoMatchAbortRef.current = null;
     }
   };
 
@@ -396,17 +442,31 @@ export default function MatchingPage() {
             KI-Assistent ({unmatchedCount})
           </Button>
           {isAutoMatching ? (
-            <Button
-              variant="outline"
-              onClick={() => {
-                autoMatchCancelRef.current = true;
-              }}
-              disabled={autoMatchCancelRef.current}
-              className="gap-2"
-            >
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {autoMatchCancelRef.current ? "Abbrechen..." : "Abbrechen"}
-            </Button>
+            <>
+              {autoMatchProgress && (
+                <div className="glass-card flex items-center gap-3 px-4 py-2 text-sm">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  <span className="text-muted-foreground">
+                    Batch {autoMatchProgress.batch} · {autoMatchProgress.processed} geprüft ·{" "}
+                    <span className="font-semibold text-foreground">
+                      {autoMatchProgress.confirmed} zugeordnet
+                    </span>
+                  </span>
+                </div>
+              )}
+              <Button
+                variant="outline"
+                onClick={() => {
+                  autoMatchCancelRef.current = true;
+                  autoMatchAbortRef.current?.abort();
+                }}
+                disabled={autoMatchCancelRef.current}
+                className="gap-2"
+              >
+                <X className="h-4 w-4" />
+                {autoMatchCancelRef.current ? "Abbrechen..." : "Abbrechen"}
+              </Button>
+            </>
           ) : (
             <Button
               variant="gradient"
