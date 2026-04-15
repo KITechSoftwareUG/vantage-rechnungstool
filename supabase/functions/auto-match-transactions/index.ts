@@ -17,7 +17,7 @@ const OPENAI_TIMEOUT_MS = 20000;
 
 // Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
 // neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-parallel-claim-v9";
+const EDGE_VERSION = "2026-04-15-parallel-claim-v10-sanity";
 
 // Stale-Claim-Recovery: Wenn eine fruehere Invocation gecrasht ist, koennen
 // Transaktionen mit `match_status='ai_processing'` haengen bleiben. Alles
@@ -343,6 +343,7 @@ serve(async (req) => {
     let noCandidates = 0;
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
+    let aiRejectedSanity = 0;
     let aiReturnedNull = 0;
     let dbUpdateErrors = 0;
 
@@ -706,6 +707,36 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
                   }
 
                   if (invoiceIdValid && confidenceOk && confidenceNum >= AUTO_CONFIRM_THRESHOLD) {
+                    // SANITY-GATE gegen KI-Halluzinationen.
+                    // Vorfall: Honoris Finance 29.90€ -> Raidboxes 18.33€ mit
+                    // 97% Confidence — Aussteller komplett anders, Betrag um 38%
+                    // off, KI hat die Begruendung frei erfunden. Wir trauen der
+                    // Confidence allein nicht mehr und erzwingen harte Kriterien:
+                    //   (a) Betrag exakt (±0.01), ODER
+                    //   (b) Betrag innerhalb 10% Toleranz (FX) UND Issuer-Token
+                    //       (Substring laenger als 4 Zeichen) im Verwendungszweck.
+                    // Alles andere wird unabhaengig von der KI-Confidence verworfen.
+                    const matchedInv = potentialMatches.find((c: any) => c.id === trimmedId);
+                    const invAmount = Number(matchedInv?.amount ?? 0);
+                    const aiAmountDiff = Math.abs(matchAmount - invAmount);
+                    const aiAmountTolerance = Math.max(matchAmount, invAmount) * 0.1;
+                    const aiExactAmount = aiAmountDiff < 0.01;
+                    const aiCloseAmount = aiAmountDiff <= aiAmountTolerance;
+                    const issuerLowerSan = (matchedInv?.issuer ?? "").toLowerCase();
+                    const descLowerSan = transaction.description.toLowerCase();
+                    const issuerHasTokenInDesc = issuerLowerSan
+                      .split(/[\s,.\-_/]+/)
+                      .filter((t: string) => t.length >= 4)
+                      .some((t: string) => descLowerSan.includes(t));
+                    const sanityPass = aiExactAmount || (aiCloseAmount && issuerHasTokenInDesc);
+                    if (!sanityPass) {
+                      aiRejectedSanity++;
+                      console.warn(
+                        `AI HALLUCINATION REJECTED tx="${transaction.description.slice(0, 60)}" (${matchAmount}€) -> "${matchedInv?.issuer}" (${invAmount}€) at conf=${confidenceNum}%: amountDiff=${aiAmountDiff.toFixed(2)}, exactAmount=${aiExactAmount}, closeAmount=${aiCloseAmount}, issuerToken=${issuerHasTokenInDesc}`,
+                      );
+                      continue;
+                    }
+
                     const { error: upErr } = await supabaseClient
                       .from("bank_transactions")
                       .update({
@@ -818,6 +849,7 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
           aiReturnedNull,
           aiRejectedInvalidId,
           aiRejectedLowConfidence,
+          aiRejectedSanity,
           dbUpdateErrors,
         },
         matchedTransactions,

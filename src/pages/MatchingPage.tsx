@@ -73,6 +73,7 @@ export default function MatchingPage() {
     aiReturnedNull: number;
     aiRejectedInvalidId: number;
     aiRejectedLowConfidence: number;
+    aiRejectedSanity: number;
     dbErrors: number;
     edgeVersion: string | null;
     aiModel: string | null;
@@ -240,6 +241,7 @@ export default function MatchingPage() {
     let aiReturnedNull = 0;
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
+    let aiRejectedSanity = 0;
     let dbUpdateErrors = 0;
     let earlyReturnReason: string | null = null;
     let rawCounts: {
@@ -339,6 +341,7 @@ export default function MatchingPage() {
             aiReturnedNull += data.decisions.aiReturnedNull ?? 0;
             aiRejectedInvalidId += data.decisions.aiRejectedInvalidId ?? 0;
             aiRejectedLowConfidence += data.decisions.aiRejectedLowConfidence ?? 0;
+            aiRejectedSanity += data.decisions.aiRejectedSanity ?? 0;
             dbUpdateErrors += data.decisions.dbUpdateErrors ?? 0;
           }
           if (Array.isArray(data.matchedTransactions)) {
@@ -413,6 +416,7 @@ export default function MatchingPage() {
           aiReturnedNull,
           aiRejectedInvalidId,
           aiRejectedLowConfidence,
+          aiRejectedSanity,
           dbErrors: dbUpdateErrors,
           edgeVersion,
           aiModel,
@@ -822,8 +826,8 @@ export default function MatchingPage() {
                   <div className="text-muted-foreground">
                     Pfade: deterministisch={autoMatchSummary.deterministic}
                     {autoMatchSummary.aiAttempted > 0 && ` · KI ${autoMatchSummary.aiSucceeded}/${autoMatchSummary.aiAttempted} (${autoMatchSummary.aiModel ?? "?"})`}
-                    {(autoMatchSummary.aiReturnedNull + autoMatchSummary.aiRejectedInvalidId + autoMatchSummary.aiRejectedLowConfidence) > 0 &&
-                      ` · KI-Ablehnungen: null=${autoMatchSummary.aiReturnedNull}, bad-id=${autoMatchSummary.aiRejectedInvalidId}, low-conf=${autoMatchSummary.aiRejectedLowConfidence}`}
+                    {(autoMatchSummary.aiReturnedNull + autoMatchSummary.aiRejectedInvalidId + autoMatchSummary.aiRejectedLowConfidence + autoMatchSummary.aiRejectedSanity) > 0 &&
+                      ` · KI-Ablehnungen: null=${autoMatchSummary.aiReturnedNull}, bad-id=${autoMatchSummary.aiRejectedInvalidId}, low-conf=${autoMatchSummary.aiRejectedLowConfidence}, sanity=${autoMatchSummary.aiRejectedSanity}`}
                     {autoMatchSummary.dbErrors > 0 && ` · ⚠️ DB-Fehler: ${autoMatchSummary.dbErrors}`}
                   </div>
                   <div className="text-muted-foreground">
