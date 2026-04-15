@@ -332,33 +332,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Content-basierte Dedup: bit-identische Re-Uploads werden am Ingest
-    // geblockt — kein Storage-Upload, keine OCR, keine neue DB-Zeile. Greift
-    // nur bei invoice/commission (Tabelle `invoices` hat file_hash);
-    // `bank_statements` hat keinen file_hash → Kontoauszuege werden nicht
-    // dedupliziert (Monats-Re-Ingest ist gewollt).
+    // file_hash wird weiterhin berechnet und in die DB geschrieben, damit das
+    // Matching-Tool spaeter deduplizieren kann. Am Ingest selbst wird NICHT
+    // geblockt — Duplikate landen in der Review-Queue und werden dort bzw.
+    // beim Matching aufgeloest.
     const fileHash = await sha256Hex(fileBuffer);
-
-    if (docType !== "statement") {
-      const { data: existingInvoice } = await supabase
-        .from("invoices")
-        .select("id")
-        .eq("user_id", userId)
-        .eq("file_hash", fileHash)
-        .limit(1);
-      if (existingInvoice && existingInvoice.length > 0) {
-        console.log("Hash-Dedup: duplicate invoice for hash", fileHash, "existing_id:", existingInvoice[0].id);
-        return new Response(
-          JSON.stringify({
-            success: true,
-            duplicate: true,
-            existing_id: existingInvoice[0].id,
-            message: "Bit-identisches Duplikat — Ingest uebersprungen",
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-    }
 
     // Upload file to storage with temp name first
     const timestamp = Date.now();
