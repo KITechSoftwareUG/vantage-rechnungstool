@@ -139,13 +139,8 @@ serve(async (req) => {
       userMessage || "(keine Antwort, triff den besten Vorschlag)",
     ].join("\n");
 
-    const llmRes = await fetch(`${llm.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${llm.apiKey}`,
-      },
-      body: JSON.stringify({
+    const buildBody = () =>
+      JSON.stringify({
         model: llm.model,
         temperature: 0.1,
         response_format: { type: "json_object" },
@@ -153,8 +148,33 @@ serve(async (req) => {
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-      }),
-    });
+      });
+
+    const doCall = () =>
+      fetch(`${llm.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${llm.apiKey}`,
+        },
+        body: buildBody(),
+      });
+
+    let llmRes = await doCall();
+
+    // Auto-Fallback bei 404 (Modell deprecated): einmal auf gemini-flash-latest
+    // umschalten und neu aufrufen. Ohne Fallback waere ein deprecated Modell
+    // ein harter Ausfall fuer den KI-Assistenten.
+    if (
+      llmRes.status === 404 &&
+      llm.fallbackModel &&
+      llm.model !== llm.fallbackModel
+    ) {
+      const deprecated = llm.model;
+      llm.model = llm.fallbackModel;
+      console.warn(`matching-agent: ${deprecated} → 404, switching to ${llm.model}`);
+      llmRes = await doCall();
+    }
 
     if (!llmRes.ok) {
       const errText = await llmRes.text();
@@ -265,6 +285,7 @@ type LLMConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  fallbackModel: string | null;
 };
 
 function resolveLLM(): LLMConfig | null {
@@ -275,6 +296,7 @@ function resolveLLM(): LLMConfig | null {
       apiKey: geminiKey,
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
       model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash-lite",
+      fallbackModel: Deno.env.get("LLM_MODEL_FALLBACK") ?? "gemini-flash-latest",
     };
   }
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
@@ -284,6 +306,7 @@ function resolveLLM(): LLMConfig | null {
       apiKey: openaiKey,
       baseUrl: "https://api.openai.com/v1",
       model: Deno.env.get("OPENAI_MODEL") ?? Deno.env.get("LLM_MODEL") ?? "gpt-4o-mini",
+      fallbackModel: null,
     };
   }
   return null;

@@ -348,21 +348,13 @@ serve(async (req) => {
         // OpenAI für intelligentes Matching — auch bei einzelnen Kandidaten mit Name-Match
         aiAttempted++;
         try {
-          const response = await fetchWithTimeout(
-            `${llm.baseUrl}/chat/completions`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${llm.apiKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: llm.model,
-                response_format: { type: "json_object" },
-                messages: [
-                  {
-                    role: "system",
-                    content: `Du bist ein deutscher Buchhaltungs-Assistent, der Banktransaktionen Rechnungen zuordnet.
+          const buildPayload = () => ({
+            model: llm.model,
+            response_format: { type: "json_object" },
+            messages: [
+              {
+                role: "system",
+                content: `Du bist ein deutscher Buchhaltungs-Assistent, der Banktransaktionen Rechnungen zuordnet.
 
 DEINE AUFGABE: Finde die WAHRSCHEINLICHSTE Rechnung aus der Kandidatenliste und gib eine EHRLICHE Confidence zurück. Die Applikation entscheidet auf Basis deiner Confidence selbst, was damit passiert — du sollst NICHT selbst entscheiden "das ist zu unsicher, ich gebe null zurück". Gib null NUR zurück, wenn wirklich KEINE der Kandidaten-Rechnungen inhaltlich zur Transaktion passt.
 
@@ -393,10 +385,10 @@ WICHTIG: Die Applikation hat eine interne Schwelle. Du wirst deine Entscheidung 
 
 ANTWORT: NUR ein JSON-Objekt, keine Code-Fences, kein Fließtext:
 {"matchedInvoiceId": <eine UUID aus der Kandidatenliste ODER null>, "confidence": <0-100>, "reason": "<ein kurzer deutscher Satz>"}`,
-                  },
-                  {
-                    role: "user",
-                    content: `### TRANSAKTION
+              },
+              {
+                role: "user",
+                content: `### TRANSAKTION
 - Datum: ${transaction.date}
 - Verwendungszweck: ${transaction.description}
 - Betrag (EUR): ${transactionAmount}${isAmexWithCurrencyConversion ? `\n- Foreign Spend Amount (original): ${matchAmount}` : ""}${transaction.original_currency ? `\n- Original-Currency-Info: ${transaction.original_currency}` : ""}
@@ -405,12 +397,43 @@ ANTWORT: NUR ein JSON-Objekt, keine Code-Fences, kein Fließtext:
 ${potentialMatches.map((inv: any, i: number) => `${i + 1}. ID=${inv.id} | Aussteller: ${inv.issuer} | Betrag: ${inv.amount} ${inv.currency || "EUR"} | Datum: ${inv.date}${inv.invoice_number ? ` | Rech-Nr: ${inv.invoice_number}` : ""}`).join("\n")}
 
 Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Confidence ehrlich an.`,
-                  },
-                ],
-              }),
-            },
-            OPENAI_TIMEOUT_MS,
-          );
+              },
+            ],
+          });
+
+          const doFetch = () =>
+            fetchWithTimeout(
+              `${llm.baseUrl}/chat/completions`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${llm.apiKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(buildPayload()),
+              },
+              OPENAI_TIMEOUT_MS,
+            );
+
+          let response = await doFetch();
+
+          // Auto-Fallback: wenn das primaere Modell deprecated/entfernt wurde
+          // (Google gibt 404 "no longer available"), einmal auf den Fallback
+          // umschalten und diese Transaktion neu aufrufen. Der Switch bleibt
+          // fuer den Rest des Invocation-Runs aktiv — alle weiteren TX nutzen
+          // dann direkt das Fallback-Modell, ohne erneut 404 zu produzieren.
+          if (
+            response.status === 404 &&
+            llm.fallbackModel &&
+            llm.model !== llm.fallbackModel
+          ) {
+            const deprecated = llm.model;
+            llm.model = llm.fallbackModel;
+            console.warn(
+              `Model ${deprecated} returned 404 — switching to fallback ${llm.model} for rest of invocation`,
+            );
+            response = await doFetch();
+          }
 
           if (response.ok) {
             const data = await response.json();
@@ -554,6 +577,7 @@ type LLMConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  fallbackModel: string | null;
 };
 
 // Gemini bevorzugt (der User hat explizit darauf umgestellt). OpenAI nur als
@@ -571,6 +595,10 @@ function resolveLLM(): LLMConfig | null {
       // fuer neue API-Keys nicht mehr verfuegbar (404), 2.5-flash laeuft per
       // Default im teuren Thinking-Mode.
       model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash-lite",
+      // gemini-flash-latest ist ein Alias auf das aktuell beste Flash-Modell.
+      // Wenn das primaere Modell mit 404 deprecated wird, fallen wir darauf
+      // zurueck — dann laeuft zumindest etwas, statt dass alle Matches ausfallen.
+      fallbackModel: Deno.env.get("LLM_MODEL_FALLBACK") ?? "gemini-flash-latest",
     };
   }
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
@@ -580,6 +608,7 @@ function resolveLLM(): LLMConfig | null {
       apiKey: openaiKey,
       baseUrl: "https://api.openai.com/v1",
       model: Deno.env.get("OPENAI_MODEL") ?? Deno.env.get("LLM_MODEL") ?? "gpt-4o-mini",
+      fallbackModel: null,
     };
   }
   return null;
