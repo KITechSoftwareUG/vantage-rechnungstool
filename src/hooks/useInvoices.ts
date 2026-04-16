@@ -4,6 +4,43 @@ import { useAuth } from "@/hooks/useAuth";
 import { InvoiceData } from "@/types/documents";
 import { useToast } from "@/hooks/use-toast";
 import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
+import { buildStoragePaths } from "@/lib/storagePaths";
+
+interface InvoiceDeleteRef {
+  id: string;
+  user_id: string | null;
+  year: number | null;
+  month: number | null;
+  file_name: string | null;
+  file_url: string | null;
+}
+
+async function deleteIngestionLogs(logIds: string[]): Promise<void> {
+  if (!logIds.length) return;
+  const run = () =>
+    supabase.from("document_ingestion_log").delete().in("id", logIds);
+  let { error } = await run();
+  if (error) {
+    const retry = await run();
+    error = retry.error;
+  }
+  if (error) {
+    console.error("[useInvoices] ingestion log cleanup failed", error);
+  }
+}
+
+async function removeStoragePaths(paths: string[]): Promise<void> {
+  if (!paths.length) return;
+  const run = () => supabase.storage.from("documents").remove(paths);
+  let { error } = await run();
+  if (error) {
+    const retry = await run();
+    error = retry.error;
+  }
+  if (error) {
+    console.error("[useInvoices] storage cleanup failed", error);
+  }
+}
 
 export function useInvoices() {
   const { user } = useAuth();
@@ -151,11 +188,47 @@ export function useDeleteInvoice() {
 
   return useMutation({
     mutationFn: async (id: string) => {
+      // Zuerst alle referenzierten Daten einsammeln, damit wir nach dem
+      // Invoice-Delete Storage + Ingestion-Log deterministisch aufraeumen
+      // koennen. RLS-Kaskaden oder Race Conditions helfen hier nicht.
+      const { data: invData } = await supabase
+        .from("invoices")
+        .select("id, user_id, year, month, file_name, file_url")
+        .eq("id", id)
+        .single();
+      const invRow = invData as unknown as InvoiceDeleteRef | null;
+
+      const { data: logRows } = await supabase
+        .from("document_ingestion_log")
+        .select("id")
+        .eq("document_id", id);
+      const logIds = ((logRows ?? []) as { id: string }[]).map((r) => r.id);
+
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
+
+      // Nach erfolgreichem Invoice-Delete: best-effort Cleanup. Fehler hier
+      // kippen den User-Flow nicht — nur console.error.
+      await deleteIngestionLogs(logIds);
+
+      if (invRow) {
+        const paths = buildStoragePaths([
+          {
+            userId: invRow.user_id,
+            year: invRow.year,
+            month: invRow.month,
+            fileName: invRow.file_name,
+            fileUrl: invRow.file_url,
+          },
+        ]);
+        await removeStoragePaths(paths);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
       toast({ title: "Rechnung gelöscht" });
     },
     onError: (error) => {
@@ -174,15 +247,48 @@ export function useBulkDeleteInvoices() {
 
   return useMutation({
     mutationFn: async (ids: string[]) => {
-      const promises = ids.map(id =>
+      if (!ids.length) return;
+
+      // Snapshot aller Invoice-Daten + Log-IDs vor dem Delete, damit wir
+      // danach deterministisch Storage + Ingestion-Log aufraeumen koennen.
+      const { data: invRows } = await supabase
+        .from("invoices")
+        .select("id, user_id, year, month, file_name, file_url")
+        .in("id", ids);
+      const snapshot = (invRows ?? []) as unknown as InvoiceDeleteRef[];
+
+      const { data: logRows } = await supabase
+        .from("document_ingestion_log")
+        .select("id")
+        .in("document_id", ids);
+      const logIds = ((logRows ?? []) as { id: string }[]).map((r) => r.id);
+
+      const promises = ids.map((id) =>
         supabase.from("invoices").delete().eq("id", id)
       );
       const results = await Promise.all(promises);
-      const errors = results.filter(r => r.error);
+      const errors = results.filter((r) => r.error);
       if (errors.length > 0) throw new Error(`${errors.length} Fehler beim Löschen`);
+
+      // Nach erfolgreichem Bulk-Delete: best-effort Cleanup.
+      await deleteIngestionLogs(logIds);
+
+      const paths = buildStoragePaths(
+        snapshot.map((inv) => ({
+          userId: inv.user_id,
+          year: inv.year,
+          month: inv.month,
+          fileName: inv.file_name,
+          fileUrl: inv.file_url,
+        }))
+      );
+      await removeStoragePaths(paths);
     },
     onSuccess: (_, ids) => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
+      queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
       toast({ title: `${ids.length} Rechnungen gelöscht` });
     },
     onError: (error) => {
