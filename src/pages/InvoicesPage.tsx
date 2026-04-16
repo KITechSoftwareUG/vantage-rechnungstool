@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef } from "react";
-import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare, Copy, AlertTriangle, X } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Grid3X3, FolderTree, Search, ArrowDownLeft, ArrowUpRight, Loader2, List, Eye, Trash2, CheckSquare, Square, XSquare, Copy, AlertTriangle, X, Sparkles } from "lucide-react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,8 @@ import { useDuplicateDetection, useMergeDuplicate } from "@/hooks/useDuplicateDe
 import { DuplicateBadge } from "@/components/documents/DuplicateBadge";
 import { cn } from "@/lib/utils";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 type ViewMode = "grid" | "timeline" | "list";
 
@@ -27,6 +30,8 @@ export default function InvoicesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [showOnlyDuplicates, setShowOnlyDuplicates] = useState(false);
+  const [bulkDedupDialogOpen, setBulkDedupDialogOpen] = useState(false);
+  const [isBulkDeduping, setIsBulkDeduping] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const { data: invoices = [], isLoading } = useInvoices();
@@ -34,6 +39,8 @@ export default function InvoicesPage() {
   const deleteInvoice = useDeleteInvoice();
   const bulkDelete = useBulkDeleteInvoices();
   const mergeDuplicate = useMergeDuplicate();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   // Duplicate detection across all invoices
   const duplicateCandidates = useMemo(() =>
@@ -46,6 +53,7 @@ export default function InvoicesPage() {
       fileName: inv.fileName,
       fileUrl: inv.fileUrl,
       status: inv.status,
+      createdAt: inv.createdAt,
       invoiceNumber: inv.invoiceNumber,
       fileHash: inv.fileHash,
     })),
@@ -57,6 +65,142 @@ export default function InvoicesPage() {
     for (const [id] of duplicateMap) seen.add(id);
     return seen.size;
   }, [duplicateMap]);
+
+  // Build connected components of duplicate groups from duplicateMap.
+  // Each group: one keeper (oldest) + N docs to delete. Status-confirmed docs
+  // (ready/saved) are preferred as keeper regardless of age — matches the
+  // single-merge swap logic in useMergeDuplicate and prevents deleting
+  // confirmed rows.
+  const bulkDedupPlan = useMemo(() => {
+    if (duplicateMap.size === 0) return { pairs: [] as Array<{ keeperId: string; duplicateId: string }>, deleteCount: 0, groupCount: 0 };
+
+    const invById = new Map<string, InvoiceData>();
+    for (const inv of invoices) invById.set(inv.id, inv);
+
+    const visited = new Set<string>();
+    const groups: string[][] = [];
+    for (const startId of duplicateMap.keys()) {
+      if (visited.has(startId)) continue;
+      const stack = [startId];
+      const group: string[] = [];
+      while (stack.length) {
+        const id = stack.pop()!;
+        if (visited.has(id)) continue;
+        visited.add(id);
+        group.push(id);
+        const neighbors = duplicateMap.get(id) || [];
+        for (const n of neighbors) {
+          if (!visited.has(n.id)) stack.push(n.id);
+        }
+      }
+      if (group.length > 1) groups.push(group);
+    }
+
+    const isConfirmed = (s?: string) => s === "ready" || s === "saved";
+    const rank = (inv: InvoiceData | undefined): [number, number, string, string] => {
+      if (!inv) return [2, Number.MAX_SAFE_INTEGER, "", ""];
+      // Lower is better: confirmed first, then oldest createdAt, then alphabetical fileName, then id
+      const confirmedRank = isConfirmed(inv.status) ? 0 : 1;
+      const createdRank = inv.createdAt ? new Date(inv.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+      return [confirmedRank, createdRank, (inv.fileName || "").toLowerCase(), inv.id];
+    };
+    const cmp = (a: [number, number, string, string], b: [number, number, string, string]) => {
+      if (a[0] !== b[0]) return a[0] - b[0];
+      if (a[1] !== b[1]) return a[1] - b[1];
+      if (a[2] !== b[2]) return a[2] < b[2] ? -1 : 1;
+      return a[3] < b[3] ? -1 : a[3] > b[3] ? 1 : 0;
+    };
+
+    const pairs: Array<{ keeperId: string; duplicateId: string }> = [];
+    for (const group of groups) {
+      const sorted = [...group].sort((a, b) => cmp(rank(invById.get(a)), rank(invById.get(b))));
+      const keeperId = sorted[0];
+      for (let i = 1; i < sorted.length; i++) {
+        pairs.push({ keeperId, duplicateId: sorted[i] });
+      }
+    }
+    return { pairs, deleteCount: pairs.length, groupCount: groups.length };
+  }, [duplicateMap, invoices]);
+
+  const handleBulkDedup = async () => {
+    if (bulkDedupPlan.pairs.length === 0) return;
+    setBulkDedupDialogOpen(false);
+    setIsBulkDeduping(true);
+    const total = bulkDedupPlan.pairs.length;
+    toast({ title: `Lösche ${total} Duplikate...`, description: "Bitte warten." });
+
+    // Reimplement the merge mutation's core logic inline so we can
+    // Promise.allSettled in parallel without hammering the shared mutation
+    // state. Keeps the DB-effect identical (reassign transactions → delete
+    // invoice → clean ingestion logs) but skips per-op toasts.
+    const runOne = async ({ keeperId: rawKeeperId, duplicateId: rawDuplicateId }: { keeperId: string; duplicateId: string }) => {
+      const { data: statusRows, error: statusErr } = await supabase
+        .from("invoices")
+        .select("id, status")
+        .in("id", [rawKeeperId, rawDuplicateId]);
+      if (statusErr) throw statusErr;
+      const statusOf = (id: string) =>
+        (statusRows || []).find((r: any) => r.id === id)?.status as string | undefined;
+      const isConfirmedStatus = (s: string | undefined) => s === "ready" || s === "saved";
+
+      let keeperId = rawKeeperId;
+      let duplicateId = rawDuplicateId;
+      if (isConfirmedStatus(statusOf(rawDuplicateId)) && !isConfirmedStatus(statusOf(rawKeeperId))) {
+        keeperId = rawDuplicateId;
+        duplicateId = rawKeeperId;
+      }
+
+      const { error: reassignError } = await supabase
+        .from("bank_transactions")
+        .update({ matched_invoice_id: keeperId })
+        .eq("matched_invoice_id", duplicateId);
+      if (reassignError) throw reassignError;
+
+      const { data: logRows } = await supabase
+        .from("document_ingestion_log")
+        .select("id")
+        .eq("document_id", duplicateId);
+      const logIds = (logRows || []).map((r: any) => r.id);
+
+      const { error: deleteError } = await supabase
+        .from("invoices")
+        .delete()
+        .eq("id", duplicateId);
+      if (deleteError) throw deleteError;
+
+      if (logIds.length) {
+        const { error: logErr } = await supabase
+          .from("document_ingestion_log")
+          .delete()
+          .in("id", logIds);
+        if (logErr) console.error("Ingestion-Log-Delete (bulk dedup) fehlgeschlagen:", logErr);
+      }
+    };
+
+    const results = await Promise.allSettled(bulkDedupPlan.pairs.map(runOne));
+    const succeeded = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - succeeded;
+
+    queryClient.invalidateQueries({ queryKey: ["invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
+    queryClient.invalidateQueries({ queryKey: ["ingestion_logs"] });
+
+    if (failed === 0) {
+      toast({ title: `${succeeded} Duplikate entfernt`, description: "Alle doppelten Rechnungen wurden zusammengeführt." });
+    } else {
+      toast({
+        title: `${succeeded} von ${total} Duplikaten entfernt`,
+        description: `${failed} Fehler beim Zusammenführen. Details in der Konsole.`,
+        variant: "destructive",
+      });
+      for (const r of results) {
+        if (r.status === "rejected") console.error("Bulk-Dedup-Fehler:", r.reason);
+      }
+    }
+
+    setIsBulkDeduping(false);
+  };
 
   const filteredInvoices = invoices.filter(inv => {
     const matchesSearch = inv.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -166,8 +310,25 @@ export default function InvoicesPage() {
           </p>
         </div>
 
-        {/* View Toggle */}
-        <div className="flex items-center gap-2">
+        {/* Actions + View Toggle */}
+        <div className="flex flex-wrap items-center gap-2">
+          {bulkDedupPlan.deleteCount > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBulkDedupDialogOpen(true)}
+              disabled={isBulkDeduping}
+              className="gap-1.5 border-warning/40 text-warning hover:bg-warning/10 hover:text-warning"
+              title="Alle erkannten Duplikate auf einmal zusammenführen"
+            >
+              {isBulkDeduping ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
+              Alle Duplikate entfernen ({bulkDedupPlan.deleteCount})
+            </Button>
+          )}
           <Button
             variant={viewMode === "timeline" ? "default" : "ghost"}
             size="icon"
@@ -586,6 +747,15 @@ export default function InvoicesPage() {
         title={`${selectedIds.size} Rechnungen löschen`}
         description={`Möchten Sie wirklich ${selectedIds.size} Rechnungen löschen? Diese Aktion kann nicht rückgängig gemacht werden.`}
         isDeleting={bulkDelete.isPending}
+      />
+
+      <DeleteConfirmationDialog
+        open={bulkDedupDialogOpen}
+        onOpenChange={setBulkDedupDialogOpen}
+        onConfirm={handleBulkDedup}
+        title="Alle Duplikate entfernen"
+        description={`Sicher? Entfernt ${bulkDedupPlan.deleteCount} Duplikat${bulkDedupPlan.deleteCount === 1 ? "" : "e"} aus ${bulkDedupPlan.groupCount} Gruppe${bulkDedupPlan.groupCount === 1 ? "" : "n"} und behält jeweils das älteste Dokument (bestätigte Rechnungen haben Vorrang). Verknüpfte Transaktionen werden auf den Keeper übertragen.`}
+        isDeleting={isBulkDeduping}
       />
     </div>
   );

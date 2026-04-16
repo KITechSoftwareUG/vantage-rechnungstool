@@ -127,21 +127,20 @@ export function useIngestionLogs() {
   const { data: logs, isLoading, refetch } = useQuery({
     queryKey: ["ingestion-logs"],
     queryFn: async () => {
+      // Filter serverseitig anwenden, damit das Limit erst NACH den Filtern
+      // greift. Sonst schneidet .limit() auf 200 Rohzeilen und clientseitige
+      // Filter reduzieren die sichtbare Liste weiter — was die Ingest-Zahl
+      // kuenstlich kleiner macht als die Rechnungs-Gesamtzahl.
       const { data, error } = await supabase
         .from("document_ingestion_log")
         .select("*")
+        .neq("document_type", "bank_statement")
+        .neq("status", "duplicate")
         .order("created_at", { ascending: false })
-        .limit(200);
+        .limit(1000);
       if (error) throw error;
 
-      // Kontoauszüge werden in der eigenen Kontoauszüge-Ansicht angezeigt und
-      // hier aus der "Eingespeiste Dokumente"-Liste ausgeblendet.
-      // Duplikat-Status wird nicht mehr erzeugt (Dedup passiert nur noch im
-      // Matching-Tool nach Bestätigung), historische "duplicate"-Zeilen werden
-      // hier ausgeblendet.
-      const rawLogs = (data as IngestionLog[]).filter(
-        (l) => l.document_type !== "bank_statement" && l.status !== "duplicate"
-      );
+      const rawLogs = data as IngestionLog[];
 
       // Enrich with linked document status
       const invoiceIds = rawLogs.filter(l => l.document_id).map(l => l.document_id!);
