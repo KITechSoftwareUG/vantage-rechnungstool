@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
+import { buildStoragePaths } from "@/lib/storagePaths";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -210,17 +211,49 @@ export function useIngestionLogs() {
 
   const deleteMutation = useMutation({
     mutationFn: async ({ logId, documentId, documentType }: { logId: string; documentId: string | null; documentType: string }) => {
+      const storagePaths: string[] = [];
       if (documentId) {
         const table = documentType === "bank_statement" ? "bank_statements" : "invoices";
-        await supabase.from(table).delete().eq("id", documentId);
+        const { data: row } = await supabase
+          .from(table)
+          .select("file_url, year, month, file_name, user_id")
+          .eq("id", documentId)
+          .maybeSingle();
+        const { error: delErr } = await supabase.from(table).delete().eq("id", documentId);
+        if (delErr) throw delErr;
+        if (row) {
+          storagePaths.push(
+            ...buildStoragePaths([
+              {
+                userId: row.user_id,
+                year: row.year,
+                month: row.month,
+                fileName: row.file_name,
+                fileUrl: row.file_url,
+              },
+            ])
+          );
+        }
       }
       const { error } = await supabase.from("document_ingestion_log").delete().eq("id", logId);
       if (error) throw error;
+
+      if (storagePaths.length > 0) {
+        const removeOnce = () => supabase.storage.from("documents").remove(storagePaths);
+        let { error: storageErr } = await removeOnce();
+        if (storageErr) {
+          const retry = await removeOnce();
+          storageErr = retry.error;
+        }
+        if (storageErr) {
+          console.error("[useIngestionLogs] Storage-Cleanup fehlgeschlagen", storageErr, storagePaths);
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-statements"] });
+      queryClient.invalidateQueries({ queryKey: ["bank_statements"] });
       queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
       toast({ title: "Dokument entfernt" });
     },
@@ -233,21 +266,75 @@ export function useIngestionLogs() {
     mutationFn: async (selectedIds: Set<string>) => {
       if (!logs) return;
       const selected = logs.filter((l) => selectedIds.has(l.id));
-      for (const log of selected) {
-        if (log.document_id) {
-          const table = log.document_type === "bank_statement" ? "bank_statements" : "invoices";
-          await supabase.from(table).delete().eq("id", log.document_id);
-        }
+
+      const invoiceIds = selected
+        .filter((l) => l.document_id && l.document_type !== "bank_statement")
+        .map((l) => l.document_id!) as string[];
+      const statementIds = selected
+        .filter((l) => l.document_id && l.document_type === "bank_statement")
+        .map((l) => l.document_id!) as string[];
+
+      const refs: Parameters<typeof buildStoragePaths>[0] = [];
+
+      if (invoiceIds.length > 0) {
+        const { data: invoiceRows } = await supabase
+          .from("invoices")
+          .select("id, file_url, year, month, file_name, user_id")
+          .in("id", invoiceIds);
+        invoiceRows?.forEach((r) =>
+          refs.push({
+            userId: r.user_id,
+            year: r.year,
+            month: r.month,
+            fileName: r.file_name,
+            fileUrl: r.file_url,
+          })
+        );
+        const { error: invErr } = await supabase.from("invoices").delete().in("id", invoiceIds);
+        if (invErr) throw invErr;
       }
+
+      if (statementIds.length > 0) {
+        const { data: statementRows } = await supabase
+          .from("bank_statements")
+          .select("id, file_url, year, month, file_name, user_id")
+          .in("id", statementIds);
+        statementRows?.forEach((r) =>
+          refs.push({
+            userId: r.user_id,
+            year: r.year,
+            month: r.month,
+            fileName: r.file_name,
+            fileUrl: r.file_url,
+          })
+        );
+        const { error: stErr } = await supabase.from("bank_statements").delete().in("id", statementIds);
+        if (stErr) throw stErr;
+      }
+
       const ids = selected.map((l) => l.id);
       const { error } = await supabase.from("document_ingestion_log").delete().in("id", ids);
       if (error) throw error;
+
+      const storagePaths = buildStoragePaths(refs);
+      if (storagePaths.length > 0) {
+        const removeOnce = () => supabase.storage.from("documents").remove(storagePaths);
+        let { error: storageErr } = await removeOnce();
+        if (storageErr) {
+          const retry = await removeOnce();
+          storageErr = retry.error;
+        }
+        if (storageErr) {
+          console.error("[useIngestionLogs] Bulk-Storage-Cleanup fehlgeschlagen", storageErr, storagePaths);
+        }
+      }
+
       return selectedIds.size;
     },
     onSuccess: (count) => {
       queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-statements"] });
+      queryClient.invalidateQueries({ queryKey: ["bank_statements"] });
       queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
       toast({ title: `${count} Dokument${count !== 1 ? "e" : ""} entfernt` });
     },

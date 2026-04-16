@@ -10,46 +10,7 @@ import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { useState, useCallback } from "react";
 import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
-
-function extractStoragePath(fileUrl: string | null | undefined): string | null {
-  if (!fileUrl) return null;
-  try {
-    const parsed = new URL(fileUrl);
-    const markers = [
-      "/storage/v1/object/public/documents/",
-      "/storage/v1/object/sign/documents/",
-      "/storage/v1/object/authenticated/documents/",
-    ];
-    for (const marker of markers) {
-      const idx = parsed.pathname.indexOf(marker);
-      if (idx !== -1) {
-        return decodeURIComponent(parsed.pathname.slice(idx + marker.length));
-      }
-    }
-  } catch {}
-  return null;
-}
-
-interface StorageRef {
-  userId: string;
-  year: number;
-  month: number;
-  fileName: string;
-  fileUrl?: string | null;
-}
-
-function buildStoragePaths(refs: StorageRef[]): string[] {
-  const paths = new Set<string>();
-  for (const ref of refs) {
-    const fromUrl = extractStoragePath(ref.fileUrl);
-    if (fromUrl) paths.add(fromUrl);
-    if (ref.userId && ref.year != null && ref.month != null && ref.fileName) {
-      paths.add(`${ref.userId}/${ref.year}/${ref.month}/${ref.fileName}`);
-      paths.add(`${ref.userId}/${ref.year}/${String(ref.month).padStart(2, "0")}/${ref.fileName}`);
-    }
-  }
-  return Array.from(paths);
-}
+import { buildStoragePaths } from "@/lib/storagePaths";
 
 interface PendingInvoice {
   id: string;

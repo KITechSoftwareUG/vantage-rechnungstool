@@ -259,37 +259,47 @@ export function useBulkDeleteInvoices() {
 
       const { data: logRows } = await supabase
         .from("document_ingestion_log")
-        .select("id")
+        .select("id, document_id")
         .in("document_id", ids);
-      const logIds = ((logRows ?? []) as { id: string }[]).map((r) => r.id);
 
       const promises = ids.map((id) =>
-        supabase.from("invoices").delete().eq("id", id)
+        supabase.from("invoices").delete().eq("id", id).then((res) => ({ id, res }))
       );
       const results = await Promise.all(promises);
-      const errors = results.filter((r) => r.error);
-      if (errors.length > 0) throw new Error(`${errors.length} Fehler beim Löschen`);
+      const successfulIds = results.filter((r) => !r.res.error).map((r) => r.id);
+      const errors = results.filter((r) => r.res.error);
 
-      // Nach erfolgreichem Bulk-Delete: best-effort Cleanup.
-      await deleteIngestionLogs(logIds);
+      // Cleanup nur fuer erfolgreich geloeschte Invoices — sonst bleiben
+      // bei Teil-Fehlern orphaned Logs/Storage liegen.
+      const logRowsTyped = (logRows ?? []) as { id: string; document_id: string }[];
+      const successfulLogIds = logRowsTyped
+        .filter((l) => successfulIds.includes(l.document_id))
+        .map((l) => l.id);
+      await deleteIngestionLogs(successfulLogIds);
 
       const paths = buildStoragePaths(
-        snapshot.map((inv) => ({
-          userId: inv.user_id,
-          year: inv.year,
-          month: inv.month,
-          fileName: inv.file_name,
-          fileUrl: inv.file_url,
-        }))
+        snapshot
+          .filter((inv) => successfulIds.includes(inv.id))
+          .map((inv) => ({
+            userId: inv.user_id,
+            year: inv.year,
+            month: inv.month,
+            fileName: inv.file_name,
+            fileUrl: inv.file_url,
+          }))
       );
       await removeStoragePaths(paths);
+
+      if (errors.length > 0) throw new Error(`${errors.length} Fehler beim Löschen`);
+
+      return { successfulCount: successfulIds.length };
     },
-    onSuccess: (_, ids) => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
       queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
-      toast({ title: `${ids.length} Rechnungen gelöscht` });
+      toast({ title: `${data?.successfulCount ?? 0} Rechnungen gelöscht` });
     },
     onError: (error) => {
       toast({

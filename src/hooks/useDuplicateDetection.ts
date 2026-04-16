@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { buildStoragePaths } from "@/lib/storagePaths";
 
 interface DuplicateCandidate {
   id: string;
@@ -213,6 +214,15 @@ export function useMergeDuplicate() {
         .eq("document_id", duplicateId);
       const logIds = (logRows || []).map((r: any) => r.id);
 
+      // Fix A: Row-Snapshot der duplicate-Invoice VOR dem delete einsammeln,
+      // damit wir danach die Storage-Datei deterministisch entfernen koennen.
+      // Sonst bleiben Orphans im Bucket.
+      const { data: dupRow } = await supabase
+        .from("invoices")
+        .select("id, user_id, year, month, file_name, file_url")
+        .eq("id", duplicateId)
+        .maybeSingle();
+
       const { error: deleteError } = await supabase
         .from("invoices")
         .delete()
@@ -233,12 +243,37 @@ export function useMergeDuplicate() {
           console.error("Ingestion-Log-Delete (merge) fehlgeschlagen:", logErr);
         }
       }
+
+      // Fix A: Storage-Datei der geloeschten Rechnung entfernen (1 Retry).
+      if (dupRow) {
+        const paths = buildStoragePaths([
+          {
+            userId: (dupRow as any).user_id,
+            year: (dupRow as any).year,
+            month: (dupRow as any).month,
+            fileName: (dupRow as any).file_name,
+            fileUrl: (dupRow as any).file_url,
+          },
+        ]);
+        if (paths.length) {
+          const removeStorage = () =>
+            supabase.storage.from("documents").remove(paths);
+          let { error: storageErr } = await removeStorage();
+          if (storageErr) {
+            const retry = await removeStorage();
+            storageErr = retry.error;
+          }
+          if (storageErr) {
+            console.error("Storage-Delete (merge) fehlgeschlagen:", storageErr);
+          }
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["ingestion_logs"] });
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
       toast({ title: "Duplikat zusammengeführt", description: "Die doppelte Rechnung wurde entfernt." });
     },
     onError: (error) => {

@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { buildStoragePaths } from "@/lib/storagePaths";
 
 type ViewMode = "grid" | "timeline" | "list";
 
@@ -162,6 +163,15 @@ export default function InvoicesPage() {
         .eq("document_id", duplicateId);
       const logIds = (logRows || []).map((r: any) => r.id);
 
+      // Fix A: Snapshot der duplicate-Invoice VOR dem delete, damit wir
+      // anschliessend die Storage-Datei entfernen koennen. Ohne das bleiben
+      // Orphans im Bucket stehen.
+      const { data: dupRow } = await supabase
+        .from("invoices")
+        .select("id, user_id, year, month, file_name, file_url")
+        .eq("id", duplicateId)
+        .maybeSingle();
+
       const { error: deleteError } = await supabase
         .from("invoices")
         .delete()
@@ -169,11 +179,37 @@ export default function InvoicesPage() {
       if (deleteError) throw deleteError;
 
       if (logIds.length) {
-        const { error: logErr } = await supabase
-          .from("document_ingestion_log")
-          .delete()
-          .in("id", logIds);
+        const deleteLog = () =>
+          supabase.from("document_ingestion_log").delete().in("id", logIds);
+        let { error: logErr } = await deleteLog();
+        if (logErr) {
+          const retry = await deleteLog();
+          logErr = retry.error;
+        }
         if (logErr) console.error("Ingestion-Log-Delete (bulk dedup) fehlgeschlagen:", logErr);
+      }
+
+      // Fix A: Storage-Cleanup mit 1 Retry.
+      if (dupRow) {
+        const paths = buildStoragePaths([
+          {
+            userId: (dupRow as any).user_id,
+            year: (dupRow as any).year,
+            month: (dupRow as any).month,
+            fileName: (dupRow as any).file_name,
+            fileUrl: (dupRow as any).file_url,
+          },
+        ]);
+        if (paths.length) {
+          const removeStorage = () =>
+            supabase.storage.from("documents").remove(paths);
+          let { error: storageErr } = await removeStorage();
+          if (storageErr) {
+            const retry = await removeStorage();
+            storageErr = retry.error;
+          }
+          if (storageErr) console.error("Storage-Delete (bulk dedup) fehlgeschlagen:", storageErr);
+        }
       }
     };
 
@@ -184,7 +220,7 @@ export default function InvoicesPage() {
     queryClient.invalidateQueries({ queryKey: ["invoices"] });
     queryClient.invalidateQueries({ queryKey: ["pending-invoices"] });
     queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
-    queryClient.invalidateQueries({ queryKey: ["ingestion_logs"] });
+    queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
 
     if (failed === 0) {
       toast({ title: `${succeeded} Duplikate entfernt`, description: "Alle doppelten Rechnungen wurden zusammengeführt." });

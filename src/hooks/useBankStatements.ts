@@ -4,6 +4,43 @@ import { useAuth } from "@/hooks/useAuth";
 import { StatementData, ExtractedTransaction } from "@/types/documents";
 import { useToast } from "@/hooks/use-toast";
 import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
+import { buildStoragePaths } from "@/lib/storagePaths";
+
+interface StatementDeleteRef {
+  id: string;
+  user_id: string | null;
+  year: number | null;
+  month: number | null;
+  file_name: string | null;
+  file_url: string | null;
+}
+
+async function deleteStatementIngestionLogs(logIds: string[]): Promise<void> {
+  if (!logIds.length) return;
+  const run = () =>
+    supabase.from("document_ingestion_log").delete().in("id", logIds);
+  let { error } = await run();
+  if (error) {
+    const retry = await run();
+    error = retry.error;
+  }
+  if (error) {
+    console.error("[useBankStatements] ingestion log cleanup failed", error);
+  }
+}
+
+async function removeStatementStoragePaths(paths: string[]): Promise<void> {
+  if (!paths.length) return;
+  const run = () => supabase.storage.from("documents").remove(paths);
+  let { error } = await run();
+  if (error) {
+    const retry = await run();
+    error = retry.error;
+  }
+  if (error) {
+    console.error("[useBankStatements] storage cleanup failed", error);
+  }
+}
 
 export function useBankStatements() {
   const { user } = useAuth();
@@ -140,14 +177,48 @@ export function useDeleteBankStatement() {
 
   return useMutation({
     mutationFn: async (id: string) => {
+      // Vor dem Delete alle referenzierten Daten einsammeln, damit wir nach
+      // dem Statement-Delete Storage + Ingestion-Log deterministisch
+      // aufraeumen koennen.
+      const { data: stmtData } = await supabase
+        .from("bank_statements")
+        .select("id, user_id, year, month, file_name, file_url")
+        .eq("id", id)
+        .single();
+      const stmtRow = stmtData as unknown as StatementDeleteRef | null;
+
+      const { data: logRows } = await supabase
+        .from("document_ingestion_log")
+        .select("id")
+        .eq("document_id", id);
+      const logIds = ((logRows ?? []) as { id: string }[]).map((r) => r.id);
+
       await supabase.from("bank_transactions").delete().eq("bank_statement_id", id);
       const { error } = await supabase.from("bank_statements").delete().eq("id", id);
       if (error) throw error;
+
+      // Nach erfolgreichem Statement-Delete: best-effort Cleanup. Fehler hier
+      // kippen den User-Flow nicht — nur console.error.
+      await deleteStatementIngestionLogs(logIds);
+
+      if (stmtRow) {
+        const paths = buildStoragePaths([
+          {
+            userId: stmtRow.user_id,
+            year: stmtRow.year,
+            month: stmtRow.month,
+            fileName: stmtRow.file_name,
+            fileUrl: stmtRow.file_url,
+          },
+        ]);
+        await removeStatementStoragePaths(paths);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bank_statements"] });
       queryClient.invalidateQueries({ queryKey: ["bank_transactions"] });
       queryClient.invalidateQueries({ queryKey: ["transaction_counts"] });
+      queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
       toast({ title: "Kontoauszug gelöscht" });
     },
     onError: (error) => {
