@@ -32,6 +32,18 @@ import {
   type IngestionLog,
 } from "@/hooks/useIngestionLogs";
 
+// Filtert retirierte Ordner-/Monats-Mismatch-Hinweise aus historischen
+// ingestion_log-Einträgen; vgl. Commit 18c5e2d (Backend stellt sie seitdem
+// nicht mehr aus, Altbestand liegt aber weiter in der DB).
+function cleanWarningMessage(msg: string | null | undefined): string | null {
+  if (!msg) return null;
+  const parts = msg
+    .split("|")
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && !p.startsWith("Ordner:"));
+  return parts.length > 0 ? parts.join(" | ") : null;
+}
+
 function getStatusBadge(status: string) {
   switch (status) {
     case "completed":
@@ -94,6 +106,7 @@ function IngestionLogRow({
   onDelete: () => void;
 }) {
   const breadcrumb = getSourceBreadcrumb(log);
+  const warning = cleanWarningMessage(log.warning_message);
 
   function getDocStatusBadge(docStatus: string | null | undefined) {
     if (!docStatus) return null;
@@ -149,10 +162,10 @@ function IngestionLogRow({
         <p className="text-xs text-muted-foreground/70">
           {format(new Date(log.created_at), "dd. MMM yyyy, HH:mm", { locale: de })}
         </p>
-        {log.warning_message && (
+        {warning && (
           <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
             <AlertTriangle className="h-3 w-3 shrink-0" />
-            <span>{log.warning_message}</span>
+            <span>{warning}</span>
           </div>
         )}
         {log.error_message && (
