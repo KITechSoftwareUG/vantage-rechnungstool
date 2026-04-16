@@ -136,8 +136,11 @@ export function useIngestionLogs() {
 
       // Kontoauszüge werden in der eigenen Kontoauszüge-Ansicht angezeigt und
       // hier aus der "Eingespeiste Dokumente"-Liste ausgeblendet.
+      // Duplikat-Status wird nicht mehr erzeugt (Dedup passiert nur noch im
+      // Matching-Tool nach Bestätigung), historische "duplicate"-Zeilen werden
+      // hier ausgeblendet.
       const rawLogs = (data as IngestionLog[]).filter(
-        (l) => l.document_type !== "bank_statement"
+        (l) => l.document_type !== "bank_statement" && l.status !== "duplicate"
       );
 
       // Enrich with linked document status
