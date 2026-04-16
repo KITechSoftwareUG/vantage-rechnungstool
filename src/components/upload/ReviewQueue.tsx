@@ -11,6 +11,7 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { useState, useCallback } from "react";
 import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 import { buildStoragePaths } from "@/lib/storagePaths";
+import { resetTransactionMatches } from "@/lib/matchReset";
 
 interface PendingInvoice {
   id: string;
@@ -154,6 +155,8 @@ export function ReviewQueue() {
 
       // Schritt 2: Invoice-Delete. Wenn das failt, NICHT das ingestion-log
       // loeschen — sonst ist der Log-Eintrag weg aber die Invoice-Zeile steht.
+      // Vorher confirmed Matches zurueck auf unmatched setzen.
+      await resetTransactionMatches([id]);
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
 
@@ -302,6 +305,8 @@ export function ReviewQueue() {
       }
 
       // Schritt 2: Invoice-Delete. Bei Fehler kein Log-Delete.
+      // Vorher confirmed Matches zurueck auf unmatched setzen.
+      await resetTransactionMatches(ids);
       const { error } = await supabase.from("invoices").delete().in("id", ids);
       if (error) throw error;
 

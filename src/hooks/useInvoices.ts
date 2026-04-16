@@ -5,6 +5,7 @@ import { InvoiceData } from "@/types/documents";
 import { useToast } from "@/hooks/use-toast";
 import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 import { buildStoragePaths } from "@/lib/storagePaths";
+import { resetTransactionMatches } from "@/lib/matchReset";
 
 interface InvoiceDeleteRef {
   id: string;
@@ -41,6 +42,7 @@ async function removeStoragePaths(paths: string[]): Promise<void> {
     console.error("[useInvoices] storage cleanup failed", error);
   }
 }
+
 
 export function useInvoices() {
   const { user } = useAuth();
@@ -191,18 +193,24 @@ export function useDeleteInvoice() {
       // Zuerst alle referenzierten Daten einsammeln, damit wir nach dem
       // Invoice-Delete Storage + Ingestion-Log deterministisch aufraeumen
       // koennen. RLS-Kaskaden oder Race Conditions helfen hier nicht.
-      const { data: invData } = await supabase
+      const { data: invData, error: invErr } = await supabase
         .from("invoices")
         .select("id, user_id, year, month, file_name, file_url")
         .eq("id", id)
-        .single();
-      const invRow = invData as unknown as InvoiceDeleteRef | null;
+        .maybeSingle();
+      if (invErr) throw invErr;
+      if (!invData) throw new Error("Rechnung nicht gefunden (bereits gelöscht?)");
+      const invRow = invData as unknown as InvoiceDeleteRef;
 
       const { data: logRows } = await supabase
         .from("document_ingestion_log")
         .select("id")
         .eq("document_id", id);
       const logIds = ((logRows ?? []) as { id: string }[]).map((r) => r.id);
+
+      // Bevor die Rechnung verschwindet: alle confirmed Matches zurueck auf
+      // unmatched, sonst haengen Transaktionen mit toter FK rum.
+      await resetTransactionMatches([id]);
 
       const { error } = await supabase.from("invoices").delete().eq("id", id);
       if (error) throw error;
@@ -261,6 +269,10 @@ export function useBulkDeleteInvoices() {
         .from("document_ingestion_log")
         .select("id, document_id")
         .in("document_id", ids);
+
+      // Bevor geloescht wird: alle confirmed Matches auf die betroffenen
+      // Invoices zuruecksetzen, damit keine toten FKs zurueckbleiben.
+      await resetTransactionMatches(ids);
 
       const promises = ids.map((id) =>
         supabase.from("invoices").delete().eq("id", id).then((res) => ({ id, res }))

@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
 import { buildStoragePaths } from "@/lib/storagePaths";
+import { resetTransactionMatches } from "@/lib/matchReset";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -219,6 +220,9 @@ export function useIngestionLogs() {
           .select("file_url, year, month, file_name, user_id")
           .eq("id", documentId)
           .maybeSingle();
+        if (documentType !== "bank_statement") {
+          await resetTransactionMatches([documentId]);
+        }
         const { error: delErr } = await supabase.from(table).delete().eq("id", documentId);
         if (delErr) throw delErr;
         if (row) {
@@ -290,6 +294,7 @@ export function useIngestionLogs() {
             fileUrl: r.file_url,
           })
         );
+        await resetTransactionMatches(invoiceIds);
         const { error: invErr } = await supabase.from("invoices").delete().in("id", invoiceIds);
         if (invErr) throw invErr;
       }

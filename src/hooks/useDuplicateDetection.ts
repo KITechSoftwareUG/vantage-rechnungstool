@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildStoragePaths } from "@/lib/storagePaths";
+import { resetTransactionMatches } from "@/lib/matchReset";
 
 interface DuplicateCandidate {
   id: string;
@@ -223,6 +224,7 @@ export function useMergeDuplicate() {
         .eq("id", duplicateId)
         .maybeSingle();
 
+      await resetTransactionMatches([duplicateId]);
       const { error: deleteError } = await supabase
         .from("invoices")
         .delete()

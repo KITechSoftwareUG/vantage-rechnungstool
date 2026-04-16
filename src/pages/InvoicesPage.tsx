@@ -19,6 +19,7 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildStoragePaths } from "@/lib/storagePaths";
+import { resetTransactionMatches } from "@/lib/matchReset";
 
 type ViewMode = "grid" | "timeline" | "list";
 
@@ -172,6 +173,7 @@ export default function InvoicesPage() {
         .eq("id", duplicateId)
         .maybeSingle();
 
+      await resetTransactionMatches([duplicateId]);
       const { error: deleteError } = await supabase
         .from("invoices")
         .delete()
