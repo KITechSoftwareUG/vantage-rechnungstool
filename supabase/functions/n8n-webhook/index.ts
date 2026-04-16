@@ -575,6 +575,26 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
     // wurden bewusst entfernt (unnoetiges Rauschen im Upload-Bereich).
     const warningMessage = verificationWarning || null;
 
+    // ===== MONAT/JAHR NACH OCR-DATUM ROUTEN =====
+    // Wenn das Dokument laut OCR aus einem anderen Monat/Jahr stammt als der
+    // Quell-Ordner, wird es dem OCR-Datum zugeordnet (z. B. eine Januar-
+    // Rechnung aus dem Februar-Ordner landet in Januar). Gilt nur fuer
+    // Rechnungen/Belege — Kontoauszuege behalten den Ordner-Monat, da der
+    // Ordner dort den Abrechnungszeitraum definiert.
+    let effectiveMonth = month;
+    let effectiveYear = year;
+    if (docType !== "statement" && extractedData.date) {
+      const parsed = new Date(extractedData.date);
+      if (!isNaN(parsed.getTime())) {
+        const m = parsed.getUTCMonth() + 1;
+        const y = parsed.getUTCFullYear();
+        if (m >= 1 && m <= 12 && y >= 2000 && y < 2100) {
+          effectiveMonth = m;
+          effectiveYear = y;
+        }
+      }
+    }
+
     // ===== BUILD FINAL FILENAME & RENAME =====
     let finalFileName: string;
     let finalStoragePath: string;
@@ -614,7 +634,7 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
     let documentId: string | null = null;
 
     if (docType !== "statement") {
-      const invoiceDate = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
+      const invoiceDate = extractedData.date || `${effectiveYear}-${String(effectiveMonth).padStart(2, "0")}-01`;
       const { data: invoice, error: invoiceError } = await supabase
         .from("invoices")
         .insert({
@@ -622,8 +642,8 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
           file_name: finalFileName,
           file_url: fileUrl,
           date: invoiceDate,
-          year: year,
-          month: month,
+          year: effectiveYear,
+          month: effectiveMonth,
           issuer: extractedData.issuer || "Unbekannt",
           amount: Math.abs(extractedData.amount || 0),
           currency: extractedData.currency || "EUR",
@@ -652,7 +672,7 @@ Antworte NUR mit dem JSON-Objekt, kein Markdown, keine Erklärung.`;
 
         // For Kasse (cash) invoices, create a synthetic bank transaction that is already confirmed
         if (category === "kasse" && documentId) {
-          const kasseDate = extractedData.date || `${year}-${String(month).padStart(2, "0")}-01`;
+          const kasseDate = extractedData.date || `${effectiveYear}-${String(effectiveMonth).padStart(2, "0")}-01`;
           const { error: kasseTxError } = await supabase.from("bank_transactions").insert({
             user_id: userId,
             date: kasseDate,
