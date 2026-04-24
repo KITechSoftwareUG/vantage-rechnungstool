@@ -1,14 +1,23 @@
 import { ReactNode } from "react";
-import { AppSidebar } from "./AppSidebar";
+import { useLocation } from "react-router-dom";
+import { MatchingSidebar } from "./MatchingSidebar";
+import { FunnelSidebar } from "./FunnelSidebar";
 
 interface MainLayoutProps {
   children: ReactNode;
 }
 
 export function MainLayout({ children }: MainLayoutProps) {
+  const { pathname } = useLocation();
+  const isFunnel =
+    pathname.startsWith("/funnel") ||
+    pathname === "/config" ||
+    pathname.startsWith("/config/");
+  const Sidebar = isFunnel ? FunnelSidebar : MatchingSidebar;
+
   return (
     <div className="flex min-h-screen w-full bg-background">
-      <AppSidebar />
+      <Sidebar />
       <main className="ml-64 flex-1 overflow-auto">
         <div className="relative min-h-screen">
           {/* Background gradient effects */}

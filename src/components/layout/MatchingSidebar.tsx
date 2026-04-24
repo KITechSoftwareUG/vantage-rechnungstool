@@ -1,4 +1,4 @@
-import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2, FileDown, LayoutGrid, BarChart3, Settings } from "lucide-react";
+import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2, FileDown, LayoutGrid } from "lucide-react";
 import { Link } from "react-router-dom";
 import { NavLink } from "@/components/NavLink";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -15,18 +15,19 @@ const navItems = [
   { title: "Kontoauszüge", url: "/statements", icon: Building2 },
   { title: "Zuordnung", url: "/matching", icon: Link2 },
   { title: "Steuerberater Export", url: "/export", icon: FileDown },
-  { title: "Funnel", url: "/funnel", icon: BarChart3 },
-  { title: "Konfiguration", url: "/config", icon: Settings },
 ];
 
-export function AppSidebar() {
+export function MatchingSidebar() {
   const { user, signOut } = useAuth();
   const { resolvedTheme } = useTheme();
 
   const logoSrc = resolvedTheme === "dark" ? logoDarkmode : logoLightmode;
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar">
+    <aside
+      data-testid="matching-sidebar"
+      className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar"
+    >
       {/* Logo — klickbar zurück zur Übersicht */}
       <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-3">
         <Link
