@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Loader2,
   Mail,
-  MessageSquare,
   Phone,
   Smartphone,
   XCircle,
@@ -21,12 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  useLead,
-  useUpdateLeadStatus,
-  useWaMessages,
-} from "@/hooks/useLeads";
-import type { Lead, LeadMeta, LeadStatus, WaMessage } from "@/types/leads";
+import { useLead, useUpdateLeadStatus } from "@/hooks/useLeads";
+import type { Lead, LeadMeta, LeadStatus } from "@/types/leads";
+import { WhatsAppThread } from "@/components/funnel/WhatsAppThread";
 import { cn } from "@/lib/utils";
 
 function formatPhone(phone: string): string {
@@ -98,8 +94,6 @@ export default function LeadDetail() {
   const { leadId } = useParams<{ leadId: string }>();
   const navigate = useNavigate();
   const { data: lead, isLoading, isError } = useLead(leadId);
-  const { data: messages = [], isLoading: messagesLoading } =
-    useWaMessages(leadId);
   const updateStatus = useUpdateLeadStatus();
 
   if (isLoading) {
@@ -210,31 +204,7 @@ export default function LeadDetail() {
 
       {/* WhatsApp-Konversation */}
       <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.2s" }}>
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground inline-flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-primary shrink-0" />
-            <span className="truncate">WhatsApp-Konversation</span>
-          </h2>
-          <span className="text-xs text-muted-foreground">
-            {messages.length} {messages.length === 1 ? "Nachricht" : "Nachrichten"}
-          </span>
-        </div>
-
-        {messagesLoading ? (
-          <div className="flex min-h-[120px] items-center justify-center">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : messages.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            Noch keine WhatsApp-Konversation.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {messages.map((m) => (
-              <ChatBubble key={m.id} message={m} />
-            ))}
-          </div>
-        )}
+        <WhatsAppThread leadId={lead.id} />
       </div>
     </div>
   );
@@ -457,52 +427,3 @@ function TrackingPanel({ lead }: { lead: Lead }) {
   );
 }
 
-function ChatBubble({ message }: { message: WaMessage }) {
-  const isOutbound = message.direction === "outbound";
-  const timestamp = (() => {
-    try {
-      return format(new Date(message.created_at), "dd.MM.yyyy · HH:mm", {
-        locale: deLocale,
-      });
-    } catch {
-      return message.created_at;
-    }
-  })();
-
-  const content =
-    message.template_name && !message.body ? (
-      <span className="inline-flex items-center gap-1 italic">
-        <Smartphone className="h-3 w-3" />
-        Template: {message.template_name}
-      </span>
-    ) : (
-      <span className="whitespace-pre-wrap break-words">
-        {message.body || "(leer)"}
-      </span>
-    );
-
-  return (
-    <div className={cn("flex", isOutbound ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[78%] rounded-2xl px-4 py-2 text-sm shadow-sm",
-          isOutbound
-            ? "bg-primary text-primary-foreground rounded-br-sm"
-            : "bg-muted text-foreground rounded-bl-sm",
-        )}
-      >
-        <div>{content}</div>
-        <div
-          className={cn(
-            "mt-1 text-[10px]",
-            isOutbound
-              ? "text-primary-foreground/70"
-              : "text-muted-foreground",
-          )}
-        >
-          {timestamp}
-        </div>
-      </div>
-    </div>
-  );
-}
