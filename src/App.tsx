@@ -9,11 +9,13 @@ import { AuthProvider } from "./hooks/useAuth";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { MainLayout } from "./components/layout/MainLayout";
 import Index from "./pages/Index";
+import Hub from "./pages/Hub";
 import UploadPage from "./pages/UploadPage";
 import InvoicesPage from "./pages/InvoicesPage";
 import StatementsPage from "./pages/StatementsPage";
 import MatchingPage from "./pages/MatchingPage";
 import ExportPage from "./pages/ExportPage";
+import FunnelIndex from "./pages/FunnelIndex";
 import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
 
@@ -49,13 +51,22 @@ const App = () => (
             <ScrollToTop />
             <Routes>
               <Route path="/auth" element={<AuthPage />} />
+              <Route
+                path="/"
+                element={
+                  <ProtectedRoute>
+                    <Hub />
+                  </ProtectedRoute>
+                }
+              />
               <Route element={<ProtectedLayout />}>
-                <Route path="/" element={<Index />} />
+                <Route path="/dashboard" element={<Index />} />
                 <Route path="/upload" element={<UploadPage />} />
                 <Route path="/invoices" element={<InvoicesPage />} />
                 <Route path="/statements" element={<StatementsPage />} />
                 <Route path="/matching" element={<MatchingPage />} />
                 <Route path="/export" element={<ExportPage />} />
+                <Route path="/funnel" element={<FunnelIndex />} />
               </Route>
               <Route path="*" element={<NotFound />} />
             </Routes>

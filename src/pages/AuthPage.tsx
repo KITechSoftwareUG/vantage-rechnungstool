@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Mail, Lock, Loader2, ArrowLeft } from "lucide-react";
+import { isAllowed } from "@/lib/allowlist";
 import logoDarkmode from "@/assets/logo_darkmode.png";
 import logoLightmode from "@/assets/logo_lightmode.png";
 
@@ -132,11 +133,20 @@ export default function AuthPage() {
     setIsLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
       if (error) throw error;
+      if (!isAllowed(data.user?.email)) {
+        await supabase.auth.signOut();
+        toast({
+          title: "Kein Zugriff",
+          description: "Dieser Account hat keine Berechtigung für dieses Tool.",
+          variant: "destructive",
+        });
+        return;
+      }
       toast({ title: "Erfolgreich angemeldet" });
       navigate("/");
     } catch (error: any) {

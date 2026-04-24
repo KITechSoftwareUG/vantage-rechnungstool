@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { isAllowed } from "@/lib/allowlist";
 
 interface AuthContextType {
   user: User | null;
@@ -17,20 +18,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    const applySession = (session: Session | null) => {
+      const email = session?.user?.email;
+      if (session && !isAllowed(email)) {
+        // Allowlist enforcement: fremde Accounts werden sofort wieder abgemeldet.
+        supabase.auth.signOut();
+        setSession(null);
+        setUser(null);
+        setIsLoading(false);
+        return;
+      }
       setSession(session);
       setUser(session?.user ?? null);
       setIsLoading(false);
-    });
+    };
 
-    // Listen for auth changes
+    supabase.auth.getSession().then(({ data: { session } }) => applySession(session));
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        setIsLoading(false);
-      }
+      (_event, session) => applySession(session)
     );
 
     return () => subscription.unsubscribe();
