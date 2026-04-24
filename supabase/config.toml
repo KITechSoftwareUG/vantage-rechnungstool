@@ -1,1 +1,11 @@
 project_id = "fqjptwpdihwqdfxorvqq"
+
+# Public Webhook-Endpoints: keine JWT-Validierung. Authentifizierung laeuft
+# ueber endpoint-spezifische Shared-Secrets (n8n-webhook: Query-Param user_id
+# + service-role-interne Trust; zahnfunnel-form-webhook: X-Api-Key gegen
+# FORM_API_KEY aus app_config).
+[functions.n8n-webhook]
+verify_jwt = false
+
+[functions.zahnfunnel-form-webhook]
+verify_jwt = false
