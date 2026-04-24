@@ -16,6 +16,7 @@ import StatementsPage from "./pages/StatementsPage";
 import MatchingPage from "./pages/MatchingPage";
 import ExportPage from "./pages/ExportPage";
 import FunnelIndex from "./pages/FunnelIndex";
+import LeadDetail from "./pages/LeadDetail";
 import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
 
@@ -67,6 +68,7 @@ const App = () => (
                 <Route path="/matching" element={<MatchingPage />} />
                 <Route path="/export" element={<ExportPage />} />
                 <Route path="/funnel" element={<FunnelIndex />} />
+                <Route path="/funnel/:leadId" element={<LeadDetail />} />
               </Route>
               <Route path="*" element={<NotFound />} />
             </Routes>

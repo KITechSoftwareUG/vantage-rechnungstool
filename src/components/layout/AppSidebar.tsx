@@ -1,4 +1,4 @@
-import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2, FileDown, LayoutGrid } from "lucide-react";
+import { Upload, FileText, Building2, LayoutDashboard, LogOut, Link2, FileDown, LayoutGrid, BarChart3 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { NavLink } from "@/components/NavLink";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -15,6 +15,7 @@ const navItems = [
   { title: "Kontoauszüge", url: "/statements", icon: Building2 },
   { title: "Zuordnung", url: "/matching", icon: Link2 },
   { title: "Steuerberater Export", url: "/export", icon: FileDown },
+  { title: "Funnel", url: "/funnel", icon: BarChart3 },
 ];
 
 export function AppSidebar() {
