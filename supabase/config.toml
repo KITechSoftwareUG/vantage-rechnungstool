@@ -9,3 +9,6 @@ verify_jwt = false
 
 [functions.zahnfunnel-form-webhook]
 verify_jwt = false
+
+[functions.zahnfunnel-whatsapp-webhook]
+verify_jwt = false
