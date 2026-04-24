@@ -1,6 +1,6 @@
 export const EMAIL_ALLOWLIST = [
   "alex@helix-finance.de",
-  "kitdienstleistungen@gmail.com",
+  "aalkh@kitech-software.de",
 ];
 
 export function isAllowed(email: string | null | undefined): boolean {
