@@ -130,22 +130,22 @@ export default function FunnelIndex() {
     <div className="space-y-6">
       {/* Header */}
       <div className="animate-fade-in">
-        <h1 className="font-heading text-3xl font-bold text-foreground">
+        <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">
           Funnelanalytics
         </h1>
-        <p className="mt-1 text-muted-foreground">
+        <p className="mt-1 text-sm sm:text-base text-muted-foreground">
           Leads aus der Landingpage
         </p>
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 animate-fade-in">
         {statCards.map((s) => (
-          <div key={s.title} className="glass-card p-5">
-            <p className="text-sm text-muted-foreground">{s.title}</p>
+          <div key={s.title} className="glass-card p-3 sm:p-5">
+            <p className="text-xs sm:text-sm text-muted-foreground">{s.title}</p>
             <p
               className={cn(
-                "mt-1 text-2xl font-bold",
+                "mt-1 text-xl sm:text-2xl font-bold",
                 s.tone === "primary" && "text-foreground",
                 s.tone === "warning" && "text-warning",
                 s.tone === "muted" && "text-muted-foreground",
@@ -159,14 +159,14 @@ export default function FunnelIndex() {
 
       {/* Filter */}
       <div
-        className="glass-card p-4 animate-fade-in"
+        className="glass-card p-3 sm:p-4 animate-fade-in"
         style={{ animationDelay: "0.1s" }}
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Suchen nach Name, Telefon oder E-Mail..."
+              placeholder="Name, Telefon, E-Mail..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"
@@ -199,31 +199,100 @@ export default function FunnelIndex() {
           Keine Leads passen zu den aktuellen Filtern.
         </div>
       ) : (
-        <div className="glass-card overflow-hidden animate-fade-in">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Telefon</TableHead>
-                <TableHead>Quelle</TableHead>
-                <TableHead>Anliegen</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="whitespace-nowrap">Erstellt</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((lead) => (
-                <LeadRow
-                  key={lead.id}
-                  lead={lead}
-                  onClick={() => navigate(`/funnel/${lead.id}`)}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <>
+          {/* Desktop table */}
+          <div className="glass-card hidden animate-fade-in overflow-hidden md:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Telefon</TableHead>
+                  <TableHead>Quelle</TableHead>
+                  <TableHead>Anliegen</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="whitespace-nowrap">Erstellt</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((lead) => (
+                  <LeadRow
+                    key={lead.id}
+                    lead={lead}
+                    onClick={() => navigate(`/funnel/${lead.id}`)}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="flex animate-fade-in flex-col gap-3 md:hidden">
+            {filtered.map((lead) => (
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                onClick={() => navigate(`/funnel/${lead.id}`)}
+              />
+            ))}
+          </div>
+        </>
       )}
     </div>
+  );
+}
+
+function LeadCard({ lead, onClick }: { lead: Lead; onClick: () => void }) {
+  const utm = lead.meta.tracking;
+  const utmLabel = [utm?.utm_source, utm?.utm_medium]
+    .filter((s): s is string => !!s && s.trim().length > 0)
+    .join("/");
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="glass-card flex w-full flex-col gap-2 p-4 text-left transition-colors hover:bg-muted/30"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium text-foreground">
+            {lead.name || <span className="text-muted-foreground">(ohne Name)</span>}
+          </div>
+          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+            <Phone className="h-3 w-3 shrink-0" />
+            <span className="truncate">{formatPhone(lead.phone)}</span>
+          </div>
+          {lead.email && (
+            <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+              <Mail className="h-3 w-3 shrink-0" />
+              <span className="truncate">{lead.email}</span>
+            </div>
+          )}
+        </div>
+        <Badge
+          variant="outline"
+          className={cn("shrink-0 border", statusBadgeClass(lead.status))}
+        >
+          {statusLabel(lead.status)}
+        </Badge>
+      </div>
+      {lead.meta.anliegen_summary && (
+        <p className="line-clamp-2 text-xs text-muted-foreground">
+          {lead.meta.anliegen_summary}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <span>{lead.source}</span>
+          {utmLabel && (
+            <Badge variant="outline" className="text-[10px] font-normal">
+              {utmLabel}
+            </Badge>
+          )}
+        </div>
+        <span>{relativeTime(lead.created_at)}</span>
+      </div>
+    </button>
   );
 }
 

@@ -67,13 +67,13 @@ export default function Hub() {
         <div className="absolute -bottom-40 left-1/4 h-[500px] w-[500px] rounded-full bg-primary/5 blur-3xl" />
       </div>
 
-      <header className="relative z-10 flex h-16 items-center justify-between border-b border-border/40 px-6">
-        <div className="flex items-center gap-3">
-          <img src={logoSrc} alt="Logo" className="h-9 w-auto" />
+      <header className="relative z-10 flex h-16 items-center justify-between border-b border-border/40 px-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <img src={logoSrc} alt="Logo" className="h-8 w-auto sm:h-9" />
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {user?.email && (
-            <span className="hidden text-sm text-muted-foreground sm:inline">
+            <span className="hidden max-w-[200px] truncate text-sm text-muted-foreground sm:inline">
               {user.email}
             </span>
           )}
@@ -90,17 +90,17 @@ export default function Hub() {
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-6 py-16">
-        <div className="mb-12 text-center animate-fade-in">
-          <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">
+      <main className="relative z-10 mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-8 sm:px-6 sm:py-16">
+        <div className="mb-8 text-center animate-fade-in sm:mb-12">
+          <h1 className="font-heading text-3xl font-bold tracking-tight sm:text-5xl">
             {greeting}
           </h1>
-          <p className="mt-3 text-lg text-muted-foreground">
+          <p className="mt-2 text-base text-muted-foreground sm:mt-3 sm:text-lg">
             Wähle ein Modul, um fortzufahren.
           </p>
         </div>
 
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {modules.map((mod, index) => {
             const Icon = mod.icon;
             const animationDelay = `${index * 0.1}s`;
@@ -108,7 +108,7 @@ export default function Hub() {
             const cardBody = (
               <div
                 className={cn(
-                  "group relative h-full overflow-hidden rounded-2xl border border-border/50 bg-card p-8 transition-all duration-300",
+                  "group relative h-full overflow-hidden rounded-2xl border border-border/50 bg-card p-6 sm:p-8 transition-all duration-300",
                   mod.available
                     ? "cursor-pointer hover:-translate-y-1 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10"
                     : "cursor-not-allowed"
@@ -121,13 +121,13 @@ export default function Hub() {
                   )}
                 />
                 <div className="relative">
-                  <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-xl bg-background/80 ring-1 ring-border/60">
-                    <Icon className="h-7 w-7" />
+                  <div className="mb-4 inline-flex h-12 w-12 sm:mb-5 sm:h-14 sm:w-14 items-center justify-center rounded-xl bg-background/80 ring-1 ring-border/60">
+                    <Icon className="h-6 w-6 sm:h-7 sm:w-7" />
                   </div>
-                  <h3 className="font-heading text-2xl font-semibold">
+                  <h3 className="font-heading text-xl sm:text-2xl font-semibold">
                     {mod.title}
                   </h3>
-                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                  <p className="mt-2 sm:mt-3 text-sm leading-relaxed text-muted-foreground">
                     {mod.description}
                   </p>
                   {mod.available ? (

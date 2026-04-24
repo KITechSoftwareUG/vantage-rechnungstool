@@ -67,60 +67,60 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6 md:space-y-8">
       {/* Header */}
       <div className="animate-fade-in">
-        <h1 className="font-heading text-3xl font-bold text-foreground">
+        <h1 className="font-heading text-2xl font-bold text-foreground sm:text-3xl">
           Willkommen zurück
         </h1>
-        <p className="mt-1 text-muted-foreground">
+        <p className="mt-1 text-sm text-muted-foreground sm:text-base">
           Hier ist Ihre Dokumentenübersicht
         </p>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {stats.map((stat, index) => (
           <div
             key={stat.title}
-            className="glass-card p-5 animate-slide-up opacity-0"
+            className="glass-card p-4 sm:p-5 animate-slide-up opacity-0"
             style={{ animationDelay: `${index * 0.1}s` }}
           >
-            <div className="flex items-center justify-between">
-              <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${stat.bgColor}`}>
-                <stat.icon className={`h-5 w-5 ${stat.color}`} />
+            <div className="flex items-start justify-between gap-2">
+              <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg sm:h-10 sm:w-10 ${stat.bgColor}`}>
+                <stat.icon className={`h-4 w-4 sm:h-5 sm:w-5 ${stat.color}`} />
               </div>
-              <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                <TrendingUp className="h-3 w-3" />
-                {stat.change}
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground sm:text-xs">
+                <TrendingUp className="h-3 w-3 shrink-0" />
+                <span className="truncate">{stat.change}</span>
               </span>
             </div>
-            <div className="mt-4">
-              <p className="text-2xl font-bold text-foreground">{stat.value}</p>
-              <p className="text-sm text-muted-foreground">{stat.title}</p>
+            <div className="mt-3 sm:mt-4">
+              <p className="truncate text-lg font-bold text-foreground sm:text-2xl">{stat.value}</p>
+              <p className="text-xs text-muted-foreground sm:text-sm">{stat.title}</p>
             </div>
           </div>
         ))}
       </div>
 
       {/* Quick Actions */}
-      <div className="glass-card p-6 animate-fade-in" style={{ animationDelay: "0.4s" }}>
-        <h2 className="font-heading text-lg font-semibold text-foreground mb-4">
+      <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.4s" }}>
+        <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground mb-3 sm:mb-4">
           Schnellaktionen
         </h2>
-        <div className="flex flex-wrap gap-3">
-          <Button variant="gradient" asChild>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-3">
+          <Button variant="gradient" className="w-full sm:w-auto" asChild>
             <Link to="/upload">
               <FileText className="mr-2 h-4 w-4" />
               Dokument hochladen
             </Link>
           </Button>
-          <Button variant="glass" asChild>
+          <Button variant="glass" className="w-full sm:w-auto" asChild>
             <Link to="/invoices">
               Rechnungen anzeigen
             </Link>
           </Button>
-          <Button variant="glass" asChild>
+          <Button variant="glass" className="w-full sm:w-auto" asChild>
             <Link to="/statements">
               Kontoauszüge anzeigen
             </Link>
@@ -129,9 +129,9 @@ export default function Dashboard() {
       </div>
 
       {/* Recent Documents */}
-      <div className="glass-card p-6 animate-fade-in" style={{ animationDelay: "0.5s" }}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-heading text-lg font-semibold text-foreground">
+      <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.5s" }}>
+        <div className="flex items-center justify-between mb-3 sm:mb-4 gap-2">
+          <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
             Letzte Rechnungen
           </h2>
           <Button variant="ghost" size="sm" asChild>
@@ -147,10 +147,10 @@ export default function Dashboard() {
             {recentInvoices.map((doc) => (
               <div
                 key={doc.id}
-                className="flex items-center justify-between rounded-lg bg-muted/30 p-4 transition-colors hover:bg-muted/50"
+                className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 p-3 sm:p-4 transition-colors hover:bg-muted/50"
               >
-                <div className="flex items-center gap-3">
-                  <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
                     doc.type === "incoming" ? "bg-success/10" : "bg-muted"
                   }`}>
                     {doc.type === "incoming" ? (
@@ -159,14 +159,14 @@ export default function Dashboard() {
                       <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
                     )}
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{doc.fileName}</p>
-                    <p className="text-xs text-muted-foreground">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">{doc.fileName}</p>
+                    <p className="truncate text-xs text-muted-foreground">
                       {new Date(doc.date).toLocaleDateString("de-DE")} · {doc.issuer}
                     </p>
                   </div>
                 </div>
-                <span className={`font-semibold ${
+                <span className={`shrink-0 text-sm font-semibold sm:text-base ${
                   doc.type === "incoming" ? "text-success" : "text-foreground"
                 }`}>
                   {doc.type === "incoming" ? "+" : "-"}

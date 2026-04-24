@@ -103,12 +103,12 @@ export default function StatementsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between animate-fade-in">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between animate-fade-in">
         <div>
-          <h1 className="font-heading text-3xl font-bold text-foreground">
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">
             Kontoauszüge
           </h1>
-          <p className="mt-1 text-muted-foreground">
+          <p className="mt-1 text-sm sm:text-base text-muted-foreground">
             {filteredStatements.length} Kontoauszüge gefunden
           </p>
         </div>
@@ -133,11 +133,11 @@ export default function StatementsPage() {
       </div>
 
       {/* Search */}
-      <div className="glass-card p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
+      <div className="glass-card p-3 sm:p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Suchen nach Bank, Kontonummer, Dateiname oder Transaktion (Text, Betrag, YYYY-MM-DD)..."
+            placeholder="Suchen nach Bank, Konto, Datei..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"

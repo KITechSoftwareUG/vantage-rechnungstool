@@ -4,13 +4,13 @@ import { ReviewQueue } from "@/components/upload/ReviewQueue";
 
 export default function UploadPage() {
   return (
-    <div className="space-y-8">
+    <div className="space-y-6 md:space-y-8">
       {/* Header */}
       <div className="animate-fade-in">
-        <h1 className="font-heading text-3xl font-bold text-foreground">
+        <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">
           Dokumente Einspeisung
         </h1>
-        <p className="mt-1 text-muted-foreground">
+        <p className="mt-1 text-sm sm:text-base text-muted-foreground">
           Dokumente werden automatisch über n8n eingespeist
         </p>
       </div>

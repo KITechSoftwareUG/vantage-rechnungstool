@@ -144,19 +144,19 @@ export default function ExportPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="font-heading text-3xl font-bold tracking-tight">
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">
             Steuerberater Export
           </h1>
-          <p className="mt-2 text-muted-foreground">
+          <p className="mt-1 text-sm sm:text-base text-muted-foreground">
             Alle zugeordneten Transaktionen mit ihren Rechnungen
           </p>
         </div>
         <Button
           onClick={handleSendToN8n}
           disabled={isSending || isLoading || !transactions?.length}
-          className="gap-2"
+          className="w-full gap-2 sm:w-auto"
         >
           {isSending ? (
             <>
@@ -233,7 +233,7 @@ export default function ExportPage() {
                   </div>
 
                   {transaction.matchedInvoice && (
-                    <div className="flex flex-col gap-2 rounded-md border bg-muted/50 p-3 sm:min-w-[280px]">
+                    <div className="flex flex-col gap-2 rounded-md border bg-muted/50 p-3 sm:min-w-[280px] sm:max-w-[320px]">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <FileText className="h-4 w-4 text-primary" />

@@ -155,30 +155,30 @@ export default function LeadDetail() {
       </div>
 
       {/* Header-Card */}
-      <div className="glass-card p-6 animate-fade-in">
+      <div className="glass-card p-4 sm:p-6 animate-fade-in">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0 flex-1 space-y-2">
-            <h1 className="font-heading text-2xl font-bold text-foreground truncate">
+            <h1 className="font-heading text-xl sm:text-2xl font-bold text-foreground break-words">
               {lead.name || "(ohne Name)"}
             </h1>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+            <div className="flex flex-col gap-1 text-sm text-muted-foreground sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4">
               <span className="inline-flex items-center gap-1.5">
-                <Phone className="h-3.5 w-3.5" />
-                {formatPhone(lead.phone)}
+                <Phone className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{formatPhone(lead.phone)}</span>
               </span>
               {lead.email && (
                 <span className="inline-flex items-center gap-1.5">
-                  <Mail className="h-3.5 w-3.5" />
-                  {lead.email}
+                  <Mail className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{lead.email}</span>
                 </span>
               )}
-              <span>{created}</span>
+              <span className="text-xs sm:text-sm">{created}</span>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Status</span>
-            <div className="w-44">
+            <span className="shrink-0 text-xs text-muted-foreground">Status</span>
+            <div className="flex-1 sm:w-44 sm:flex-none">
               <Select
                 value={lead.status}
                 onValueChange={(v) =>
@@ -209,11 +209,11 @@ export default function LeadDetail() {
       </div>
 
       {/* WhatsApp-Konversation */}
-      <div className="glass-card p-6 animate-fade-in" style={{ animationDelay: "0.2s" }}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-heading text-lg font-semibold text-foreground inline-flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-primary" />
-            WhatsApp-Konversation
+      <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.2s" }}>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground inline-flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-primary shrink-0" />
+            <span className="truncate">WhatsApp-Konversation</span>
           </h2>
           <span className="text-xs text-muted-foreground">
             {messages.length} {messages.length === 1 ? "Nachricht" : "Nachrichten"}
@@ -252,8 +252,8 @@ function AnamnesePanel({ lead }: { lead: Lead }) {
   const healthData = lead.meta.gesundheitsdaten_einwilligung;
 
   return (
-    <div className="glass-card p-6">
-      <h2 className="font-heading text-lg font-semibold text-foreground">
+    <div className="glass-card p-4 sm:p-6">
+      <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
         Anamnese
       </h2>
       {lead.meta.anliegen_summary && (
@@ -427,8 +427,8 @@ function TrackingPanel({ lead }: { lead: Lead }) {
   }
 
   return (
-    <div className="glass-card p-6">
-      <h2 className="font-heading text-lg font-semibold text-foreground">
+    <div className="glass-card p-4 sm:p-6">
+      <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
         Tracking
       </h2>
 

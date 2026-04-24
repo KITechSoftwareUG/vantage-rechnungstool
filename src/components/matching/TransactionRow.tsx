@@ -481,7 +481,7 @@ export function TransactionRow({
       )}
 
     <div
-      className="flex items-center gap-4 p-4 bg-card"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3 sm:gap-4 sm:p-4 bg-card"
       style={{
         transform: !isAnimatingDismiss && offset !== 0 ? `translateX(${offset}px)` : undefined,
         transition: isSwiping ? "none" : "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
@@ -507,17 +507,28 @@ export function TransactionRow({
       />
 
       {/* Date */}
-      <div className="w-24 flex-shrink-0 text-sm text-muted-foreground">
+      <div className="flex-shrink-0 text-xs text-muted-foreground sm:w-24 sm:text-sm">
         {new Date(transaction.date).toLocaleDateString("de-DE")}
       </div>
 
+      {/* Amount (mobile: inline next to date) */}
+      <div
+        className={cn(
+          "ml-auto flex-shrink-0 text-right text-sm font-semibold sm:hidden",
+          transaction.transactionType === "credit" ? "text-success" : "text-foreground"
+        )}
+      >
+        {transaction.transactionType === "credit" ? "+" : "-"}
+        {Math.abs(transaction.amount).toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+      </div>
+
       {/* Description */}
-      <div className="min-w-0 flex-1">
+      <div className="order-last w-full min-w-0 flex-1 sm:order-none sm:w-auto">
         <p className="truncate text-sm font-medium text-foreground">{transaction.description}</p>
         {transaction.matchedInvoice && (
           <div className="mt-1 flex items-center gap-2">
-            <Link className="h-3 w-3 text-primary" />
-            <span className="text-xs text-primary">
+            <Link className="h-3 w-3 shrink-0 text-primary" />
+            <span className="truncate text-xs text-primary">
               {transaction.matchedInvoice.issuer} -{" "}
               {transaction.matchedInvoice.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
             </span>
@@ -525,10 +536,10 @@ export function TransactionRow({
         )}
       </div>
 
-      {/* Amount */}
+      {/* Amount (desktop) */}
       <div
         className={cn(
-          "w-28 flex-shrink-0 text-right font-semibold",
+          "hidden w-28 flex-shrink-0 text-right font-semibold sm:block",
           transaction.transactionType === "credit" ? "text-success" : "text-foreground"
         )}
       >
@@ -537,12 +548,12 @@ export function TransactionRow({
       </div>
 
       {/* Status */}
-      <Badge variant="outline" className={cn("w-28 justify-center", status.color)}>
+      <Badge variant="outline" className={cn("justify-center sm:w-28", status.color)}>
         {status.label}
       </Badge>
 
       {/* Actions */}
-      <div className="flex w-32 flex-shrink-0 justify-end gap-1">
+      <div className="flex flex-shrink-0 justify-end gap-1 sm:w-32">
         {/* View Invoice Buttons - für confirmed */}
         {transaction.matchedInvoice && transaction.matchStatus === "confirmed" && (
             <>

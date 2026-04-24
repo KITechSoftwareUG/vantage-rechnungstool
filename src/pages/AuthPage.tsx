@@ -177,11 +177,11 @@ export default function AuthPage() {
       </div>
 
       <div className="relative z-10 w-full max-w-md animate-fade-in">
-        <div className="glass-card p-8">
+        <div className="glass-card p-5 sm:p-8">
           {/* Logo */}
-          <div className="mb-8 flex flex-col items-center">
-            <img src={logoSrc} alt="Logo" className="h-14 w-auto" />
-            <h1 className="mt-4 font-heading text-2xl font-bold text-foreground">
+          <div className="mb-6 flex flex-col items-center sm:mb-8">
+            <img src={logoSrc} alt="Logo" className="h-12 w-auto sm:h-14" />
+            <h1 className="mt-3 font-heading text-xl sm:text-2xl font-bold text-foreground sm:mt-4">
               Matching Tool
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">

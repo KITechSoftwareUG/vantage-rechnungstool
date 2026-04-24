@@ -120,10 +120,10 @@ export default function ConfigPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="animate-fade-in">
-        <h1 className="font-heading text-3xl font-bold text-foreground">
+        <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">
           Konfiguration
         </h1>
-        <p className="mt-1 text-muted-foreground">
+        <p className="mt-1 text-sm sm:text-base text-muted-foreground">
           Zahnfunnel-Settings, API-Keys, Berater-Texte. Aenderungen greifen
           sofort — Edge Functions lesen bei jedem Request aus der Tabelle.
         </p>
@@ -229,11 +229,11 @@ function ConfigRow({ entry }: { entry: ConfigEntry }) {
   const placeholder = entry.value === null ? "Nicht gesetzt" : "";
 
   return (
-    <div className="space-y-2 rounded-lg border border-border/50 bg-background/30 p-4">
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-2 rounded-lg border border-border/50 bg-background/30 p-3 sm:p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="break-all font-mono text-xs sm:text-sm text-muted-foreground">
               {entry.key}
             </span>
             {entry.is_secret && (
@@ -260,7 +260,7 @@ function ConfigRow({ entry }: { entry: ConfigEntry }) {
           )}
         </div>
         {entry.value !== null && entry.updated_at && (
-          <div className="shrink-0 text-right text-xs text-muted-foreground">
+          <div className="shrink-0 text-left text-xs text-muted-foreground sm:text-right">
             zuletzt geaendert: {relativeTime(entry.updated_at)}
           </div>
         )}

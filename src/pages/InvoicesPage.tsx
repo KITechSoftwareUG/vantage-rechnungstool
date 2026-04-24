@@ -338,18 +338,18 @@ export default function InvoicesPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between animate-fade-in">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between animate-fade-in">
         <div>
-          <h1 className="font-heading text-3xl font-bold text-foreground">
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">
             Rechnungen
           </h1>
-          <p className="mt-1 text-muted-foreground">
+          <p className="mt-1 text-sm sm:text-base text-muted-foreground">
             {filteredInvoices.length} Rechnungen gefunden
           </p>
         </div>
 
         {/* Actions + View Toggle */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="-mx-1 flex flex-wrap items-center gap-2 overflow-x-auto px-1">
           {bulkDedupPlan.deleteCount > 0 && (
             <Button
               variant="outline"
@@ -396,8 +396,8 @@ export default function InvoicesPage() {
 
       {/* Bulk Actions Bar */}
       {isSelectMode && (
-        <div className="glass-card flex items-center justify-between p-3 animate-fade-in border-primary/30 border">
-          <div className="flex items-center gap-3">
+        <div className="glass-card flex flex-col gap-2 p-3 animate-fade-in border-primary/30 border sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <Button variant="outline" size="sm" onClick={selectAll}>
               {allFilteredSelected ? (
                 <><XSquare className="mr-1.5 h-4 w-4" /> Alle abwählen</>
@@ -426,23 +426,23 @@ export default function InvoicesPage() {
       )}
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-4 animate-fade-in" style={{ animationDelay: "0.1s" }}>
-        <div className="glass-card p-4">
-          <p className="text-sm text-muted-foreground">Gesamt Einnahmen (Ausgang)</p>
-          <p className="mt-1 text-2xl font-bold text-success">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 animate-fade-in" style={{ animationDelay: "0.1s" }}>
+        <div className="glass-card p-3 sm:p-4">
+          <p className="text-xs sm:text-sm text-muted-foreground">Einnahmen</p>
+          <p className="mt-1 truncate text-lg sm:text-2xl font-bold text-success">
             +{totalIncoming.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
           </p>
         </div>
-        <div className="glass-card p-4">
-          <p className="text-sm text-muted-foreground">Gesamt Ausgaben (Eingang)</p>
-          <p className="mt-1 text-2xl font-bold text-foreground">
+        <div className="glass-card p-3 sm:p-4">
+          <p className="text-xs sm:text-sm text-muted-foreground">Ausgaben</p>
+          <p className="mt-1 truncate text-lg sm:text-2xl font-bold text-foreground">
             -{totalOutgoing.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
           </p>
         </div>
-        <div className="glass-card p-4">
-          <p className="text-sm text-muted-foreground">Bilanz</p>
+        <div className="glass-card p-3 sm:p-4">
+          <p className="text-xs sm:text-sm text-muted-foreground">Bilanz</p>
           <p className={cn(
-            "mt-1 text-2xl font-bold",
+            "mt-1 truncate text-lg sm:text-2xl font-bold",
             totalIncoming - totalOutgoing >= 0 ? "text-success" : "text-destructive"
           )}>
             {totalIncoming - totalOutgoing >= 0 ? "+" : ""}
@@ -452,15 +452,15 @@ export default function InvoicesPage() {
         <button
           onClick={duplicateCount > 0 ? handleShowDuplicates : undefined}
           className={cn(
-            "glass-card p-4 text-left transition-colors",
+            "glass-card p-3 sm:p-4 text-left transition-colors",
             duplicateCount > 0 && "border-warning/30 border cursor-pointer hover:bg-warning/5"
           )}
         >
-          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-            <Copy className="h-3.5 w-3.5" />
-            Mögliche Duplikate
+          <p className="text-xs sm:text-sm text-muted-foreground flex items-center gap-1.5">
+            <Copy className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Duplikate</span>
           </p>
-          <p className={cn("mt-1 text-2xl font-bold", duplicateCount > 0 ? "text-warning" : "text-muted-foreground")}>
+          <p className={cn("mt-1 text-lg sm:text-2xl font-bold", duplicateCount > 0 ? "text-warning" : "text-muted-foreground")}>
             {duplicateCount}
           </p>
         </button>
@@ -505,8 +505,8 @@ export default function InvoicesPage() {
       )}
 
       {/* Filters */}
-      <div ref={contentRef} className="glass-card p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      <div ref={contentRef} className="glass-card p-3 sm:p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
+        <div className="flex flex-col gap-3 sm:gap-4 md:flex-row md:items-center">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -516,11 +516,12 @@ export default function InvoicesPage() {
               className="pl-9"
             />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1 sm:pb-0">
             <Button
               variant={filterType === "all" ? "default" : "ghost"}
               size="sm"
               onClick={() => setFilterType("all")}
+              className="shrink-0"
             >
               Alle
             </Button>
@@ -528,26 +529,28 @@ export default function InvoicesPage() {
               variant={filterType === "outgoing" ? "default" : "ghost"}
               size="sm"
               onClick={() => setFilterType("outgoing")}
-              className="gap-1"
+              className="shrink-0 gap-1"
             >
               <ArrowDownLeft className="h-3 w-3" />
-              Eingang (Ausgaben)
+              <span className="hidden sm:inline">Eingang (Ausgaben)</span>
+              <span className="sm:hidden">Eingang</span>
             </Button>
             <Button
               variant={filterType === "incoming" ? "default" : "ghost"}
               size="sm"
               onClick={() => setFilterType("incoming")}
-              className="gap-1"
+              className="shrink-0 gap-1"
             >
               <ArrowUpRight className="h-3 w-3" />
-              Ausgang (Einnahmen)
+              <span className="hidden sm:inline">Ausgang (Einnahmen)</span>
+              <span className="sm:hidden">Ausgang</span>
             </Button>
             {!isSelectMode && filteredInvoices.length > 0 && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => selectAll()}
-                className="ml-2 gap-1"
+                className="ml-2 shrink-0 gap-1"
               >
                 <CheckSquare className="h-3 w-3" />
                 Auswählen

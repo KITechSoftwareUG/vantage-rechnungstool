@@ -528,34 +528,34 @@ export default function MatchingPage() {
 
       {/* Header */}
       <div className="animate-fade-in">
-        <h1 className="font-heading text-3xl font-bold text-foreground">Zuordnung</h1>
-        <p className="mt-1 text-muted-foreground">
+        <h1 className="font-heading text-2xl sm:text-3xl font-bold text-foreground">Zuordnung</h1>
+        <p className="mt-1 text-sm sm:text-base text-muted-foreground">
           Ordnen Sie Rechnungen den Kontoauszugstransaktionen zu
         </p>
       </div>
 
       {/* Controls */}
-      <div className="flex flex-col gap-4 animate-fade-in sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-4">
-          <div className="glass-card flex items-center gap-3 px-4 py-3">
-            <FileText className="h-5 w-5 text-info" />
-            <div>
-              <p className="text-2xl font-bold text-foreground">{invoiceCount}</p>
-              <p className="text-xs text-muted-foreground">Rechnungen</p>
+      <div className="flex flex-col gap-3 animate-fade-in lg:flex-row lg:items-center lg:justify-between">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <div className="glass-card flex items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
+            <FileText className="h-4 w-4 shrink-0 text-info sm:h-5 sm:w-5" />
+            <div className="min-w-0">
+              <p className="text-lg font-bold text-foreground sm:text-2xl">{invoiceCount}</p>
+              <p className="truncate text-[10px] text-muted-foreground sm:text-xs">Rechnungen</p>
             </div>
           </div>
-          <div className="glass-card flex items-center gap-3 px-4 py-3">
-            <AlertCircle className="h-5 w-5 text-warning" />
-            <div>
-              <p className="text-2xl font-bold text-foreground">{unmatchedCount}</p>
-              <p className="text-xs text-muted-foreground">Offen</p>
+          <div className="glass-card flex items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
+            <AlertCircle className="h-4 w-4 shrink-0 text-warning sm:h-5 sm:w-5" />
+            <div className="min-w-0">
+              <p className="text-lg font-bold text-foreground sm:text-2xl">{unmatchedCount}</p>
+              <p className="truncate text-[10px] text-muted-foreground sm:text-xs">Offen</p>
             </div>
           </div>
-          <div className="glass-card flex items-center gap-3 px-4 py-3">
-            <CheckCircle className="h-5 w-5 text-success" />
-            <div>
-              <p className="text-2xl font-bold text-foreground">{confirmedCount}</p>
-              <p className="text-xs text-muted-foreground">Bestätigt</p>
+          <div className="glass-card flex items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
+            <CheckCircle className="h-4 w-4 shrink-0 text-success sm:h-5 sm:w-5" />
+            <div className="min-w-0">
+              <p className="text-lg font-bold text-foreground sm:text-2xl">{confirmedCount}</p>
+              <p className="truncate text-[10px] text-muted-foreground sm:text-xs">Bestätigt</p>
             </div>
           </div>
         </div>
@@ -565,7 +565,7 @@ export default function MatchingPage() {
             variant="outline"
             onClick={() => setAgentOpen(true)}
             disabled={unmatchedCount === 0}
-            className="gap-2"
+            className="flex-1 gap-2 sm:flex-none"
             title="Offene Transaktionen zusammen mit dem KI-Agenten durchgehen"
           >
             <Bot className="h-4 w-4" />
@@ -576,10 +576,10 @@ export default function MatchingPage() {
               variant="gradient"
               onClick={handleAutoMatch}
               disabled={unmatchedCount === 0}
-              className="gap-2"
+              className="flex-1 gap-2 sm:flex-none"
             >
               <Sparkles className="h-4 w-4" />
-              KI Auto-Matching
+              <span className="sm:inline">KI Auto-Matching</span>
             </Button>
           )}
         </div>
@@ -622,17 +622,19 @@ export default function MatchingPage() {
       )}
 
       {/* Filter Tabs */}
-      <div className="animate-fade-in">
+      <div className="animate-fade-in -mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
         <Tabs value={filterStatus} onValueChange={(v) => setFilterStatus(v as any)}>
-          <TabsList className="glass-card h-auto p-1">
-            <TabsTrigger value="all" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              Alle Transaktionen ({transactions.length})
+          <TabsList className="glass-card h-auto w-max p-1">
+            <TabsTrigger value="all" className="whitespace-nowrap data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <span className="hidden sm:inline">Alle Transaktionen</span>
+              <span className="sm:hidden">Alle</span>
+              {" "}({transactions.length})
             </TabsTrigger>
-            <TabsTrigger value="unmatched" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+            <TabsTrigger value="unmatched" className="whitespace-nowrap data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <AlertCircle className="mr-1 h-4 w-4" />
               Offen ({unmatchedCount})
             </TabsTrigger>
-            <TabsTrigger value="confirmed" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+            <TabsTrigger value="confirmed" className="whitespace-nowrap data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <CheckCircle className="mr-1 h-4 w-4" />
               Bestätigt ({confirmedCount})
             </TabsTrigger>
@@ -641,9 +643,9 @@ export default function MatchingPage() {
       </div>
 
       {/* Search & Quick Select & Legend */}
-      <div className="flex flex-col gap-4 animate-fade-in sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="relative w-full sm:w-64">
+      <div className="flex flex-col gap-3 animate-fade-in lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="relative flex-1 lg:w-64 lg:flex-none">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Suche..."
@@ -653,18 +655,18 @@ export default function MatchingPage() {
             />
           </div>
           <div className="flex gap-1">
-            <Button size="sm" variant="outline" onClick={selectAll} className="text-xs">
+            <Button size="sm" variant="outline" onClick={selectAll} className="whitespace-nowrap text-xs">
               Alle wählen
             </Button>
           </div>
         </div>
-        <div className="flex gap-4 text-sm text-muted-foreground">
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground sm:gap-4 sm:text-sm">
           <div className="flex items-center gap-2">
-            <div className="h-3 w-3 rounded-full bg-blue-500" />
+            <div className="h-3 w-3 shrink-0 rounded-full bg-blue-500" />
             <span>Volksbank</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="h-3 w-3 rounded-full bg-emerald-500" />
+            <div className="h-3 w-3 shrink-0 rounded-full bg-emerald-500" />
             <span>American Express</span>
           </div>
         </div>
@@ -726,8 +728,8 @@ export default function MatchingPage() {
                       </span>
                     </button>
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="mt-2 space-y-2 pl-4">
-                    <div className="flex items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground">
+                  <CollapsibleContent className="mt-2 space-y-2 pl-2 sm:pl-4">
+                    <div className="hidden items-center gap-4 px-4 py-2 text-xs font-medium uppercase text-muted-foreground sm:flex">
                       <div className="w-4"></div>
                       <div className="w-6"></div>
                       <div className="w-24">Datum</div>
