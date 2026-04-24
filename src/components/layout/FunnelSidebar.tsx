@@ -1,16 +1,17 @@
-import { Users, Settings, LogOut, LayoutGrid } from "lucide-react";
+import { Activity, LayoutGrid, LogOut, MessageCircle, Settings, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 import { NavLink } from "@/components/NavLink";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "next-themes";
-import { cn } from "@/lib/utils";
 import logoDarkmode from "@/assets/logo_darkmode.png";
 import logoLightmode from "@/assets/logo_lightmode.png";
 
 const navItems = [
   { title: "Leads", url: "/funnel", icon: Users },
+  { title: "Inbox", url: "/funnel/inbox", icon: MessageCircle },
+  { title: "Status", url: "/status", icon: Activity },
   { title: "Konfiguration", url: "/config", icon: Settings },
 ];
 
@@ -26,16 +27,16 @@ export function FunnelSidebar({ variant = "desktop", onNavigate }: FunnelSidebar
   const logoSrc = resolvedTheme === "dark" ? logoDarkmode : logoLightmode;
   const isMobile = variant === "mobile";
 
+  // Mobile-Variante rendert im Sheet als normaler Container; Desktop ist fixed.
+  // Kein twMerge-Konflikt zwischen flex/hidden/md:flex, sondern klare Trennung.
+  const asideClass = isMobile
+    ? "flex h-full w-full flex-col bg-sidebar"
+    : "fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar";
+
   return (
-    <aside
-      data-testid="funnel-sidebar"
-      className={cn(
-        "flex h-full w-full flex-col border-sidebar-border bg-sidebar",
-        !isMobile && "fixed left-0 top-0 z-40 hidden h-screen w-64 border-r md:flex",
-      )}
-    >
+    <aside data-testid="funnel-sidebar" className={asideClass}>
       {/* Logo — klickbar zurück zur Übersicht */}
-      <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-3">
+      <div className="flex h-16 shrink-0 items-center justify-between border-b border-sidebar-border px-3">
         <Link
           to="/"
           onClick={onNavigate}
@@ -68,7 +69,9 @@ export function FunnelSidebar({ variant = "desktop", onNavigate }: FunnelSidebar
           <NavLink
             key={item.title}
             to={item.url}
-            end={item.url === "/"}
+            // `end` fuer Parent-Routes, sonst matcht "/funnel" auch
+            // "/funnel/inbox" und beide Eintraege wirken aktiv.
+            end={item.url === "/" || item.url === "/funnel"}
             onClick={onNavigate}
             className="group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 transition-all duration-200 hover:bg-sidebar-accent hover:text-sidebar-foreground animate-slide-in-left opacity-0"
             activeClassName="bg-sidebar-accent text-emerald-500 shadow-sm"

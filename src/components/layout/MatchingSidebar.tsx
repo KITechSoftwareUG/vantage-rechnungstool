@@ -5,7 +5,6 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "next-themes";
-import { cn } from "@/lib/utils";
 import logoDarkmode from "@/assets/logo_darkmode.png";
 import logoLightmode from "@/assets/logo_lightmode.png";
 
@@ -30,16 +29,16 @@ export function MatchingSidebar({ variant = "desktop", onNavigate }: MatchingSid
   const logoSrc = resolvedTheme === "dark" ? logoDarkmode : logoLightmode;
   const isMobile = variant === "mobile";
 
+  // Mobile-Variante: rendert innerhalb eines Sheet als normaler Flex-Container.
+  // Desktop-Variante: fixed links, w-64, full-height.
+  const asideClass = isMobile
+    ? "flex h-full w-full flex-col bg-sidebar"
+    : "fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-sidebar-border bg-sidebar";
+
   return (
-    <aside
-      data-testid="matching-sidebar"
-      className={cn(
-        "flex h-full w-full flex-col border-sidebar-border bg-sidebar",
-        !isMobile && "fixed left-0 top-0 z-40 hidden h-screen w-64 border-r md:flex",
-      )}
-    >
+    <aside data-testid="matching-sidebar" className={asideClass}>
       {/* Logo — klickbar zurück zur Übersicht */}
-      <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-3">
+      <div className="flex h-16 shrink-0 items-center justify-between border-b border-sidebar-border px-3">
         <Link
           to="/"
           onClick={onNavigate}
@@ -85,7 +84,7 @@ export function MatchingSidebar({ variant = "desktop", onNavigate }: MatchingSid
       </nav>
 
       {/* User Info & Logout */}
-      <div className="border-t border-sidebar-border p-2">
+      <div className="shrink-0 border-t border-sidebar-border p-2">
         {user && (
           <div className="mb-3 rounded-lg bg-sidebar-accent/50 p-3">
             <p className="truncate text-xs text-muted-foreground">{user.email}</p>
