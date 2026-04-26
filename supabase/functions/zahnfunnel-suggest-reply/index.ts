@@ -6,10 +6,14 @@
 // damit RLS keine Probleme macht und wir die Anamnese aus `leads.meta`
 // zuverlaessig lesen koennen.
 //
+// Provider: nutzt OPENAI_API_KEY aus den Edge-Function-Secrets bevorzugt
+// (gleiches Pattern wie matching-agent), fallback auf ANTHROPIC_API_KEY
+// in app_config. So muss der User keinen zweiten Key konfigurieren.
+//
 // Flow:
 //   1. lead_id validieren
 //   2. Lead + letzte 12 wa_messages laden
-//   3. Anthropic mit System-Prompt + Anamnese + Konversation aufrufen
+//   3. AI mit System-Prompt + Anamnese + Konversation aufrufen
 //   4. Vorschlag zurueckgeben — KEIN Outbound-Send, das macht der User
 //      manuell ueber zahnfunnel-whatsapp-send.
 
@@ -184,20 +188,31 @@ Deno.serve(async (req) => {
   }
   const messages = (msgsData ?? []) as unknown as WaMessageRow[];
 
-  // --- Anthropic-Config laden ---
-  const [apiKey, modelCfg, beraterName, beraterFirma, beraterTyp] = await Promise.all([
+  // --- AI-Config laden ---
+  // Provider-Resolver: bevorzugt OPENAI_API_KEY aus Edge-Function-Secrets
+  // (gleiches Pattern wie matching-agent / auto-match-transactions), fallback
+  // auf ANTHROPIC_API_KEY aus app_config wenn OpenAI nicht da. So muss der
+  // User keinen zusaetzlichen Key konfigurieren falls OpenAI schon laeuft.
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  const [anthropicKey, anthropicModelCfg, openaiModelCfg, beraterName, beraterFirma, beraterTyp] = await Promise.all([
     getConfig(supabase, "ANTHROPIC_API_KEY"),
     getConfig(supabase, "ANTHROPIC_MODEL"),
+    getConfig(supabase, "OPENAI_MODEL"),
     getConfig(supabase, "BERATER_NAME"),
     getConfig(supabase, "BERATER_FIRMA"),
     getConfig(supabase, "BERATER_TYP"),
   ]);
 
-  if (!apiKey) {
-    return jsonResponse(503, { ok: false, error: "anthropic_not_configured" });
+  type Provider = "openai" | "anthropic";
+  let provider: Provider;
+  if (openaiKey) {
+    provider = "openai";
+  } else if (anthropicKey) {
+    provider = "anthropic";
+  } else {
+    return jsonResponse(503, { ok: false, error: "ai_not_configured", detail: "Weder OPENAI_API_KEY (Edge Function Secret) noch ANTHROPIC_API_KEY (app_config) ist gesetzt." });
   }
 
-  const model = modelCfg ?? "claude-sonnet-4-5";
   const name = beraterName ?? "Ihr Berater";
   const firma = beraterFirma ?? "ExpatVantage";
   const typ = beraterTyp ?? "Zahnzusatzversicherungen";
@@ -219,33 +234,59 @@ Deno.serve(async (req) => {
     `${formatHistory(messages)}\n\n` +
     `Generiere den naechsten ausgehenden Antwort-Vorschlag.`;
 
-  // --- Anthropic-Call ---
+  // --- AI-Call ---
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ANTHROPIC_TIMEOUT_MS);
   let resp: Response;
-  try {
-    resp = await fetch("https://api.anthropic.com/v1/messages", {
+  let endpoint: string;
+  let requestInit: RequestInit;
+
+  if (provider === "openai") {
+    endpoint = "https://api.openai.com/v1/chat/completions";
+    requestInit = {
       method: "POST",
       signal: ctrl.signal,
       headers: {
-        "x-api-key": apiKey,
+        Authorization: `Bearer ${openaiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: openaiModelCfg ?? "gpt-4o-mini",
+        max_tokens: 400,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: userPrompt },
+        ],
+      }),
+    };
+  } else {
+    endpoint = "https://api.anthropic.com/v1/messages";
+    requestInit = {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "x-api-key": anthropicKey as string,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model,
+        model: anthropicModelCfg ?? "claude-sonnet-4-5",
         max_tokens: 400,
         system,
         messages: [{ role: "user", content: userPrompt }],
       }),
-    });
+    };
+  }
+
+  try {
+    resp = await fetch(endpoint, requestInit);
   } catch (err) {
     clearTimeout(timer);
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("anthropic network error:", msg);
+    console.error(`${provider} network error:`, msg);
     return jsonResponse(502, {
       ok: false,
-      error: "anthropic_network",
+      error: `${provider}_network`,
       detail: msg.slice(0, 300),
     });
   } finally {
@@ -254,38 +295,36 @@ Deno.serve(async (req) => {
 
   const raw = await resp.text();
   if (!resp.ok) {
-    console.error(`anthropic ${resp.status}:`, raw.slice(0, 500));
+    console.error(`${provider} ${resp.status}:`, raw.slice(0, 500));
     return jsonResponse(502, {
       ok: false,
-      error: `anthropic_failed_${resp.status}`,
+      error: `${provider}_failed_${resp.status}`,
       detail: raw.slice(0, 300),
     });
   }
 
-  let parsed: { content?: Array<{ type?: string; text?: string }> };
+  // Response-Format pro Provider extrahieren
+  let suggestion = "";
   try {
-    parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (provider === "openai") {
+      suggestion = String(parsed?.choices?.[0]?.message?.content ?? "").trim();
+    } else {
+      const blocks: Array<{ type?: string; text?: string }> = parsed?.content ?? [];
+      suggestion = blocks
+        .filter((b) => b.type === "text" && typeof b.text === "string")
+        .map((b) => b.text as string)
+        .join("")
+        .trim();
+    }
   } catch {
-    console.error("anthropic response not json:", raw.slice(0, 200));
-    return jsonResponse(502, {
-      ok: false,
-      error: "anthropic_invalid_json",
-    });
+    console.error(`${provider} response not json:`, raw.slice(0, 200));
+    return jsonResponse(502, { ok: false, error: `${provider}_invalid_json` });
   }
-
-  const blocks = parsed.content ?? [];
-  const suggestion = blocks
-    .filter((b) => b.type === "text" && typeof b.text === "string")
-    .map((b) => b.text as string)
-    .join("")
-    .trim();
 
   if (suggestion.length === 0) {
-    return jsonResponse(502, {
-      ok: false,
-      error: "anthropic_empty_response",
-    });
+    return jsonResponse(502, { ok: false, error: `${provider}_empty_response` });
   }
 
-  return jsonResponse(200, { ok: true, suggestion });
+  return jsonResponse(200, { ok: true, suggestion, provider });
 });

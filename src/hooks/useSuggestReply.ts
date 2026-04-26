@@ -18,28 +18,33 @@ interface SuggestResult {
   suggestion: string;
 }
 
-// Mappt Edge-Function-Errors auf Klartext fuer den Toast.
+// Mappt Edge-Function-Errors auf Klartext fuer den Toast. Codes sind
+// Provider-praefixed (`openai_*` oder `anthropic_*`), plus generische wie
+// `ai_not_configured`, `lead_not_found`, `lead_id_invalid`.
 function humanizeSuggestError(data: SuggestResponse, fallback: string): string {
-  if (data.error === "anthropic_not_configured") {
-    return "Anthropic-API-Key fehlt in der Konfiguration (siehe /config).";
+  const code = data.error ?? "";
+  if (code === "ai_not_configured") {
+    return data.detail ?? "Kein KI-Provider konfiguriert (OpenAI oder Anthropic).";
   }
-  if (data.error === "lead_not_found") {
-    return "Lead nicht gefunden.";
+  if (code === "lead_not_found") return "Lead nicht gefunden.";
+  if (code === "lead_id_invalid") return "Ungueltige Lead-ID.";
+  if (code.endsWith("_empty_response")) {
+    return "KI hat eine leere Antwort geliefert. Bitte erneut versuchen.";
   }
-  if (data.error === "lead_id_invalid") {
-    return "Ungueltige Lead-ID.";
+  if (code.endsWith("_invalid_json")) {
+    return "KI-Antwort konnte nicht als JSON gelesen werden.";
   }
-  if (data.error === "anthropic_empty_response") {
-    return "Anthropic hat eine leere Antwort geliefert. Bitte erneut versuchen.";
+  if (code.endsWith("_network")) {
+    return "Netzwerk-Fehler beim KI-Call.";
   }
-  if (data.error?.startsWith("anthropic_failed_")) {
-    return `Anthropic-API-Fehler (${data.error.replace("anthropic_failed_", "HTTP ")}). ${data.detail ?? ""}`.trim();
-  }
-  if (data.error === "anthropic_network") {
-    return "Netzwerk-Fehler beim Anthropic-Call.";
+  // openai_failed_429 / anthropic_failed_500 / ...
+  const failedMatch = code.match(/^(openai|anthropic)_failed_(\d+)$/);
+  if (failedMatch) {
+    const provider = failedMatch[1] === "openai" ? "OpenAI" : "Anthropic";
+    return `${provider}-API-Fehler (HTTP ${failedMatch[2]}). ${data.detail ?? ""}`.trim();
   }
   if (data.detail) return data.detail;
-  if (data.error) return data.error;
+  if (code) return code;
   return fallback;
 }
 
