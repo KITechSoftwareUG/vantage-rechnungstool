@@ -85,14 +85,34 @@ docker compose up -d rechnungstool-web
 
 ## Zahnfunnel — externe Landingpage-Integration
 
-Das Zahnfunnel-Lead-Modul wird vom externen Lovable-Projekt
-`zahn-versteher-portal` (Repo `github.com/KITechSoftwareUG/zahn-versteher-portal`)
-befuettert. Das Frontend dort baut den Request als
-`POST ${VITE_API_URL}/webhook/form` mit Header `X-Api-Key`.
+### Externes Lovable-Projekt
+- **Repo**: `github.com/KITechSoftwareUG/zahn-versteher-portal`
+- **Live**: https://zahn-versteher-portal.lovable.app
+- **Preview**: https://id-preview--9f47078c-b1f4-4adf-91d0-1963ad0b8d12.lovable.app
+- **Eigene Domain**: noch nicht verbunden
+- **Stack**: React 18 + Vite + TS + Tailwind + shadcn/ui, Lovable-deployed
+- **Eigenes Lovable-Cloud-Projekt (Supabase, Ref `nsatkehqrsisaztjfuxk`)**:
+  aktiviert, aber **bewusst leer**. Wir nutzen es NICHT zur Lead-Speicherung.
+- Im Repo liegt zusätzlich ein altes FastAPI-Backend (`app/`), das in
+  Lovable **nicht aktiv** ist — Legacy, ignorieren.
 
-Da Supabase Edge Functions zwingend unter `/functions/v1/<name>` gemountet
-sind, MUSS die Lovable-Env so gesetzt sein, dass der Subpfad an unsere
-Function geroutet wird:
+### Wo Leads landen (Architektur-Entscheidung)
+Leads werden NICHT im Lovable-Cloud-Projekt des `zahn-versteher-portal`
+gespeichert, sondern direkt in **unserem** Supabase
+(`fqjptwpdihwqdfxorvqq`, Tabelle `public.leads`,
+Migration [supabase/migrations/20260424120000_zahnfunnel_schema.sql](supabase/migrations/20260424120000_zahnfunnel_schema.sql)).
+
+Grund: Das interne Dashboard ([src/hooks/useLeads.ts](src/hooks/useLeads.ts))
+liest Leads direkt via Supabase-Client (RLS: `authenticated sees all`),
+WhatsApp-Inbox läuft hier, Alex' OS-System lebt hier — alles in einem
+Backend statt zwei. Deshalb gilt **Option A** (direkter Webhook
+Frontend → unsere Edge Function), keine Sync-Pipeline.
+
+### Frontend-Konfig (Lovable-Env im `zahn-versteher-portal`)
+Der Funnel POSTet als `POST ${VITE_API_URL}/webhook/form` mit
+Header `X-Api-Key`. Da Supabase Edge Functions zwingend unter
+`/functions/v1/<name>` gemountet sind, MUSS die Env so gesetzt sein,
+dass der Subpfad an unsere Function geroutet wird:
 
 ```
 VITE_API_URL=https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-form-webhook
@@ -103,13 +123,34 @@ Supabase reicht beliebige Subpfade (`…/zahnfunnel-form-webhook/webhook/form`)
 an die Function durch — die Function selbst ignoriert den URL-Pfad und
 prueft nur die Methode. Verifiziert mit n8n-webhook am 2026-04-26.
 
-WhatsApp-Webhook analog:
-`https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-whatsapp-webhook`
-(Meta-Setup, GET = Verify, POST = Inbound).
+### Payload-Vertrag (Edge Function)
+Die Function akzeptiert das deutschsprachige Schema des Funnels direkt:
 
-Lead-Liste fuer das interne Dashboard laeuft NICHT ueber einen REST-Endpoint —
-das Frontend liest direkt via Supabase-Client (RLS: `authenticated sees all`,
-[src/hooks/useLeads.ts](src/hooks/useLeads.ts)).
+| DB-Spalte (`public.leads`) | Pflicht | Top-Level-Aliase im Payload          |
+|---------------------------|---------|---------------------------------------|
+| `phone`                    | ja      | `phone`, `telnr`                      |
+| `email`                    | nein    | `email`, `mail`                       |
+| `name`                     | nein    | `name`                                |
+| `source`                   | nein    | `source`, `quelle` (Default `website`) |
+
+`einverstaendnis == "ja"` triggert den WhatsApp-Template-Send.
+**Alle anderen Felder** (`alter`, `gesundheitsdaten_einwilligung`,
+Anamnese-Felder wie `laufende_behandlungen`, `fehlende_zaehne`, `ersatz_typ`,
+… sowie Tracking wie `utm_*`, `page_url`, `referrer`, `user_agent`,
+`form_started_at`, `form_completed_at`, `duration_seconds`) landen 1:1 in
+`leads.meta` (JSONB). Frontend kann jederzeit neue Felder einführen, ohne
+dass das Backend angefasst werden muss.
+
+`phone` wird zu E.164-ohne-Plus normalisiert (Meta-Format), Conflict-Key
+beim Upsert ist `phone` — Mehrfach-Submits desselben Leads merge'n.
+**`meta` wird beim Re-Submit überschrieben, nicht deep-merged** (letzte
+Submission = aktuelle Wahrheit).
+
+### WhatsApp-Webhook (Meta)
+`https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-whatsapp-webhook`
+(GET = Verify, POST = Inbound). Lead-Liste für das interne Dashboard
+läuft NICHT über einen REST-Endpoint — das Frontend liest direkt via
+Supabase-Client.
 
 ## Regeln
 

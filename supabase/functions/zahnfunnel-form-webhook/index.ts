@@ -99,7 +99,10 @@ Deno.serve(async (req) => {
   }
 
   // --- Validate ---
-  const phoneRaw = asString(body.phone);
+  // Deutsche Aliase aus dem Lovable-Funnel akzeptieren: das externe Frontend
+  // sendet `telnr` / `mail` / `quelle` statt `phone` / `email` / `source`.
+  // Englischer Name gewinnt, falls beide gesetzt sind.
+  const phoneRaw = asString(body.phone) ?? asString(body.telnr);
   if (!phoneRaw) {
     return jsonResponse(422, { ok: false, error: "phone_required" });
   }
@@ -109,16 +112,21 @@ Deno.serve(async (req) => {
   }
 
   const name = asString(body.name);
-  const email = asString(body.email)?.toLowerCase() ?? null;
-  const source = asString(body.source) ?? "website";
+  const email = (asString(body.email) ?? asString(body.mail))?.toLowerCase() ?? null;
+  const source = asString(body.source) ?? asString(body.quelle) ?? "website";
 
-  // Spec-konforme "extra=allow"-Semantik: nur die vier persistierten DB-
-  // Spalten werden aus dem Top-Level gezogen, ALLES andere landet 1:1 in
-  // `meta`. So kann die Landingpage neue Anamnese-Felder einfuehren ohne
-  // Backend-Aenderung — und Tracking/Anliegen-Summary werden ohne weisse
-  // Liste durchgereicht. `undefined` filtern wir raus, `null`/`false`/""
-  // bleiben erhalten (kann fuer Auswertung relevant sein).
-  const KNOWN_TOP_LEVEL = new Set(["name", "phone", "email", "source"]);
+  // Spec-konforme "extra=allow"-Semantik: nur die persistierten DB-Spalten
+  // (inkl. der deutschen Aliase) werden aus dem Top-Level gezogen, ALLES
+  // andere landet 1:1 in `meta`. So kann die Landingpage neue Anamnese-Felder
+  // einfuehren ohne Backend-Aenderung — und Tracking/Anliegen-Summary werden
+  // ohne weisse Liste durchgereicht. `undefined` filtern wir raus,
+  // `null`/`false`/"" bleiben erhalten (kann fuer Auswertung relevant sein).
+  const KNOWN_TOP_LEVEL = new Set([
+    "name",
+    "phone", "telnr",
+    "email", "mail",
+    "source", "quelle",
+  ]);
   const meta: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(body)) {
     if (KNOWN_TOP_LEVEL.has(key)) continue;
