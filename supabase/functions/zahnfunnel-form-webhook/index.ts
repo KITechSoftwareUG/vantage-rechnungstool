@@ -112,35 +112,18 @@ Deno.serve(async (req) => {
   const email = asString(body.email)?.toLowerCase() ?? null;
   const source = asString(body.source) ?? "website";
 
-  // Alles andere tolerant in meta packen. Kein strenges Typing —
-  // das Formular entwickelt sich weiter, wir speichern was wir bekommen.
-  const anamnesisKeys = [
-    "laufende_behandlungen",
-    "geplante_behandlungen",
-    "hkp_erstellt",
-    "behandlung_begonnen",
-    "fehlende_zaehne",
-    "ersatz_typ",
-    "fehlend_seit",
-    "parodontitis_behandelt",
-    "zahnfleischerkrankung",
-    "kieferfehlstellung",
-    "kfo_angeraten",
-    "einverstaendnis",
-    "gesundheitsdaten_einwilligung",
-  ] as const;
-
+  // Spec-konforme "extra=allow"-Semantik: nur die vier persistierten DB-
+  // Spalten werden aus dem Top-Level gezogen, ALLES andere landet 1:1 in
+  // `meta`. So kann die Landingpage neue Anamnese-Felder einfuehren ohne
+  // Backend-Aenderung — und Tracking/Anliegen-Summary werden ohne weisse
+  // Liste durchgereicht. `undefined` filtern wir raus, `null`/`false`/""
+  // bleiben erhalten (kann fuer Auswertung relevant sein).
+  const KNOWN_TOP_LEVEL = new Set(["name", "phone", "email", "source"]);
   const meta: Record<string, unknown> = {};
-  if (asString(body.anliegen_summary)) {
-    meta.anliegen_summary = asString(body.anliegen_summary);
-  }
-  if (body.tracking && typeof body.tracking === "object") {
-    meta.tracking = body.tracking;
-  }
-  for (const key of anamnesisKeys) {
-    if (body[key] !== undefined) {
-      meta[key] = body[key];
-    }
+  for (const [key, value] of Object.entries(body)) {
+    if (KNOWN_TOP_LEVEL.has(key)) continue;
+    if (value === undefined) continue;
+    meta[key] = value;
   }
 
   const einverstaendnis = asString(body.einverstaendnis)?.toLowerCase() ?? null;
