@@ -48,6 +48,7 @@ export async function resolveStorageUrl(
   ].filter(Boolean) as string[];
 
   const now = Date.now();
+  const attempts: { path: string; error: string }[] = [];
   for (const path of candidates) {
     const cached = signedUrlCache.get(path);
     if (cached && cached.expiresAt - SIGNED_URL_REFRESH_MARGIN_MS > now) {
@@ -60,9 +61,17 @@ export async function resolveStorageUrl(
       signedUrlCache.set(path, { url: data.signedUrl, expiresAt: now + SIGNED_URL_TTL_MS });
       return data.signedUrl;
     }
+    attempts.push({ path, error: error?.message ?? "unknown" });
   }
 
-  // Last resort: return the stored URL (may be an internal URL, but UrlDocumentPreview
-  // will fall back to supabase.storage.download() if the fetch fails).
+  // Alle Kandidaten haben gefehlt — typischerweise weil die Datei im Storage
+  // geloescht/nie hochgeladen wurde, oder weil RLS das Lesen verweigert.
+  // Loggen, damit man im Devtool den Grund sieht statt nur "PDF konnte nicht
+  // geladen werden".
+  console.warn(
+    `[resolveStorageUrl] kein signed URL fuer ${userId}/${year}/${month}/${fileName} - alle Kandidaten gescheitert:`,
+    attempts,
+  );
+
   return fileUrl || "";
 }
