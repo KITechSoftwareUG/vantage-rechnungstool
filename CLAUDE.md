@@ -83,6 +83,34 @@ docker compose up -d rechnungstool-web
 - Nginx-Route ist in `/opt/app/scripts/postInstall.sh` dokumentiert und in
   elestio-nginx live aktiv. Im Normalfall nicht anfassen.
 
+## Zahnfunnel — externe Landingpage-Integration
+
+Das Zahnfunnel-Lead-Modul wird vom externen Lovable-Projekt
+`zahn-versteher-portal` (Repo `github.com/KITechSoftwareUG/zahn-versteher-portal`)
+befuettert. Das Frontend dort baut den Request als
+`POST ${VITE_API_URL}/webhook/form` mit Header `X-Api-Key`.
+
+Da Supabase Edge Functions zwingend unter `/functions/v1/<name>` gemountet
+sind, MUSS die Lovable-Env so gesetzt sein, dass der Subpfad an unsere
+Function geroutet wird:
+
+```
+VITE_API_URL=https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-form-webhook
+VITE_FORM_API_KEY=<gleicher Wert wie FORM_API_KEY in app_config>
+```
+
+Supabase reicht beliebige Subpfade (`…/zahnfunnel-form-webhook/webhook/form`)
+an die Function durch — die Function selbst ignoriert den URL-Pfad und
+prueft nur die Methode. Verifiziert mit n8n-webhook am 2026-04-26.
+
+WhatsApp-Webhook analog:
+`https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-whatsapp-webhook`
+(Meta-Setup, GET = Verify, POST = Inbound).
+
+Lead-Liste fuer das interne Dashboard laeuft NICHT ueber einen REST-Endpoint —
+das Frontend liest direkt via Supabase-Client (RLS: `authenticated sees all`,
+[src/hooks/useLeads.ts](src/hooks/useLeads.ts)).
+
 ## Regeln
 
 - **Original lesen, nicht raten**, bevor du Code änderst.
