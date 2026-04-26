@@ -79,6 +79,25 @@ export function useUpdateTransactionMatch() {
     onMutate: async ({ transactionId, invoiceId, matchStatus, matchConfidence }) => {
       await queryClient.cancelQueries({ queryKey: ["bank_transactions"] });
       const prev = queryClient.getQueriesData({ queryKey: ["bank_transactions"] });
+
+      // Wenn eine neue Zuordnung gesetzt wird, das Invoice-Objekt aus dem
+      // unmatched-Cache nachschlagen und mit einbetten — sonst bleibt
+      // matchedInvoice nach onMutate null und Eye-Icon/Preview erscheinen
+      // erst nach dem naechsten Refetch (bis zu staleTime spaeter).
+      let embeddedInvoice: any = null;
+      if (invoiceId) {
+        const unmatched = queryClient.getQueriesData({ queryKey: ["unmatched_invoices"] });
+        for (const [, data] of unmatched) {
+          if (Array.isArray(data)) {
+            const hit = data.find((inv: any) => inv?.id === invoiceId);
+            if (hit) {
+              embeddedInvoice = hit;
+              break;
+            }
+          }
+        }
+      }
+
       queryClient.setQueriesData({ queryKey: ["bank_transactions"] }, (old: any) => {
         if (!Array.isArray(old)) return old;
         return old.map((t: any) =>
@@ -88,9 +107,12 @@ export function useUpdateTransactionMatch() {
                 matchStatus,
                 matchedInvoiceId: invoiceId,
                 matchConfidence: matchConfidence ?? null,
-                // Wenn die Zuordnung aufgehoben wird, auch das eingebettete
-                // Invoice-Objekt leeren, damit die Badge/Preview verschwindet.
-                matchedInvoice: invoiceId ? t.matchedInvoice : null,
+                // Bei neuer Zuordnung: aus Cache embedden (sonst eye/preview
+                // unsichtbar bis Refetch). Bei gleicher Zuordnung: vorhandenes
+                // Objekt behalten. Beim Aufheben: leeren.
+                matchedInvoice: invoiceId
+                  ? (embeddedInvoice ?? t.matchedInvoice)
+                  : null,
               }
             : t,
         );
