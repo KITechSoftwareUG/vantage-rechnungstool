@@ -9,12 +9,15 @@
 //   POST /webhook/whatsapp  — Inbound-Messages. HMAC-SHA256 ueber den rohen
 //                             Request-Body mit dem Meta App Secret. Bei
 //                             gueltiger Signatur: Lead in `leads` anlegen/
-//                             updaten, Message in `wa_messages` loggen,
-//                             AI-Antwort generieren und via Graph API
-//                             zurueckschicken.
+//                             updaten, Message in `wa_messages` loggen.
 //
 // Auth: kein verify_jwt. Authentifizierung ist die HMAC-Signatur selbst.
 // Service-Role-Client umgeht RLS.
+//
+// Auto-Reply abgeschaltet 2026-04-26 — Replies kommen jetzt manuell aus
+// /funnel/inbox via zahnfunnel-suggest-reply + zahnfunnel-whatsapp-send.
+// Diese Function loggt nur noch Inbound, generiert keine AI-Antworten und
+// sendet nichts mehr selbstaendig zurueck.
 //
 // Design-Entscheidungen:
 // - Der Body wird als ArrayBuffer gelesen, damit HMAC auf exakt denselben
@@ -22,9 +25,7 @@
 //   wuerde Reihenfolge/Whitespace aendern und die Signatur kippen.
 // - Auf alles ausser Auth-/Config-Fehler antworten wir 200. Meta retried
 //   endlos bei 5xx, und unsere Inbound-DB-Writes sind schon passiert — ein
-//   Retry wuerde nur doppelte AI-Antworten produzieren.
-// - AI- und Outbound-Send sind fail-safe: Inbound-Log ist Pflicht, Reply
-//   ist Kuer.
+//   Retry wuerde nur Duplikate produzieren.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { getConfig } from "../_shared/config.ts";
@@ -35,9 +36,6 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-hub-signature-256",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
 };
-
-const ANTHROPIC_TIMEOUT_MS = 30_000;
-const META_SEND_TIMEOUT_MS = 15_000;
 
 type SupabaseClient = ReturnType<typeof createClient>;
 
@@ -298,8 +296,8 @@ async function handleTextMessage(
   });
   if (inboundErr) {
     console.error("wa_messages inbound insert failed:", inboundErr);
-    // Wir werfen hier bewusst nicht — der AI-Reply ist wichtiger als ein
-    // Log-Insert-Fehler.
+    // Nicht werfen — Lead-Update soll trotzdem laufen, damit message_count
+    // konsistent bleibt.
   }
 
   // --- Lead-Counters updaten ---
@@ -317,145 +315,7 @@ async function handleTextMessage(
     console.error("leads update failed:", updateErr);
   }
 
-  // --- AI-Reply (fail-safe) ---
-  try {
-    const replyText = await generateReply(supabase, body);
-    if (!replyText) {
-      console.info("no reply generated (no api key or empty response)");
-      return;
-    }
-    const outboundId = await sendWhatsAppText(supabase, phone, replyText);
-    const { error: outboundErr } = await supabase.from("wa_messages").insert({
-      lead_id: lead.id,
-      phone,
-      direction: "outbound",
-      body: replyText,
-      wa_message_id: outboundId,
-    });
-    if (outboundErr) {
-      console.error("wa_messages outbound insert failed:", outboundErr);
-    }
-  } catch (err) {
-    console.error("ai reply pipeline failed (non-fatal):", err);
-  }
-}
-
-async function generateReply(
-  supabase: SupabaseClient,
-  userText: string,
-): Promise<string | null> {
-  const [apiKey, modelCfg, beraterName, beraterFirma, beraterTyp] = await Promise.all([
-    getConfig(supabase, "ANTHROPIC_API_KEY"),
-    getConfig(supabase, "ANTHROPIC_MODEL"),
-    getConfig(supabase, "BERATER_NAME"),
-    getConfig(supabase, "BERATER_FIRMA"),
-    getConfig(supabase, "BERATER_TYP"),
-  ]);
-
-  if (!apiKey) return null;
-
-  const model = modelCfg ?? "claude-sonnet-4-5";
-  const name = beraterName ?? "Ihr Berater";
-  const firma = beraterFirma ?? "ExpatVantage";
-  const typ = beraterTyp ?? "Zahnzusatzversicherungen";
-
-  const system =
-    `Du bist ein persoenlicher Assistent fuer ${name} von ${firma}, einem ` +
-    `Beratungs-Profi fuer ${typ}. Antworte auf die WhatsApp-Nachricht des ` +
-    `Interessenten kurz, freundlich und menschlich — als waere ${name} ` +
-    `selbst am Handy. Stelle bei Bedarf eine verbindende Rueckfrage. Keine ` +
-    `Emojis. Keine Signatur. Maximal 3 Saetze.`;
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ANTHROPIC_TIMEOUT_MS);
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: ctrl.signal,
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 400,
-        system,
-        messages: [{ role: "user", content: userText || "(leere Nachricht)" }],
-      }),
-    });
-    const raw = await resp.text();
-    if (!resp.ok) {
-      console.error(`anthropic ${resp.status}:`, raw.slice(0, 500));
-      return null;
-    }
-    let parsed: { content?: Array<{ type?: string; text?: string }> };
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      console.error("anthropic response not json:", raw.slice(0, 200));
-      return null;
-    }
-    const blocks = parsed.content ?? [];
-    const text = blocks
-      .filter((b) => b.type === "text" && typeof b.text === "string")
-      .map((b) => b.text as string)
-      .join("")
-      .trim();
-    return text.length > 0 ? text : null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function sendWhatsAppText(
-  supabase: SupabaseClient,
-  phone: string,
-  body: string,
-): Promise<string | null> {
-  const [accessToken, phoneNumberId, graphVersion] = await Promise.all([
-    getConfig(supabase, "WA_ACCESS_TOKEN"),
-    getConfig(supabase, "WA_PHONE_NUMBER_ID"),
-    getConfig(supabase, "WA_GRAPH_API_VERSION"),
-  ]);
-  if (!accessToken || !phoneNumberId) {
-    console.warn("whatsapp send skipped (missing token or phone_number_id)");
-    return null;
-  }
-  const version = graphVersion ?? "v21.0";
-  const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), META_SEND_TIMEOUT_MS);
-  try {
-    const resp = await fetch(url, {
-      method: "POST",
-      signal: ctrl.signal,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: phone,
-        type: "text",
-        text: { body },
-      }),
-    });
-    const raw = await resp.text();
-    if (!resp.ok) {
-      console.error(`whatsapp send ${resp.status}:`, raw.slice(0, 500));
-      return null;
-    }
-    try {
-      const parsed = JSON.parse(raw) as {
-        messages?: Array<{ id?: string }>;
-      };
-      return parsed.messages?.[0]?.id ?? null;
-    } catch {
-      return null;
-    }
-  } finally {
-    clearTimeout(timer);
-  }
+  // Auto-Reply abgeschaltet 2026-04-26. Replies werden ab jetzt manuell aus
+  // /funnel/inbox geschickt: zahnfunnel-suggest-reply liefert einen Vorschlag,
+  // zahnfunnel-whatsapp-send verschickt ihn auf User-Klick.
 }

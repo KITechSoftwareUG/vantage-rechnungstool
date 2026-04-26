@@ -9,12 +9,15 @@ import {
   MessageCircle,
   Phone,
   Send,
+  Sparkles,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useLeads } from "@/hooks/useLeads";
 import { useSendWaMessage } from "@/hooks/useSendWaMessage";
+import { useSuggestReply } from "@/hooks/useSuggestReply";
+import { useToast } from "@/hooks/use-toast";
 import { WhatsAppThread } from "@/components/funnel/WhatsAppThread";
 import type { Lead, LeadStatus } from "@/types/leads";
 import { cn } from "@/lib/utils";
@@ -114,7 +117,8 @@ export default function InboxPage() {
         </h1>
         <p className="mt-1 text-sm sm:text-base text-muted-foreground">
           WhatsApp-Konversationen mit Leads. Freitext-Antworten nur innerhalb
-          des 24-Stunden-Fensters.
+          des 24-Stunden-Fensters. Die KI generiert nur einen Vorschlag — du
+          sendest manuell.
         </p>
       </div>
 
@@ -224,6 +228,8 @@ function ThreadPanel({
   onBack: () => void;
 }) {
   const send = useSendWaMessage();
+  const suggest = useSuggestReply();
+  const { toast } = useToast();
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -265,6 +271,32 @@ function ThreadPanel({
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleSuggest = () => {
+    if (suggest.isPending) return;
+    const hasDraft = draft.trim().length > 0;
+    if (hasDraft) {
+      // confirm() ist der pragmatische Pfad — kein extra Modal-State, kein
+      // shadcn-AlertDialog noetig. Bei Ablehnung: nichts tun.
+      const ok = window.confirm(
+        "Aktuellen Entwurf durch KI-Vorschlag ersetzen?",
+      );
+      if (!ok) return;
+    }
+    suggest.mutate(
+      { lead_id: lead.id },
+      {
+        onSuccess: ({ suggestion }) => {
+          setDraft(suggestion);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+          toast({
+            title: hasDraft ? "Entwurf ersetzt" : "Vorschlag eingefuegt",
+            description: "Du kannst den Text noch editieren, bevor du sendest.",
+          });
+        },
+      },
+    );
   };
 
   return (
@@ -322,34 +354,52 @@ function ThreadPanel({
           Freitext-Antworten nur innerhalb des 24-Stunden-Fensters nach der
           letzten Inbound-Nachricht. Ausserhalb: nur Template erlaubt.
         </p>
-        <div className="flex items-end gap-2">
-          <Textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Antwort schreiben… (Enter sendet, Shift+Enter = Zeilenumbruch)"
-            rows={1}
-            maxLength={BODY_MAX_CHARS}
-            className="min-h-[40px] resize-none"
-            disabled={send.isPending}
-          />
+        <Textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Antwort schreiben… (Enter sendet, Shift+Enter = Zeilenumbruch)"
+          rows={1}
+          maxLength={BODY_MAX_CHARS}
+          className="min-h-[40px] resize-none"
+          disabled={send.isPending}
+        />
+        <div className="mt-2 flex items-center justify-between gap-2">
           <Button
             type="button"
-            onClick={handleSend}
-            disabled={!canSend}
+            variant="outline"
+            size="sm"
+            onClick={handleSuggest}
+            disabled={suggest.isPending || send.isPending}
             className="shrink-0 gap-2"
+            title="KI-Vorschlag basierend auf Anamnese und bisheriger Konversation"
           >
-            {send.isPending ? (
+            {suggest.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Send className="h-4 w-4" />
+              <Sparkles className="h-4 w-4" />
             )}
-            <span className="hidden sm:inline">Senden</span>
+            <span className="hidden sm:inline">KI-Vorschlag</span>
           </Button>
-        </div>
-        <div className="mt-1 text-right text-[10px] text-muted-foreground">
-          {draft.length}/{BODY_MAX_CHARS}
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-muted-foreground">
+              {draft.length}/{BODY_MAX_CHARS}
+            </span>
+            <Button
+              type="button"
+              onClick={handleSend}
+              disabled={!canSend}
+              className="shrink-0 gap-2"
+            >
+              {send.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">Senden</span>
+            </Button>
+          </div>
         </div>
       </div>
     </div>
