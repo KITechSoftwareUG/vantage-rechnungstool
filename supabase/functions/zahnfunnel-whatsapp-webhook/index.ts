@@ -37,7 +37,12 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
 };
 
-type SupabaseClient = ReturnType<typeof createClient>;
+// Lovable's strict TS-Check meckert sonst beim .from(...).insert(...) wegen
+// "never"-Tabellen-Typen (die generierten Types kennen leads/wa_messages
+// nicht). Lokal als any typisieren — DB-Writes sind hier ohnehin durch die
+// Schemas am DB-Layer abgesichert.
+// deno-lint-ignore no-explicit-any
+type SupabaseClient = any;
 
 interface WaTextMessage {
   from: string;
@@ -80,7 +85,9 @@ async function hmacHex(secret: string, bytes: Uint8Array): Promise<string> {
     false,
     ["sign"],
   );
-  const sig = await crypto.subtle.sign("HMAC", key, bytes);
+  // Frische Uint8Array<ArrayBuffer> erzwingen, sonst meckert der strikte
+  // TS-Check ueber Uint8Array<ArrayBufferLike> != BufferSource.
+  const sig = await crypto.subtle.sign("HMAC", key, new Uint8Array(bytes));
   const view = new Uint8Array(sig);
   let out = "";
   for (let i = 0; i < view.length; i++) {

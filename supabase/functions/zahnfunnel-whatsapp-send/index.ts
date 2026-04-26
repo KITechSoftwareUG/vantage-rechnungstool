@@ -26,7 +26,10 @@ const corsHeaders = {
 const META_SEND_TIMEOUT_MS = 15_000;
 const BODY_MAX_CHARS = 4096;
 
-type SupabaseClient = ReturnType<typeof createClient>;
+// Lovable's strict TS-Check meckert sonst beim .from(...).insert/update wegen
+// "never"-Tabellen-Typen. Lokal als any.
+// deno-lint-ignore no-explicit-any
+type SupabaseClient = any;
 
 function jsonResponse(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {

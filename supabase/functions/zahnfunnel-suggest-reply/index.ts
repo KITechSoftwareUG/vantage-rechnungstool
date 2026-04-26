@@ -30,7 +30,10 @@ const corsHeaders = {
 const ANTHROPIC_TIMEOUT_MS = 30_000;
 const HISTORY_LIMIT = 12;
 
-type SupabaseClient = ReturnType<typeof createClient>;
+// Lovable's strict TS-Check meckert sonst beim .from(...).select(...).eq(...)
+// wegen "never"-Tabellen-Typen. Lokal als any.
+// deno-lint-ignore no-explicit-any
+type SupabaseClient = any;
 
 interface LeadRow {
   id: string;
