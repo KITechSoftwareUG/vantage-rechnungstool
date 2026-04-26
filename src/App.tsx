@@ -23,7 +23,23 @@ import StatusPage from "./pages/StatusPage";
 import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
 
-const queryClient = new QueryClient();
+// React-Query-Defaults fuer ein internes Single-User-Dashboard:
+// - staleTime 30s: kurze Tab-Wechsel triggern keinen Re-Fetch, frische
+//   Daten kommen trotzdem rechtzeitig (Mutationen invalidieren explizit).
+// - refetchOnWindowFocus aus: nervt mehr als es nutzt, das Tool ist kein
+//   Multi-User-Live-Feed.
+// - retry 1: schnelles Error-Feedback statt 7s Backoff bei Schema-/RLS-
+//   Fehlern (z.B. wenn eine Migration noch nicht applied ist). Per-Hook
+//   override moeglich, falls einzelne Endpoints flaky sind.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 const routerBase = import.meta.env.BASE_URL || "/";
 
 function ScrollToTop() {
