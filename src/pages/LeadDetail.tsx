@@ -1,18 +1,23 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { format, formatDistanceToNow } from "date-fns";
 import { de as deLocale } from "date-fns/locale";
 import {
   ArrowLeft,
   CheckCircle2,
+  CheckSquare,
+  Copy,
+  ExternalLink,
   Loader2,
   Mail,
   Phone,
   Smartphone,
+  Sparkles,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -21,9 +26,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useLead, useUpdateLeadStatus } from "@/hooks/useLeads";
+import { useSuggestReply } from "@/hooks/useSuggestReply";
+import { useMarkManualWaSent } from "@/hooks/useMarkManualWaSent";
+import { useToast } from "@/hooks/use-toast";
 import type { Lead, LeadMeta, LeadStatus } from "@/types/leads";
 import { WhatsAppThread } from "@/components/funnel/WhatsAppThread";
 import { cn } from "@/lib/utils";
+
+const FIRST_CONTACT_MAX_CHARS = 4096;
 
 function formatPhone(phone: string): string {
   if (!phone) return "";
@@ -196,8 +206,17 @@ export default function LeadDetail() {
         </div>
       </div>
 
+      {/* Erstkontakt — nur sichtbar solange noch keine WA-Konversation existiert.
+          Sobald die erste Nachricht (manuell oder spaeter via Meta) geloggt ist,
+          uebernimmt die Inbox-Compose-Bar. */}
+      {lead.message_count === 0 && (
+        <div className="animate-fade-in" style={{ animationDelay: "0.1s" }}>
+          <FirstContactCard lead={lead} />
+        </div>
+      )}
+
       {/* Anamnese + Tracking */}
-      <div className="grid gap-4 lg:grid-cols-2 animate-fade-in" style={{ animationDelay: "0.1s" }}>
+      <div className="grid gap-4 lg:grid-cols-2 animate-fade-in" style={{ animationDelay: "0.15s" }}>
         <AnamnesePanel lead={lead} />
         <TrackingPanel lead={lead} />
       </div>
@@ -300,6 +319,178 @@ function ConsentBadge({
       )}
       {label}
     </Badge>
+  );
+}
+
+function FirstContactCard({ lead }: { lead: Lead }) {
+  const suggest = useSuggestReply();
+  const markSent = useMarkManualWaSent();
+  const { toast } = useToast();
+  const [draft, setDraft] = useState("");
+  const [hasOpenedWhatsApp, setHasOpenedWhatsApp] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Auto-Grow analog Inbox-Compose, max 320px hier weil Erstkontakt-Texte
+  // typisch laenger sind als Inline-Antworten.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  }, [draft]);
+
+  const handleGenerate = () => {
+    if (suggest.isPending) return;
+    if (draft.trim().length > 0) {
+      const ok = window.confirm("Aktuellen Entwurf durch KI-Vorschlag ersetzen?");
+      if (!ok) return;
+    }
+    suggest.mutate(
+      { lead_id: lead.id },
+      {
+        onSuccess: ({ suggestion }) => {
+          setDraft(suggestion);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+          toast({
+            title: "Vorschlag eingefuegt",
+            description: "Text noch anpassen, dann WhatsApp oeffnen.",
+          });
+        },
+      },
+    );
+  };
+
+  const handleCopy = async () => {
+    const text = draft.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ title: "In Zwischenablage kopiert" });
+    } catch {
+      toast({
+        title: "Kopieren fehlgeschlagen",
+        description: "Bitte manuell markieren und kopieren.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleOpenWhatsApp = () => {
+    const text = draft.trim();
+    // phone in DB ist E.164 ohne fuehrendes '+' (siehe Form-Webhook
+    // normalizePhone) — exakt das Format, das wa.me erwartet.
+    const url = `https://wa.me/${encodeURIComponent(lead.phone)}${
+      text ? `?text=${encodeURIComponent(text)}` : ""
+    }`;
+    window.open(url, "_blank", "noopener,noreferrer");
+    setHasOpenedWhatsApp(true);
+  };
+
+  const handleMarkSent = () => {
+    const text = draft.trim();
+    if (!text || markSent.isPending) return;
+    markSent.mutate(
+      { lead_id: lead.id, phone: lead.phone, body: text },
+      {
+        onSuccess: () => {
+          // Nach Markieren ist message_count > 0 — die Card wird sich gleich
+          // selbst ausblenden. Trotzdem Draft leeren, falls jemand zurueck-
+          // navigiert bevor das Refetch durch ist.
+          setDraft("");
+          setHasOpenedWhatsApp(false);
+        },
+      },
+    );
+  };
+
+  const canMark = draft.trim().length > 0 && !markSent.isPending;
+
+  return (
+    <div className="glass-card p-4 sm:p-6">
+      <div className="flex items-center gap-2">
+        <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+        <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
+          Erstkontakt
+        </h2>
+      </div>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Vorschlag aus Anamnese generieren, anpassen, dann WhatsApp oeffnen und
+        manuell senden. Nach dem Senden „Als gesendet markieren" — dann landet
+        der Lead in der Inbox.
+      </p>
+
+      <div className="mt-4 space-y-3">
+        <Textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Noch leer. „Vorschlag generieren" klicken oder eigenen Text schreiben."
+          maxLength={FIRST_CONTACT_MAX_CHARS}
+          className="min-h-[100px] resize-none"
+          disabled={markSent.isPending}
+        />
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleGenerate}
+            disabled={suggest.isPending || markSent.isPending}
+            className="gap-2"
+          >
+            {suggest.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            Vorschlag generieren
+          </Button>
+          <span className="text-[10px] text-muted-foreground">
+            {draft.length}/{FIRST_CONTACT_MAX_CHARS}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap gap-2 border-t border-border/60 pt-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleCopy}
+            disabled={draft.trim().length === 0}
+            className="gap-2"
+          >
+            <Copy className="h-4 w-4" />
+            Kopieren
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleOpenWhatsApp}
+            disabled={draft.trim().length === 0}
+            className="gap-2"
+          >
+            <ExternalLink className="h-4 w-4" />
+            WhatsApp oeffnen
+          </Button>
+          <Button
+            type="button"
+            variant={hasOpenedWhatsApp ? "default" : "outline"}
+            size="sm"
+            onClick={handleMarkSent}
+            disabled={!canMark}
+            className="gap-2"
+          >
+            {markSent.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckSquare className="h-4 w-4" />
+            )}
+            Als gesendet markieren
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
