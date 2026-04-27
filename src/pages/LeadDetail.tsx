@@ -6,18 +6,28 @@ import {
   ArrowLeft,
   CheckCircle2,
   CheckSquare,
+  ChevronDown,
   Copy,
   ExternalLink,
+  Heart,
   Loader2,
   Mail,
+  MessageCircleHeart,
   Phone,
+  Quote,
+  ShieldCheck,
   Smartphone,
   Sparkles,
-  XCircle,
+  Stethoscope,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Select,
   SelectContent,
@@ -29,7 +39,7 @@ import { useLead, useUpdateLeadStatus } from "@/hooks/useLeads";
 import { useSuggestReply } from "@/hooks/useSuggestReply";
 import { useMarkManualWaSent } from "@/hooks/useMarkManualWaSent";
 import { useToast } from "@/hooks/use-toast";
-import type { Lead, LeadMeta, LeadStatus } from "@/types/leads";
+import type { Lead, LeadMeta, LeadStatus, LeadTracking } from "@/types/leads";
 import { WhatsAppThread } from "@/components/funnel/WhatsAppThread";
 import { cn } from "@/lib/utils";
 
@@ -52,52 +62,109 @@ function statusLabel(status: LeadStatus): string {
   }
 }
 
-// Labels fuer die Anamnese-Felder aus `meta`. Reihenfolge wird fuer das
-// UI verwendet. Nur Felder mit Wert werden angezeigt (siehe render).
-const ANAMNESE_FIELDS: Array<{
-  key: keyof LeadMeta;
-  label: string;
-}> = [
-  { key: "laufende_behandlungen", label: "Laufende Behandlungen" },
-  { key: "geplante_behandlungen", label: "Geplante Behandlungen" },
-  { key: "hkp_erstellt", label: "HKP erstellt" },
-  { key: "behandlung_begonnen", label: "Behandlung begonnen" },
-  { key: "fehlende_zaehne", label: "Fehlende Zähne" },
-  { key: "ersatz_typ", label: "Ersatz-Typ" },
-  { key: "fehlend_seit", label: "Fehlend seit" },
-  { key: "parodontitis_behandelt", label: "Parodontitis behandelt" },
-  { key: "zahnfleischerkrankung", label: "Zahnfleischerkrankung" },
-  { key: "kieferfehlstellung", label: "Kieferfehlstellung" },
-  { key: "kfo_angeraten", label: "KFO angeraten" },
-];
+function firstName(name: string | null): string {
+  if (!name) return "Lead";
+  const f = name.trim().split(/\s+/)[0];
+  return f || "Lead";
+}
 
-// user_agent ist lang und wenig hilfreich — wir ziehen nur die grobe
-// OS/Browser-Info raus. Fallback: nichts.
-function shortUserAgent(ua: string | undefined): string | null {
-  if (!ua) return null;
-  const os =
-    /Windows NT/.test(ua)
-      ? "Windows"
-      : /Mac OS X/.test(ua)
-      ? "macOS"
-      : /Android/.test(ua)
-      ? "Android"
-      : /iPhone|iPad|iOS/.test(ua)
-      ? "iOS"
-      : /Linux/.test(ua)
-      ? "Linux"
-      : null;
-  const browser =
-    /Edg\//.test(ua)
-      ? "Edge"
-      : /Chrome\//.test(ua)
-      ? "Chrome"
-      : /Firefox\//.test(ua)
-      ? "Firefox"
-      : /Safari\//.test(ua)
-      ? "Safari"
-      : null;
-  return [os, browser].filter(Boolean).join(" · ") || null;
+// Liste menschenlesbarer Aussagen aus den meta-Feldern. Wir zeigen NUR was
+// der Lead positiv angegeben hat — leere/nein-Antworten werden weggelassen,
+// damit die UI kompakt bleibt und der Berater nicht durch "X: nein"-Zeilen
+// scrollen muss. Unbekannte Werte fallen auf "Feld: Wert" zurueck.
+function asYesNo(v: unknown): "ja" | "nein" | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  if (s === "ja" || s === "yes" || s === "true") return "ja";
+  if (s === "nein" || s === "no" || s === "false") return "nein";
+  return null;
+}
+
+function asNonEmptyString(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s.length > 0 ? s : null;
+}
+
+interface Statement {
+  text: string;
+  // Icon-Gruppe fuer optische Auflockerung — pro Kategorie ein eigenes
+  // Lucide-Icon, damit die Liste nicht uniform aussieht.
+  group: "behandlung" | "zaehne" | "vorgeschichte" | "einverstaendnis";
+}
+
+function buildStatements(meta: LeadMeta): Statement[] {
+  const out: Statement[] = [];
+
+  // --- Behandlungs-Status ---
+  if (asYesNo(meta.laufende_behandlungen) === "ja") {
+    out.push({ text: "Hat aktuell laufende zahnaerztliche Behandlungen", group: "behandlung" });
+  }
+  if (asYesNo(meta.geplante_behandlungen) === "ja") {
+    out.push({ text: "Hat eine konkrete Behandlung in Aussicht", group: "behandlung" });
+  }
+  if (asYesNo(meta.hkp_erstellt) === "ja") {
+    out.push({ text: "Heil- und Kostenplan wurde bereits erstellt", group: "behandlung" });
+  }
+  if (asYesNo(meta.behandlung_begonnen) === "ja") {
+    out.push({ text: "Eine Behandlung hat bereits begonnen", group: "behandlung" });
+  }
+
+  // --- Zahn-Situation ---
+  const fehlend = asNonEmptyString(meta.fehlende_zaehne);
+  if (fehlend) {
+    const yn = asYesNo(fehlend);
+    if (yn === "ja") {
+      out.push({ text: "Es fehlen Zaehne", group: "zaehne" });
+    } else if (yn !== "nein") {
+      out.push({ text: `Fehlende Zaehne: ${fehlend}`, group: "zaehne" });
+    }
+  }
+  const ersatz = asNonEmptyString(meta.ersatz_typ);
+  if (ersatz) {
+    out.push({ text: `Wuenscht als Zahnersatz: ${ersatz}`, group: "zaehne" });
+  }
+  const fehlendSeit = asNonEmptyString(meta.fehlend_seit);
+  if (fehlendSeit) {
+    out.push({ text: `Zahnverlust seit: ${fehlendSeit}`, group: "zaehne" });
+  }
+
+  // --- Vorgeschichte ---
+  if (asYesNo(meta.parodontitis_behandelt) === "ja") {
+    out.push({ text: "Parodontitis-Behandlung in der Vorgeschichte", group: "vorgeschichte" });
+  }
+  if (asYesNo(meta.zahnfleischerkrankung) === "ja") {
+    out.push({ text: "Hat eine Zahnfleischerkrankung angegeben", group: "vorgeschichte" });
+  }
+  if (asYesNo(meta.kieferfehlstellung) === "ja") {
+    out.push({ text: "Hat eine Kieferfehlstellung angegeben", group: "vorgeschichte" });
+  }
+  if (asYesNo(meta.kfo_angeraten) === "ja") {
+    out.push({ text: "Eine KFO-Behandlung wurde aerztlich angeraten", group: "vorgeschichte" });
+  }
+
+  // --- Einverstaendnis ---
+  if (asYesNo(meta.einverstaendnis) === "ja") {
+    out.push({ text: "Will per WhatsApp kontaktiert werden", group: "einverstaendnis" });
+  }
+  if (meta.gesundheitsdaten_einwilligung === true) {
+    out.push({ text: "Hat in Verarbeitung von Gesundheitsdaten eingewilligt", group: "einverstaendnis" });
+  }
+
+  return out;
+}
+
+function statementIcon(group: Statement["group"]) {
+  switch (group) {
+    case "behandlung":
+      return <Stethoscope className="h-4 w-4 shrink-0 text-primary" />;
+    case "zaehne":
+      return <Heart className="h-4 w-4 shrink-0 text-warning" />;
+    case "vorgeschichte":
+      return <CheckCircle2 className="h-4 w-4 shrink-0 text-muted-foreground" />;
+    case "einverstaendnis":
+      return <ShieldCheck className="h-4 w-4 shrink-0 text-success" />;
+  }
 }
 
 export default function LeadDetail() {
@@ -133,7 +200,8 @@ export default function LeadDetail() {
 
   const created = (() => {
     try {
-      return format(new Date(lead.created_at), "dd.MM.yyyy · HH:mm 'Uhr'", {
+      return formatDistanceToNow(new Date(lead.created_at), {
+        addSuffix: true,
         locale: deLocale,
       });
     } catch {
@@ -176,7 +244,7 @@ export default function LeadDetail() {
                   <span className="truncate">{lead.email}</span>
                 </span>
               )}
-              <span className="text-xs sm:text-sm">{created}</span>
+              <span className="text-xs sm:text-sm">Eingegangen {created}</span>
             </div>
           </div>
 
@@ -206,6 +274,11 @@ export default function LeadDetail() {
         </div>
       </div>
 
+      {/* Was der Lead angegeben hat — natursprachlich, immer sichtbar */}
+      <div className="animate-fade-in" style={{ animationDelay: "0.05s" }}>
+        <SaidByLead lead={lead} />
+      </div>
+
       {/* Erstkontakt — nur sichtbar solange noch keine WA-Konversation existiert.
           Sobald die erste Nachricht (manuell oder spaeter via Meta) geloggt ist,
           uebernimmt die Inbox-Compose-Bar. */}
@@ -215,110 +288,66 @@ export default function LeadDetail() {
         </div>
       )}
 
-      {/* Anamnese + Tracking */}
-      <div className="grid gap-4 lg:grid-cols-2 animate-fade-in" style={{ animationDelay: "0.15s" }}>
-        <AnamnesePanel lead={lead} />
-        <TrackingPanel lead={lead} />
-      </div>
+      {/* WhatsApp-Konversation — nur wenn schon was da ist */}
+      {lead.message_count > 0 && (
+        <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.15s" }}>
+          <WhatsAppThread leadId={lead.id} />
+        </div>
+      )}
 
-      {/* WhatsApp-Konversation */}
-      <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.2s" }}>
-        <WhatsAppThread leadId={lead.id} />
+      {/* Tracking — collapsed, weil technische Detail-Info, nicht primaer */}
+      <div className="animate-fade-in" style={{ animationDelay: "0.2s" }}>
+        <TrackingCollapsible tracking={lead.meta.tracking} />
       </div>
     </div>
   );
 }
 
-function AnamnesePanel({ lead }: { lead: Lead }) {
-  const rows = ANAMNESE_FIELDS.map((f) => {
-    const raw = lead.meta[f.key];
-    const value =
-      typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
-    return value.trim().length > 0 ? { label: f.label, value } : null;
-  }).filter((r): r is { label: string; value: string } => r !== null);
+function SaidByLead({ lead }: { lead: Lead }) {
+  const statements = buildStatements(lead.meta);
+  const anliegen = asNonEmptyString(lead.meta.anliegen_summary);
+  const fName = firstName(lead.name);
 
-  const consent = lead.meta.einverstaendnis;
-  const healthData = lead.meta.gesundheitsdaten_einwilligung;
+  if (!anliegen && statements.length === 0) {
+    return (
+      <div className="glass-card p-4 sm:p-6">
+        <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
+          Das hat {fName} angegeben
+        </h2>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Keine Anamnese-Daten uebermittelt.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="glass-card p-4 sm:p-6">
-      <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
-        Anamnese
-      </h2>
-      {lead.meta.anliegen_summary && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          {lead.meta.anliegen_summary}
-        </p>
-      )}
-
-      <div className="mt-4 space-y-2">
-        {rows.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground">
-            Keine Anamnese-Daten erfasst.
-          </p>
-        ) : (
-          rows.map((r) => (
-            <div
-              key={r.label}
-              className="flex items-start justify-between gap-3 border-b border-border/50 py-2 last:border-b-0"
-            >
-              <span className="text-sm text-muted-foreground">{r.label}</span>
-              <span className="text-right text-sm font-medium text-foreground">
-                {r.value}
-              </span>
-            </div>
-          ))
-        )}
+      <div className="flex items-center gap-2">
+        <MessageCircleHeart className="h-4 w-4 shrink-0 text-primary" />
+        <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
+          Das hat {fName} angegeben
+        </h2>
       </div>
 
-      {(consent !== undefined || healthData !== undefined) && (
-        <div className="mt-4 flex flex-wrap gap-2">
-          {consent !== undefined && (
-            <ConsentBadge
-              label="Einverständnis"
-              granted={
-                typeof consent === "string"
-                  ? consent.toLowerCase() === "ja"
-                  : !!consent
-              }
-            />
-          )}
-          {healthData !== undefined && (
-            <ConsentBadge
-              label="Gesundheitsdaten"
-              granted={!!healthData}
-            />
-          )}
-        </div>
+      {anliegen && (
+        <blockquote className="mt-4 rounded-lg border-l-4 border-primary/60 bg-primary/5 px-4 py-3">
+          <Quote className="float-left mr-2 h-3.5 w-3.5 text-primary/70" />
+          <p className="text-sm italic text-foreground">{anliegen}</p>
+        </blockquote>
+      )}
+
+      {statements.length > 0 && (
+        <ul className="mt-4 space-y-2.5">
+          {statements.map((s, i) => (
+            <li key={i} className="flex items-start gap-2.5 text-sm text-foreground">
+              {statementIcon(s.group)}
+              <span>{s.text}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
-  );
-}
-
-function ConsentBadge({
-  label,
-  granted,
-}: {
-  label: string;
-  granted: boolean;
-}) {
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "gap-1 border",
-        granted
-          ? "border-success/40 bg-success/10 text-success"
-          : "border-destructive/40 bg-destructive/10 text-destructive",
-      )}
-    >
-      {granted ? (
-        <CheckCircle2 className="h-3 w-3" />
-      ) : (
-        <XCircle className="h-3 w-3" />
-      )}
-      {label}
-    </Badge>
   );
 }
 
@@ -327,11 +356,12 @@ function FirstContactCard({ lead }: { lead: Lead }) {
   const markSent = useMarkManualWaSent();
   const { toast } = useToast();
   const [draft, setDraft] = useState("");
+  const [analysis, setAnalysis] = useState<string | null>(null);
   const [hasOpenedWhatsApp, setHasOpenedWhatsApp] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const autoFetchedRef = useRef(false);
 
-  // Auto-Grow analog Inbox-Compose, max 320px hier weil Erstkontakt-Texte
-  // typisch laenger sind als Inline-Antworten.
+  // Auto-Grow: Textarea waechst mit Inhalt bis 320px.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -339,26 +369,38 @@ function FirstContactCard({ lead }: { lead: Lead }) {
     el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
   }, [draft]);
 
-  const handleGenerate = () => {
+  const runSuggest = (replaceConfirm: boolean) => {
     if (suggest.isPending) return;
-    if (draft.trim().length > 0) {
-      const ok = window.confirm("Aktuellen Entwurf durch KI-Vorschlag ersetzen?");
+    if (replaceConfirm && draft.trim().length > 0) {
+      const ok = window.confirm("Aktuellen Entwurf durch neuen KI-Vorschlag ersetzen?");
       if (!ok) return;
     }
     suggest.mutate(
-      { lead_id: lead.id },
+      { lead_id: lead.id, mode: "first_contact" },
       {
-        onSuccess: ({ suggestion }) => {
+        onSuccess: ({ suggestion, analysis: a }) => {
           setDraft(suggestion);
-          requestAnimationFrame(() => textareaRef.current?.focus());
-          toast({
-            title: "Vorschlag eingefuegt",
-            description: "Text noch anpassen, dann WhatsApp oeffnen.",
-          });
+          if (a) setAnalysis(a);
+          // Bei expliziter Generierung Fokus in die Textarea — bei Auto-Fetch
+          // nicht, damit man nicht aus dem aktuellen Scroll-Kontext gerissen
+          // wird.
+          if (replaceConfirm) {
+            requestAnimationFrame(() => textareaRef.current?.focus());
+            toast({ title: "Neuer Vorschlag eingefuegt" });
+          }
         },
       },
     );
   };
+
+  // Beim ersten Mount einmal automatisch generieren, damit der Berater nicht
+  // erst klicken muss. Strict-Mode-Doppel-Mount via Ref-Guard abfangen.
+  useEffect(() => {
+    if (autoFetchedRef.current) return;
+    autoFetchedRef.current = true;
+    runSuggest(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lead.id]);
 
   const handleCopy = async () => {
     const text = draft.trim();
@@ -377,8 +419,7 @@ function FirstContactCard({ lead }: { lead: Lead }) {
 
   const handleOpenWhatsApp = () => {
     const text = draft.trim();
-    // phone in DB ist E.164 ohne fuehrendes '+' (siehe Form-Webhook
-    // normalizePhone) — exakt das Format, das wa.me erwartet.
+    // phone in DB ist E.164 ohne fuehrendes '+' — exakt das Format fuer wa.me.
     const url = `https://wa.me/${encodeURIComponent(lead.phone)}${
       text ? `?text=${encodeURIComponent(text)}` : ""
     }`;
@@ -393,9 +434,6 @@ function FirstContactCard({ lead }: { lead: Lead }) {
       { lead_id: lead.id, phone: lead.phone, body: text },
       {
         onSuccess: () => {
-          // Nach Markieren ist message_count > 0 — die Card wird sich gleich
-          // selbst ausblenden. Trotzdem Draft leeren, falls jemand zurueck-
-          // navigiert bevor das Refetch durch ist.
           setDraft("");
           setHasOpenedWhatsApp(false);
         },
@@ -404,30 +442,56 @@ function FirstContactCard({ lead }: { lead: Lead }) {
   };
 
   const canMark = draft.trim().length > 0 && !markSent.isPending;
+  const isInitialLoad = suggest.isPending && draft.length === 0;
 
   return (
     <div className="glass-card p-4 sm:p-6">
       <div className="flex items-center gap-2">
         <Sparkles className="h-4 w-4 shrink-0 text-primary" />
         <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
-          Erstkontakt
+          Erstkontakt vorbereiten
         </h2>
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
-        Vorschlag aus Anamnese generieren, anpassen, dann WhatsApp oeffnen und
-        manuell senden. Nach dem Senden „Als gesendet markieren" — dann landet
-        der Lead in der Inbox.
+        Vorschlag aus den Lead-Daten generiert. Anpassen, dann WhatsApp oeffnen
+        und absenden — zum Schluss „Als gesendet markieren".
       </p>
 
+      {/* Analyse fuer den Berater */}
+      {(analysis || isInitialLoad) && (
+        <div className="mt-4 rounded-lg border border-border/60 bg-muted/40 p-3 sm:p-4">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <Sparkles className="h-3 w-3 text-primary" />
+            Kurz-Analyse
+          </div>
+          {isInitialLoad ? (
+            <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Wird generiert…
+            </div>
+          ) : (
+            <p className="mt-2 text-sm leading-relaxed text-foreground">{analysis}</p>
+          )}
+        </div>
+      )}
+
+      {/* Erstnachricht-Entwurf */}
       <div className="mt-4 space-y-3">
+        <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Erstnachricht
+        </label>
         <Textarea
           ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={"Noch leer. „Vorschlag generieren“ klicken oder eigenen Text schreiben."}
+          placeholder={
+            isInitialLoad
+              ? "Wird generiert…"
+              : "Noch leer. „Neu generieren" klicken oder eigenen Text schreiben."
+          }
           maxLength={FIRST_CONTACT_MAX_CHARS}
-          className="min-h-[100px] resize-none"
-          disabled={markSent.isPending}
+          className="min-h-[140px] resize-none"
+          disabled={markSent.isPending || isInitialLoad}
         />
 
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -435,7 +499,7 @@ function FirstContactCard({ lead }: { lead: Lead }) {
             type="button"
             variant="outline"
             size="sm"
-            onClick={handleGenerate}
+            onClick={() => runSuggest(true)}
             disabled={suggest.isPending || markSent.isPending}
             className="gap-2"
           >
@@ -444,7 +508,7 @@ function FirstContactCard({ lead }: { lead: Lead }) {
             ) : (
               <Sparkles className="h-4 w-4" />
             )}
-            Vorschlag generieren
+            Neu generieren
           </Button>
           <span className="text-[10px] text-muted-foreground">
             {draft.length}/{FIRST_CONTACT_MAX_CHARS}
@@ -494,8 +558,37 @@ function FirstContactCard({ lead }: { lead: Lead }) {
   );
 }
 
-function TrackingPanel({ lead }: { lead: Lead }) {
-  const t = lead.meta.tracking ?? {};
+// user_agent ist lang und wenig hilfreich — nur grobe OS/Browser-Info.
+function shortUserAgent(ua: string | undefined): string | null {
+  if (!ua) return null;
+  const os =
+    /Windows NT/.test(ua)
+      ? "Windows"
+      : /Mac OS X/.test(ua)
+      ? "macOS"
+      : /Android/.test(ua)
+      ? "Android"
+      : /iPhone|iPad|iOS/.test(ua)
+      ? "iOS"
+      : /Linux/.test(ua)
+      ? "Linux"
+      : null;
+  const browser =
+    /Edg\//.test(ua)
+      ? "Edge"
+      : /Chrome\//.test(ua)
+      ? "Chrome"
+      : /Firefox\//.test(ua)
+      ? "Firefox"
+      : /Safari\//.test(ua)
+      ? "Safari"
+      : null;
+  return [os, browser].filter(Boolean).join(" · ") || null;
+}
+
+function TrackingCollapsible({ tracking }: { tracking: LeadTracking | undefined }) {
+  const [open, setOpen] = useState(false);
+  const t = tracking ?? {};
 
   const utm = [
     t.utm_source && `source: ${t.utm_source}`,
@@ -511,13 +604,14 @@ function TrackingPanel({ lead }: { lead: Lead }) {
     t.viewport && `Viewport ${t.viewport}`,
   ].filter((s): s is string => !!s);
 
-  const rows: Array<{ label: string; value: ReactNode }> = [];
+  type Row = { label: string; value: ReactNode };
+  const rows: Row[] = [];
 
   if (utm.length > 0) {
     rows.push({
       label: "UTM",
       value: (
-        <div className="flex flex-wrap gap-1 justify-end">
+        <div className="flex flex-wrap justify-end gap-1">
           {utm.map((u) => (
             <Badge key={u} variant="outline" className="font-normal">
               {u}
@@ -555,7 +649,7 @@ function TrackingPanel({ lead }: { lead: Lead }) {
   }
   if (deviceParts.length > 0) {
     rows.push({
-      label: "Gerät",
+      label: "Geraet",
       value: (
         <span className="inline-flex items-center gap-1.5 text-foreground">
           <Smartphone className="h-3 w-3 text-muted-foreground" />
@@ -568,17 +662,13 @@ function TrackingPanel({ lead }: { lead: Lead }) {
     rows.push({ label: "Sprache", value: t.language });
   }
   if (typeof t.duration_seconds === "number") {
-    rows.push({
-      label: "Formular-Dauer",
-      value: `${t.duration_seconds}s`,
-    });
+    rows.push({ label: "Formular-Dauer", value: `${t.duration_seconds}s` });
   }
   if (t.form_completed_at) {
     try {
       rows.push({
         label: "Abgeschlossen",
-        value: formatDistanceToNow(new Date(t.form_completed_at), {
-          addSuffix: true,
+        value: format(new Date(t.form_completed_at), "dd.MM.yyyy · HH:mm 'Uhr'", {
           locale: deLocale,
         }),
       });
@@ -587,34 +677,41 @@ function TrackingPanel({ lead }: { lead: Lead }) {
     }
   }
 
-  return (
-    <div className="glass-card p-4 sm:p-6">
-      <h2 className="font-heading text-base sm:text-lg font-semibold text-foreground">
-        Tracking
-      </h2>
+  if (rows.length === 0) return null;
 
-      <div className="mt-4 space-y-2">
-        {rows.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground">
-            Keine Tracking-Daten uebermittelt.
-          </p>
-        ) : (
-          rows.map((r, i) => (
-            <div
-              key={`${r.label}-${i}`}
-              className="flex items-start justify-between gap-3 border-b border-border/50 py-2 last:border-b-0"
-            >
-              <span className="shrink-0 text-sm text-muted-foreground">
-                {r.label}
-              </span>
-              <div className="min-w-0 max-w-[70%] text-right text-sm">
-                {r.value}
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
+        >
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Tracking-Details ({rows.length})
+          </span>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-2">
+        <div className="glass-card p-4 sm:p-6">
+          <div className="space-y-2">
+            {rows.map((r, i) => (
+              <div
+                key={`${r.label}-${i}`}
+                className="flex items-start justify-between gap-3 border-b border-border/50 py-2 last:border-b-0"
+              >
+                <span className="shrink-0 text-sm text-muted-foreground">{r.label}</span>
+                <div className="min-w-0 max-w-[70%] text-right text-sm">{r.value}</div>
               </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
+            ))}
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
-

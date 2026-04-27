@@ -10,12 +10,19 @@
 // (gleiches Pattern wie matching-agent), fallback auf ANTHROPIC_API_KEY
 // in app_config. So muss der User keinen zweiten Key konfigurieren.
 //
+// Modes:
+//   - "reply" (default): Folge-Antwort innerhalb laufender Konversation.
+//     Returns { ok, suggestion, provider }.
+//   - "first_contact": Salesy Erstnachricht + Kurz-Analyse fuer den Berater.
+//     Returns { ok, suggestion, analysis, provider } — JSON-Mode beim Modell.
+//
 // Flow:
-//   1. lead_id validieren
+//   1. lead_id + mode validieren
 //   2. Lead + letzte 12 wa_messages laden
-//   3. AI mit System-Prompt + Anamnese + Konversation aufrufen
+//   3. AI mit mode-spezifischem System-Prompt + Anamnese + Konversation
 //   4. Vorschlag zurueckgeben — KEIN Outbound-Send, das macht der User
-//      manuell ueber zahnfunnel-whatsapp-send.
+//      manuell ueber zahnfunnel-whatsapp-send (oder wa.me bei Erstkontakt
+//      solange Meta nicht eingerichtet ist).
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { getConfig } from "../_shared/config.ts";
@@ -161,6 +168,11 @@ Deno.serve(async (req) => {
     return jsonResponse(422, { ok: false, error: "lead_id_invalid" });
   }
 
+  // Mode-Default ist "reply" — alle bestehenden Aufrufer (Inbox-Compose)
+  // schicken kein mode-Feld und sollen das alte Verhalten behalten.
+  const mode: "reply" | "first_contact" =
+    payload.mode === "first_contact" ? "first_contact" : "reply";
+
   // --- Lead laden ---
   const { data: leadData, error: leadErr } = await supabase
     .from("leads")
@@ -220,7 +232,13 @@ Deno.serve(async (req) => {
   const firma = beraterFirma ?? "ExpatVantage";
   const typ = beraterTyp ?? "Zahnzusatzversicherungen";
 
-  const system =
+  const leadFirstName = (() => {
+    const n = (lead.name ?? "").trim();
+    if (!n) return null;
+    return n.split(/\s+/)[0] || null;
+  })();
+
+  const replySystem =
     `Du bist persoenlicher Assistent fuer ${name} von ${firma}, einem ` +
     `Beratungs-Profi fuer ${typ}. Schreibe einen kurzen, freundlichen, ` +
     `menschlichen Antwortvorschlag auf die letzte WhatsApp-Nachricht des ` +
@@ -230,12 +248,46 @@ Deno.serve(async (req) => {
     `Konversation schon laeuft. Keine Signatur. Maximal 3 Saetze. Nur den ` +
     `Antwort-Text ausgeben, keine Erklaerung.`;
 
+  // first_contact: Erstnachricht via WhatsApp. Lead hat noch nichts geschrieben,
+  // nur das Formular ausgefuellt. Tone: persoenlich, salesy, "Du", konkret auf
+  // angekreuzte Anamnese-Felder Bezug nehmend, klare CTA.
+  const firstContactSystem =
+    `Du bist ${name} von ${firma}, persoenlicher Ansprechpartner fuer ${typ}. ` +
+    `Du schreibst gerade selbst auf WhatsApp an einen frischen Interessenten, ` +
+    `der das Anfrage-Formular ausgefuellt hat. Tonalitaet: locker per Du, ` +
+    `direkt, salesy aber sympathisch — wie ein Berater, der Bock auf den ` +
+    `Termin hat. Stil: kurze Saetze, ein bisschen Schwung, KEINE Floskeln ` +
+    `wie "Ich hoffe es geht Ihnen gut". Keine Emojis. Keine Signatur.\n\n` +
+    `Aufbau der Nachricht (3-5 kurze Saetze, EIN Absatz):\n` +
+    `1) "Hey ${leadFirstName ?? "[Vorname]"}, hier ist ${name} – dein ` +
+    `persoenlicher Ansprechpartner bei ${firma}."\n` +
+    `2) Konkreter Bezug auf 1-2 Dinge, die er/sie im Formular angegeben hat ` +
+    `(z.B. "Hab gesehen du hast X angekreuzt / Y eingetragen"). Niemals ` +
+    `medizinische Details aufzaehlen, die er nicht selbst genannt hat.\n` +
+    `3) Ein konkretes salesy Angebot: ein passendes Angebot rausschicken, ` +
+    `Tarife durchgehen, kurzer Call. KEIN "Wir melden uns".\n` +
+    `4) Eine niedrigschwellige Frage am Ende, auf die er einfach mit "Ja" ` +
+    `oder einem Wunschzeitpunkt antworten kann.\n\n` +
+    `Du bekommst zusaetzlich eine "Analyse" (2-3 Saetze, fuer den Berater ` +
+    `zum schnellen Reinkommen, NICHT an den Lead): Wer ist das, was will er, ` +
+    `was ist der Sales-Hook?\n\n` +
+    `Antworte AUSSCHLIESSLICH als JSON in genau diesem Format:\n` +
+    `{"analysis": "...", "suggestion": "..."}`;
+
+  const system = mode === "first_contact" ? firstContactSystem : replySystem;
+
+  const userPromptIntro =
+    mode === "first_contact"
+      ? `Generiere die Erstnachricht (suggestion) und die Berater-Analyse (analysis) fuer diesen frischen Lead.`
+      : `Generiere den naechsten ausgehenden Antwort-Vorschlag.`;
+
   const userPrompt =
+    `Lead-Name: ${lead.name ?? "(unbekannt)"}\n` +
     `Anamnese (vom Lead aus dem Formular):\n` +
     `${formatMeta(lead.meta)}\n\n` +
     `WhatsApp-Konversation (chronologisch):\n` +
     `${formatHistory(messages)}\n\n` +
-    `Generiere den naechsten ausgehenden Antwort-Vorschlag.`;
+    `${userPromptIntro}`;
 
   // --- AI-Call ---
   const ctrl = new AbortController();
@@ -246,6 +298,19 @@ Deno.serve(async (req) => {
 
   if (provider === "openai") {
     endpoint = "https://api.openai.com/v1/chat/completions";
+    // first_contact braucht ~600 Tokens (analysis + suggestion), reply ~400.
+    const openaiBody: Record<string, unknown> = {
+      model: openaiModelCfg ?? "gpt-4o-mini",
+      max_tokens: mode === "first_contact" ? 600 : 400,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: userPrompt },
+      ],
+    };
+    if (mode === "first_contact") {
+      // OpenAI JSON-Mode garantiert geschachteltes JSON-Output.
+      openaiBody.response_format = { type: "json_object" };
+    }
     requestInit = {
       method: "POST",
       signal: ctrl.signal,
@@ -253,14 +318,7 @@ Deno.serve(async (req) => {
         Authorization: `Bearer ${openaiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: openaiModelCfg ?? "gpt-4o-mini",
-        max_tokens: 400,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(openaiBody),
     };
   } else {
     endpoint = "https://api.anthropic.com/v1/messages";
@@ -274,7 +332,7 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         model: anthropicModelCfg ?? "claude-sonnet-4-5",
-        max_tokens: 400,
+        max_tokens: mode === "first_contact" ? 600 : 400,
         system,
         messages: [{ role: "user", content: userPrompt }],
       }),
@@ -306,15 +364,16 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Response-Format pro Provider extrahieren
-  let suggestion = "";
+  // Response-Format pro Provider extrahieren — das ist der Roh-Text vom
+  // Modell. Bei first_contact ist der Roh-Text selbst JSON `{analysis, suggestion}`.
+  let modelText = "";
   try {
     const parsed = JSON.parse(raw);
     if (provider === "openai") {
-      suggestion = String(parsed?.choices?.[0]?.message?.content ?? "").trim();
+      modelText = String(parsed?.choices?.[0]?.message?.content ?? "").trim();
     } else {
       const blocks: Array<{ type?: string; text?: string }> = parsed?.content ?? [];
-      suggestion = blocks
+      modelText = blocks
         .filter((b) => b.type === "text" && typeof b.text === "string")
         .map((b) => b.text as string)
         .join("")
@@ -325,9 +384,35 @@ Deno.serve(async (req) => {
     return jsonResponse(502, { ok: false, error: `${provider}_invalid_json` });
   }
 
-  if (suggestion.length === 0) {
+  if (modelText.length === 0) {
     return jsonResponse(502, { ok: false, error: `${provider}_empty_response` });
   }
 
-  return jsonResponse(200, { ok: true, suggestion, provider });
+  if (mode === "first_contact") {
+    // Anthropic kennt keinen JSON-Mode — wir bitten im Prompt darum und
+    // fischen das JSON-Objekt notfalls mit einem regex-Fallback raus,
+    // falls das Modell drumherum noch was schreibt.
+    let parsedJson: { analysis?: unknown; suggestion?: unknown } | null = null;
+    try {
+      parsedJson = JSON.parse(modelText) as { analysis?: unknown; suggestion?: unknown };
+    } catch {
+      const match = modelText.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          parsedJson = JSON.parse(match[0]) as { analysis?: unknown; suggestion?: unknown };
+        } catch {
+          // bleibt null
+        }
+      }
+    }
+    const analysis = typeof parsedJson?.analysis === "string" ? parsedJson.analysis.trim() : "";
+    const suggestion = typeof parsedJson?.suggestion === "string" ? parsedJson.suggestion.trim() : "";
+    if (!analysis || !suggestion) {
+      console.error(`${provider} first_contact non-conforming JSON:`, modelText.slice(0, 300));
+      return jsonResponse(502, { ok: false, error: `${provider}_invalid_json` });
+    }
+    return jsonResponse(200, { ok: true, suggestion, analysis, provider });
+  }
+
+  return jsonResponse(200, { ok: true, suggestion: modelText, provider });
 });

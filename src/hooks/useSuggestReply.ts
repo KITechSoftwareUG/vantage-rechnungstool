@@ -6,16 +6,22 @@ import { useToast } from "@/hooks/use-toast";
 interface SuggestResponse {
   ok: boolean;
   suggestion?: string;
+  analysis?: string;
   error?: string;
   detail?: string;
 }
 
 interface SuggestVariables {
   lead_id: string;
+  // Default "reply" — Inbox-Compose ruft ohne mode auf und kriegt das alte
+  // Verhalten. "first_contact" liefert zusaetzlich `analysis` fuer die
+  // Erstkontakt-Card im LeadDetail.
+  mode?: "reply" | "first_contact";
 }
 
 interface SuggestResult {
   suggestion: string;
+  analysis: string | null;
 }
 
 // Mappt Edge-Function-Errors auf Klartext fuer den Toast. Codes sind
@@ -75,10 +81,10 @@ export function useSuggestReply() {
   const { toast } = useToast();
 
   return useMutation<SuggestResult, Error, SuggestVariables>({
-    mutationFn: async ({ lead_id }): Promise<SuggestResult> => {
+    mutationFn: async ({ lead_id, mode }): Promise<SuggestResult> => {
       const { data, error } = await supabase.functions.invoke<SuggestResponse>(
         "zahnfunnel-suggest-reply",
-        { body: { lead_id } },
+        { body: mode ? { lead_id, mode } : { lead_id } },
       );
 
       if (error) {
@@ -100,7 +106,10 @@ export function useSuggestReply() {
           { response: data },
         );
       }
-      return { suggestion: data.suggestion };
+      return {
+        suggestion: data.suggestion,
+        analysis: typeof data.analysis === "string" ? data.analysis : null,
+      };
     },
     // Erfolgs-Toast macht der UI-Caller — er hat den Kontext, ob ein Draft
     // ueberschrieben wurde und ob das ein "Ersetzt"- oder "Eingefuegt"-Toast
