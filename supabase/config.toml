@@ -12,3 +12,15 @@ verify_jwt = false
 
 [functions.zahnfunnel-whatsapp-webhook]
 verify_jwt = false
+
+# verify_jwt = true ist eigentlich der Default — wir setzen ihn fuer die drei
+# folgenden Functions explizit, weil Lovables Deploy-Pipeline ausgelassene
+# Bloecke nicht ehrt und die Functions sonst unauthentifiziert erreichbar sind.
+[functions.zahnfunnel-whatsapp-send]
+verify_jwt = true
+
+[functions.zahnfunnel-suggest-reply]
+verify_jwt = true
+
+[functions.zahnfunnel-health-check]
+verify_jwt = true
