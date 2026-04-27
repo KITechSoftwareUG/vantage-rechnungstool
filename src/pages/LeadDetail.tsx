@@ -454,7 +454,7 @@ function FirstContactCard({ lead }: { lead: Lead }) {
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
         Vorschlag aus den Lead-Daten generiert. Anpassen, dann WhatsApp oeffnen
-        und absenden — zum Schluss „Als gesendet markieren".
+        und absenden — zum Schluss auf "Als gesendet markieren" klicken.
       </p>
 
       {/* Analyse fuer den Berater */}
@@ -487,7 +487,7 @@ function FirstContactCard({ lead }: { lead: Lead }) {
           placeholder={
             isInitialLoad
               ? "Wird generiert…"
-              : "Noch leer. „Neu generieren" klicken oder eigenen Text schreiben."
+              : "Noch leer. Auf 'Neu generieren' klicken oder eigenen Text schreiben."
           }
           maxLength={FIRST_CONTACT_MAX_CHARS}
           className="min-h-[140px] resize-none"
