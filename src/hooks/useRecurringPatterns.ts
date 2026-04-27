@@ -88,13 +88,28 @@ export function useDeleteRecurringPattern() {
   });
 }
 
-// Helper function to check if a description matches any recurring pattern
+// Mindest-Pattern-Laenge gegen Greedy-Matches: ein Pattern unter 4 Zeichen
+// (z.B. "AG", "abc") triggert auf zu vielen unverwandten Buchungen. Wenn jemand
+// das wirklich braucht, soll er ein laengeres Pattern speichern.
+const MIN_PATTERN_LENGTH = 4;
+
+// Helper function to check if a description matches any recurring pattern.
+//
+// Frueher: `desc.includes(pattern) || pattern.includes(desc)`. Die zweite
+// Klausel war greedy — wenn der User ein langes Pattern (z.B. eine ganze
+// Buchungszeile) gespeichert hatte, matched jede kurze Buchung, deren ganzer
+// Description-Text irgendwo im Pattern als Substring auftauchte. Folge: ganze
+// Monate (z.B. Maerz 2026) verschwanden aus "Offen", weil eine "Gehalt"-
+// Buchung in einem alten Pattern wie "Gehalt Firma XYZ Mitarbeiter 12345"
+// enthalten war. Jetzt nur noch desc.includes(pattern) — die Description
+// muss das Pattern als Substring enthalten, nicht umgekehrt.
 export function matchesRecurringPattern(description: string, patterns: RecurringPattern[]): boolean {
   const normalizedDesc = description.toLowerCase().trim();
-  
+  if (!normalizedDesc) return false;
+
   return patterns.some(pattern => {
     const normalizedPattern = pattern.descriptionPattern.toLowerCase().trim();
-    // Check if description contains the pattern or pattern contains the description
-    return normalizedDesc.includes(normalizedPattern) || normalizedPattern.includes(normalizedDesc);
+    if (normalizedPattern.length < MIN_PATTERN_LENGTH) return false;
+    return normalizedDesc.includes(normalizedPattern);
   });
 }
