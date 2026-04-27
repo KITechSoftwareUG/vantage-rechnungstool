@@ -52,10 +52,6 @@ const SECTIONS: Array<{ title: string; keys: string[] }> = [
     title: "Berater-Profil",
     keys: ["BERATER_NAME", "BERATER_FIRMA", "BERATER_TYP"],
   },
-  {
-    title: "Verhalten",
-    keys: ["CONTACT_DELAY_MINUTES"],
-  },
 ];
 
 // Keys die als Textarea (mehrzeilig) gerendert werden sollen.
