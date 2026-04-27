@@ -1,53 +1,494 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// =============================================================================
+// auto-match-transactions — Edge Function
+// =============================================================================
+// Pipeline pro Transaktion:
+//   1. Cooldown-Check (Skip-Marker im match_reason ausgewertet)
+//   2. Kandidaten-Liste berechnen (normalize + scoring)
+//   3. Tier 1 — Slam-Dunk (deterministisch, kein AI-Call noetig)
+//   4. Tier 2 — Strong-Fuzzy (deterministisch, hoher Score, klarer Vorsprung)
+//   5. Tier 3 — AI-Match (mit Multi-Shot-Prompt + Sanity-Gate v2)
+//   6. Bei Reject/Null: Skip-Marker als match_reason schreiben (Cooldown)
+//
+// Sektionen:
+//   1) String Normalization & Similarity
+//   2) Scoring (SubScores + combinedScore)
+//   3) Tier 1 (Slam-Dunk) und Tier 2 (Strong-Fuzzy)
+//   4) AI Match (Tier 3) inkl. SYSTEM_PROMPT_V2
+//   5) Helpers (extractOriginalAmount, fetchAllPaginated, dedupInvoices, ...)
+//   6) Sanity-Gate v2
+//   7) Cooldown (Skip-Marker + Fingerprint)
+//   8) Main Handler (Claim/Release, Pipeline-Loop, Telemetrie, Response)
+//   9) LLM Resolve
+// =============================================================================
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Harte Obergrenze pro Invocation: bei 1-2s pro OpenAI-Call gibt das einen
-// Wall-Clock von ~100s — gut unterhalb des Edge-Function-Timeouts. Das
-// Frontend ruft die Function in einer Schleife auf, bis `remaining === 0`.
+// -----------------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------------
 const MAX_TRANSACTIONS_PER_INVOCATION = 50;
-
-// Per-Call-Timeout für OpenAI: ein hängender Call darf nicht den gesamten
-// Run blockieren.
-const OPENAI_TIMEOUT_MS = 20000;
-
-// Version-Tag in JEDER Response, damit Frontend zweifelsfrei sieht ob die
-// neue Edge-Function-Version live ist. Bei jedem Code-Change hochzaehlen.
-const EDGE_VERSION = "2026-04-15-parallel-claim-v11-hashdedup-tolerance";
-
-// Stale-Claim-Recovery: Wenn eine fruehere Invocation gecrasht ist, koennen
-// Transaktionen mit `match_status='ai_processing'` haengen bleiben. Alles
-// aelter als diese Schwelle wird beim naechsten Function-Start wieder auf
-// 'unmatched' gesetzt. 60s sind kurz genug, dass ein User nach einem Crash
-// nicht lange wartet, und lang genug, dass ein normaler Per-TX-LLM-Call
-// (timeout 20s) nicht abgeraeumt wird.
+// OpenAI/Gemini-Pro-Modelle sind langsamer als die alten Flash-Lite-Modelle —
+// 30s gibt uns Spielraum, ohne den Edge-Function-Wall-Clock zu sprengen.
+const OPENAI_TIMEOUT_MS = 30000;
 const STALE_CLAIM_MS = 60 * 1000;
 
-// Amount-Toleranz fuer Matching. Same-Currency (EUR <-> EUR, keine FX-Info
-// auf der TX) ist 5% — enger, weil nur Rundung / Gebuehren erlaubt sind.
-// FX-Faelle (original_currency gesetzt, d.h. Amex/Karte hat in Fremdwaehrung
-// gebucht) duerfen bis 10% abweichen, weil Wechselkurs-Spreads das rechtfertigen.
+// Amount-Toleranz fuer Matching.
+// Same-Currency (EUR <-> EUR) ist 5% — nur Rundung / Gebuehren erlaubt.
+// FX-Faelle (original_currency != EUR) duerfen bis 10% abweichen, weil
+// Wechselkurs-Spreads das rechtfertigen.
 const AMOUNT_TOLERANCE_SAME_CURRENCY = 0.05;
 const AMOUNT_TOLERANCE_FX = 0.10;
+
+// Maximale Kandidaten pro TX, die wir dem LLM zumuten. Token-Budget:
+// 12 ist nahe am Sweet-Spot zwischen Coverage und Halluzinations-Risiko.
+const MAX_CANDIDATES_PER_TX = 12;
+
+// Auto-Confirm-Schwelle. Tier 3 nimmt den Treffer nur, wenn Confidence
+// >= 80 UND das Sanity-Gate gruenes Licht gibt. Davor war 95 — zu rigide,
+// hat viele plausible Treffer (Token-Match + recentDate + amountInTolerance)
+// rausgefiltert.
+const AUTO_CONFIRM_THRESHOLD = 80;
+
+// Pre-Filter-Schwelle: jede Invoice mit combinedScore < 30 fliegt aus dem
+// Kandidaten-Pool, bevor der AI-Call ueberhaupt nachdenkt.
+const SCORE_THRESHOLD_CANDIDATE = 30;
+
+// Tier-2-Schwelle: ab combinedScore >= 90 + zusaetzlichen Constraints
+// (siehe tier2StrongFuzzy) matchen wir deterministisch ohne AI.
+const SCORE_THRESHOLD_TIER2 = 90;
+
+// Tier-1-Schwelle: nameSim ueber diesem Wert ist quasi "Issuer steckt im
+// Verwendungszweck". Wird in tier1SlamDunk als alternative Bedingung verwendet.
+const SCORE_THRESHOLD_TIER1_NAME_SIM = 0.85;
+
+// Cooldown: TX, die wir bereits abgelehnt haben (kein Match gefunden), nicht
+// jeden Lauf neu durch den AI-Call schicken — solange sich die Invoice-Liste
+// nicht geaendert hat.
+const SKIP_COOLDOWN_DAYS = 14;
+
+// Version-Tag. Bei jedem Code-Change hochzaehlen, damit das Frontend live
+// nachvollziehen kann, ob die neue Edge-Function-Version auch wirklich aktiv ist.
+const EDGE_VERSION = "2026-04-27-pipeline-v2";
+
+// =============================================================================
+// SECTION 1 — String Normalization & Similarity
+// =============================================================================
+//
+// Banktransaktions-Verwendungszwecke sind notorisch verstuemmelt:
+//   - Payment-Processor-Praefixe (PAYPAL *, STRIPE *, CKO*, ...)
+//   - Marketplace-Praefixe (AMZN MKTP DE*...)
+//   - Nationale SEPA-Praefixe (LASTSCHRIFT AUS KARTENZAHLUNG VOM ...)
+//   - Sonderzeichen-Salat (* / | : ; # ~)
+//
+// Wir strippen diese Pattern in fester Reihenfolge case-insensitive vom
+// Anfang des Strings, normalisieren dann auf lowercase + clean whitespace.
+// Beide Varianten (raw + normalized) werden zurueckgegeben, weil das
+// Sanity-Gate gegen den raw-String pruefen will (manche Issuer matchen
+// nur auf den ungestrippten String — z.B. wenn der Issuer "Lastschrift"
+// heisst, was extrem selten aber moeglich ist).
+// -----------------------------------------------------------------------------
+
+function normalizeDescription(raw: string): { raw: string; normalized: string } {
+  if (!raw) return { raw: "", normalized: "" };
+
+  // Strip-Patterns case-insensitive in Reihenfolge. Reihenfolge ist relevant:
+  // erst die langen, spezifischen Patterns, dann die kurzen generischen.
+  const stripPrefixPatterns: RegExp[] = [
+    // Payment-Processor-Praefixe
+    /^paypal\s*\*/i,
+    /^stripe\s*\*/i,
+    /^sq\s*\*/i,
+    /^sp\s+/i,                  // Shopify
+    /^cko\*/i,                  // Checkout.com
+    /^chargebee\s*\*/i,
+    /^zettle_\*?/i,
+    /^aplpay\s+/i,
+    /^applepay\s+/i,
+    /^googlepay\s+/i,
+    /^gpay\s+/i,
+    /^samsungpay\s+/i,
+
+    // Amazon-Marketplace-Variations
+    /^amzn\s+mktp\s+(de|us|uk)\*?/i,
+    /^amazon\s+mktp\s+(de|us|uk)\*?/i,
+    /^amazon\s+mktp\s+\*?/i,
+    /^amazon\.de\s*\*/i,
+    /^amzn\s+digital\s*\*?/i,
+
+    // SEPA / Kartenzahlung
+    /^sepa[-:]?(lastschrift|ueberweisung|sammelzahlung)\s+/i,
+    /^lastschrift\s+aus\s+kartenzahlung\s+vom\s+\d{2}\.\d{2}\.\d{4}\s+/i,
+    /^kartenzahlung\s+/i,
+    /^pos\s+/i,
+  ];
+
+  let working = raw;
+  // Mehrfach durchlaufen, falls mehrere Praefixe gestapelt sind
+  // (z.B. "SEPA-LASTSCHRIFT PAYPAL *NETFLIX")
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const p of stripPrefixPatterns) {
+      const next = working.replace(p, "");
+      if (next !== working) {
+        working = next;
+        changed = true;
+      }
+    }
+  }
+
+  // Lowercase
+  let normalized = working.toLowerCase();
+  // Sonderzeichen → Space
+  normalized = normalized.replace(/[\*_\/\\|:;#~]/g, " ");
+  // Whitespace collapse + trim
+  normalized = normalized.replace(/\s+/g, " ").trim();
+
+  return { raw, normalized };
+}
+
+// Bigram-Set: alle 2-Zeichen-Substrings, mit Padding fuer Wortgrenzen.
+// Padding hilft bei kurzen Strings — sonst hat "udemy" nur 4 Bigrams,
+// die mit grossen Strings kollidieren.
+function bigrams(s: string): Set<string> {
+  const padded = ` ${s} `;
+  const set = new Set<string>();
+  for (let i = 0; i < padded.length - 1; i++) {
+    set.add(padded.slice(i, i + 2));
+  }
+  return set;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersect = 0;
+  for (const x of a) {
+    if (b.has(x)) intersect++;
+  }
+  const union = a.size + b.size - intersect;
+  return union === 0 ? 0 : intersect / union;
+}
+
+// nameSimilarity: 0..1, wie gut der Issuer im Verwendungszweck steckt.
+//   - Substring-Match → 1.0
+//   - Token-Substring-Boost (Issuer-Token >=4 chars als Substring in desc) → Floor 0.7
+//   - Bigram-Jaccard mit Padding (Bonus fuer kurze Issuer: coverage statt jaccard)
+function nameSimilarity(issuer: string, desc: string): number {
+  if (!issuer || !desc) return 0;
+  const issuerLower = issuer.toLowerCase().trim();
+  const descLower = desc.toLowerCase();
+
+  // Direkter Substring-Match → 1.0
+  if (descLower.includes(issuerLower)) return 1.0;
+
+  // Token-Substring-Boost: Issuer-Token >= 4 chars steckt als Substring in desc
+  let tokenBoost = 0;
+  const issuerTokens = issuerLower.split(/[\s,.\-_/]+/).filter((t) => t.length >= 4);
+  for (const t of issuerTokens) {
+    if (descLower.includes(t)) {
+      tokenBoost = Math.max(tokenBoost, 0.7);
+      break;
+    }
+  }
+
+  // Bigram-Jaccard (mit Padding via bigrams())
+  const issuerBigrams = bigrams(issuerLower);
+  const descBigrams = bigrams(descLower);
+  const j = jaccard(issuerBigrams, descBigrams);
+
+  // Laengen-Penalty: bei sehr kurzen Issuern ist die Bigram-Schnittmenge
+  // automatisch klein. Nutze coverage (issuer-bigrams in desc) / issuer-bigrams.size.
+  if (issuerLower.length <= 6) {
+    let inDesc = 0;
+    for (const bg of issuerBigrams) {
+      if (descBigrams.has(bg)) inDesc++;
+    }
+    const coverage = issuerBigrams.size === 0 ? 0 : inDesc / issuerBigrams.size;
+    return Math.max(j, tokenBoost, coverage * 0.85);
+  }
+
+  return Math.max(j, tokenBoost);
+}
+
+// =============================================================================
+// SECTION 2 — Scoring
+// =============================================================================
+// Pre-LLM-Scoring fuer Pre-Filter und Tier-2.
+// Vier Sub-Scores (jeweils 0..1), gewichtete Summe = combinedScore (0..100).
+// -----------------------------------------------------------------------------
+
+type SubScores = {
+  nameSim: number; // 0-1
+  amountQuality: number; // 0-1
+  dateProximity: number; // 0-1
+  invoiceNumberInDesc: number; // 0 oder 1
+};
+
+function amountQuality(matchAmt: number, invAmt: number, tolerance: number): number {
+  const diff = Math.abs(matchAmt - invAmt);
+  const tolAbs = Math.max(matchAmt, invAmt) * tolerance;
+  if (diff < 0.01) return 1.0;
+  if (tolAbs <= 0) return 0;
+  if (diff <= tolAbs) return 1 - 0.5 * (diff / tolAbs); // 0.5..1
+  if (diff <= tolAbs * 2) return 0.3 - 0.2 * ((diff - tolAbs) / tolAbs); // 0.1..0.3
+  return 0;
+}
+
+function dateProximity(txDate: string, invDate: string): number {
+  if (!txDate || !invDate) return 0;
+  const txTime = new Date(txDate).getTime();
+  const invTime = new Date(invDate).getTime();
+  if (!Number.isFinite(txTime) || !Number.isFinite(invTime)) return 0;
+  const delta = (txTime - invTime) / 86400000;
+  // delta > 0 = invoice VOR transaction (normal)
+  // delta < 0 = invoice NACH transaction (selten, z.B. Pre-Auth)
+  if (delta >= -7 && delta <= 45) return 1.0;
+  if (delta >= -14 && delta <= 90) return 0.8;
+  if (delta >= -30 && delta <= 120) return 0.5;
+  if (delta >= -45 && delta <= 180) return 0.2;
+  return 0;
+}
+
+function invoiceNumberInDesc(invNum: string | null | undefined, normalizedDesc: string): number {
+  if (!invNum) return 0;
+  const num = invNum.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (num.length < 5) return 0;
+  const desc = normalizedDesc.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return desc.includes(num) ? 1 : 0;
+}
+
+function combinedScore(subs: SubScores): number {
+  return (
+    100 *
+    (0.45 * subs.nameSim +
+      0.35 * subs.amountQuality +
+      0.10 * subs.dateProximity +
+      0.10 * subs.invoiceNumberInDesc)
+  );
+}
+
 function resolveAmountTolerance(transaction: any): number {
   const origCcyRaw = (transaction?.original_currency ?? "").toString();
   const hasForeignCurrency = origCcyRaw.trim().length > 0 && !/\bEUR\b/i.test(origCcyRaw);
   return hasForeignCurrency ? AMOUNT_TOLERANCE_FX : AMOUNT_TOLERANCE_SAME_CURRENCY;
 }
 
-// Maximale Anzahl Kandidaten, die wir dem LLM pro Transaktion zumuten.
-// Bei einem generischen Issuer ("Amazon") können sonst Dutzende Kandidaten
-// pro Transaktion auftauchen → Token-Explosion und schlechtere Genauigkeit.
-const MAX_CANDIDATES_PER_TX = 15;
+// Token-Match-Helper: prueft, ob mind. ein Issuer-Token (>=minLen Zeichen)
+// als Substring in der Description steckt.
+function issuerTokenInDesc(issuer: string, desc: string, minLen = 4): boolean {
+  const issuerLower = (issuer ?? "").toLowerCase();
+  const descLower = (desc ?? "").toLowerCase();
+  const tokens = issuerLower.split(/[\s,.\-_/]+/).filter((t) => t.length >= minLen);
+  return tokens.some((t) => descLower.includes(t));
+}
 
-// Supabase begrenzt Selects standardmäßig auf 1000 Rows. Ohne Pagination
-// verschwinden bei großen Datenmengen sowohl Transaktionen als auch
-// already-matched Invoice-IDs aus der Sicht der Function — letzteres führt
-// dazu, dass bereits gematchte Rechnungen erneut als Kandidaten auftauchen.
+// =============================================================================
+// SECTION 3 — Tier 1 (Slam-Dunk) und Tier 2 (Strong-Fuzzy)
+// =============================================================================
+// Tier 1 ("Slam-Dunk"):
+//   genau 1 Kandidat erfuellt alle:
+//     - exakter Betrag (diff < 0.01)
+//     - mind. eines: nameSim >= 0.85, ODER issuerToken (>=5 chars) in desc,
+//       ODER invoiceNumberInDesc
+//     - dateProximity > 0
+//
+// Tier 2 ("Strong-Fuzzy"):
+//   genau 1 Kandidat hat:
+//     - combinedScore >= 90
+//     - Betrag in Toleranz
+//     - dateProximity > 0
+//   UND der naechstbeste hat mind. 25 Punkte combinedScore weniger.
+// -----------------------------------------------------------------------------
+
+type ScoredCandidate = {
+  invoice: any;
+  subs: SubScores;
+  combined: number;
+  exactAmount: boolean;
+  amountInTolerance: boolean;
+};
+
+type DeterministicMatch = {
+  invoice: any;
+  tier: "t1" | "t2";
+  confidence: number;
+  reason: string;
+};
+
+function tier1SlamDunk(scored: ScoredCandidate[], normalizedDesc: string): DeterministicMatch | null {
+  const eligible: ScoredCandidate[] = [];
+
+  for (const c of scored) {
+    if (!c.exactAmount) continue;
+    if (c.subs.dateProximity <= 0) continue;
+
+    const issuer = (c.invoice.issuer ?? "").toString();
+    // Token >= 5 chars in desc
+    const issuerTokens5 = issuer.toLowerCase().split(/[\s,.\-_/]+/).filter((t) => t.length >= 5);
+    const tokenHit = issuerTokens5.some((t) => normalizedDesc.toLowerCase().includes(t));
+
+    const condition =
+      c.subs.nameSim >= SCORE_THRESHOLD_TIER1_NAME_SIM ||
+      tokenHit ||
+      c.subs.invoiceNumberInDesc > 0;
+
+    if (condition) eligible.push(c);
+  }
+
+  if (eligible.length !== 1) return null;
+  const pick = eligible[0];
+  return {
+    invoice: pick.invoice,
+    tier: "t1",
+    confidence: 100,
+    reason: `Tier-1 Slam-Dunk: exakter Betrag ${pick.invoice.amount} + eindeutiger Aussteller-Match (${pick.invoice.issuer})`,
+  };
+}
+
+function tier2StrongFuzzy(scored: ScoredCandidate[]): DeterministicMatch | null {
+  // Sortieren nach combinedScore desc
+  const sorted = [...scored].sort((a, b) => b.combined - a.combined);
+  if (sorted.length === 0) return null;
+  const top = sorted[0];
+
+  if (top.combined < SCORE_THRESHOLD_TIER2) return null;
+  if (!top.amountInTolerance) return null;
+  if (top.subs.dateProximity <= 0) return null;
+
+  // 2nd-best mind. 25 Punkte schlechter
+  if (sorted.length > 1) {
+    const second = sorted[1];
+    if (top.combined - second.combined < 25) return null;
+  }
+
+  return {
+    invoice: top.invoice,
+    tier: "t2",
+    confidence: Math.min(99, Math.round(top.combined)),
+    reason: `Tier-2 Strong-Fuzzy: Score ${Math.round(top.combined)}/100 (nameSim=${top.subs.nameSim.toFixed(2)}, amountQ=${top.subs.amountQuality.toFixed(2)}, dateProx=${top.subs.dateProximity.toFixed(2)})`,
+  };
+}
+
+// =============================================================================
+// SECTION 4 — AI Match (Tier 3): SYSTEM_PROMPT_V2
+// =============================================================================
+// Multi-Shot-Prompt mit Beispielen A-G. Wichtig: das LLM ist NICHT der
+// Gatekeeper — es soll ehrlich confidence + signals liefern, das Sanity-Gate
+// in der App entscheidet final.
+// -----------------------------------------------------------------------------
+
+const SYSTEM_PROMPT_V2 = `Du bist ein deutscher Buchhaltungs-Assistent. Du ordnest EINE Banktransaktion einer von mehreren Kandidaten-Rechnungen zu.
+
+WICHTIGE REGELN
+1. Du gibst NUR UUIDs zurück, die EXAKT in der Kandidatenliste stehen. Niemals erfinden, niemals abwandeln. Wenn keine passt: matchedInvoiceId=null.
+2. Du gibst die Confidence ehrlich an. Die Anwendung hat die finale Schwelle — du bist NICHT der Gatekeeper.
+3. Du antwortest mit GENAU EINEM JSON-Objekt, keine Code-Fences, kein Vortext, kein Nachtext.
+
+HINTERGRUNDWISSEN: PAYMENT-PROCESSOR-PRÄFIXE
+Banktransaktionen tragen oft Präfixe vom Zahlungsdienstleister, NICHT vom eigentlichen Empfänger. Strippe sie mental:
+- "PAYPAL *NETFLIX" -> Empfänger ist Netflix
+- "STRIPE *ANTHROPIC" -> Empfänger ist Anthropic
+- "STRIPE *MIDJOURNE" -> Midjourney
+- "CKO*RAIDBOXES.IO" -> Raidboxes (CKO = Checkout.com)
+- "SQ *KAFFEEHAUS" -> Square-Akzeptanzstelle Kaffeehaus
+- "AplPay APPLE.COM/BILL" -> Apple
+- "AMZN Mktp DE*1A2B3" -> Amazon Marketplace, konkreter Händler oft nicht erkennbar
+- "LASTSCHRIFT AUS KARTENZAHLUNG VOM 14.03.2026 X" -> X
+- "SEPA-LASTSCHRIFT X" -> X
+
+HINTERGRUNDWISSEN: VERBATIM-ALIAS-MAPPING
+Manche Empfänger erscheinen verstümmelt:
+- "FACEBK *XYZ" / "FACEBOOK *XYZ" -> Meta Platforms (Rechnungs-Aussteller meist "Meta Platforms Ireland Limited" oder "Meta")
+- "UDEMYEU" / "UDEMY-DUBLIN" -> Udemy (Rechnung oft "Udemy Ireland Limited")
+- "OPENAI SAN FRANCISCO CA" / "OPENAI *CHATGPT SUBSCR" -> OpenAI
+- "GITHUB INC" / "GITHUB.COM/BILL" -> GitHub
+- "HETZNER ONLINE GMBH NUERNBE" -> Hetzner
+- "AMAZON WEB SERVICES" / "AWS EMEA" -> Amazon Web Services
+- "GOOGLE *GSUITE" / "GOOGLE *CLOUD" -> Google (je nach Produkt)
+- "MICROSOFT*OFFICE" / "MSFT *AZURE" -> Microsoft
+
+KRITERIEN FÜR EINEN MATCH (gewichtet absteigend)
+1. Aussteller-Match: Der Kern-Firmenname der Rechnung muss plausibel im (mental gestrippten) Verwendungszweck stecken. Rechtsformen (GmbH/Ltd/Inc/LLC), Standorte, Steuer-IDs ignorieren.
+2. Betrag: Exakt (±0.01 EUR) ist ein starkes Signal. Bei Fremdwährung sind ~10% Abweichung durch Wechselkurs-Spread normal.
+3. Datum: Rechnung ist meist 0-45 Tage VOR der Buchung. Bei Abos auch gleicher Tag.
+4. Rechnungsnummer im Verwendungszweck: extrem starkes Signal wenn vorhanden.
+
+CONFIDENCE-SKALA (ehrlich!)
+- 95-100: Aussteller eindeutig + Betrag exakt + Datum plausibel
+- 80-94:  Aussteller passt klar, EINE Dimension leicht off (Betrag bis Toleranz, Datum bis 90 Tage)
+- 60-79:  Aussteller passt nur teilweise (Token-Match), oder Betrag exakt aber Name schwach
+- 30-59:  Schwacher Hinweis, aber die beste Option in der Liste
+- 0-29:   Keine plausible Übereinstimmung
+- null:   KEINE der Kandidaten-Rechnungen passt inhaltlich
+
+ANTWORTSCHEMA
+{"matchedInvoiceId": <UUID-aus-Liste-oder-null>, "confidence": <0-100 Integer>, "reason": "<deutscher Satz, max. 200 Zeichen>", "signals": {"issuerMatch": <true|false>, "amountExact": <true|false>, "dateInWindow": <true|false>, "invoiceNumberHit": <true|false>}}
+
+Das \`signals\`-Feld nutzt die App fuer das Sanity-Gate. Sei ehrlich.
+
+BEISPIELE (illustrativ, nicht in der Kandidatenliste enthalten)
+
+Beispiel A — Klassisches Aliasing
+Transaktion: "FACEBK *MJ9Y3K2" 47.30 EUR am 2026-03-15
+Kandidat 1: ID=aaa Aussteller="Meta Platforms Ireland Limited" 47.30 EUR am 2026-03-12 Rech-Nr=FB-2026-839
+Antwort: {"matchedInvoiceId":"aaa","confidence":95,"reason":"FACEBK ist Meta-Aussteller, Betrag exakt, 3 Tage Differenz","signals":{"issuerMatch":true,"amountExact":true,"dateInWindow":true,"invoiceNumberHit":false}}
+
+Beispiel B — Stripe-Präfix
+Transaktion: "STRIPE *ANTHROPIC" 22.43 EUR am 2026-04-02
+Kandidat 1: ID=bbb Aussteller="Anthropic, PBC" 22.43 EUR am 2026-04-01
+Antwort: {"matchedInvoiceId":"bbb","confidence":98,"reason":"STRIPE-Vorspann, Anthropic eindeutig, Betrag exakt, 1 Tag Differenz","signals":{"issuerMatch":true,"amountExact":true,"dateInWindow":true,"invoiceNumberHit":false}}
+
+Beispiel C — Hetzner mit Long-Form
+Transaktion: "HETZNER ONLINE GMBH NUERNBE" 14.99 EUR am 2026-03-08
+Kandidat 1: ID=ccc Aussteller="Hetzner Online GmbH" 14.99 EUR am 2026-03-01 Rech-Nr=R-12345
+Antwort: {"matchedInvoiceId":"ccc","confidence":99,"reason":"Aussteller identisch, Betrag exakt","signals":{"issuerMatch":true,"amountExact":true,"dateInWindow":true,"invoiceNumberHit":false}}
+
+Beispiel D — Udemy-Aliasing
+Transaktion: "UDEMYEU" 11.99 EUR am 2026-02-20
+Kandidat 1: ID=ddd Aussteller="Udemy Ireland Limited" 11.99 EUR am 2026-02-19
+Antwort: {"matchedInvoiceId":"ddd","confidence":97,"reason":"UDEMYEU = Udemy Ireland, Betrag exakt","signals":{"issuerMatch":true,"amountExact":true,"dateInWindow":true,"invoiceNumberHit":false}}
+
+Beispiel E — OpenAI Long-Form (FX)
+Transaktion: "OPENAI SAN FRANCISCO CA" 18.74 EUR am 2026-04-10 (FX, original 20 USD)
+Kandidat 1: ID=eee Aussteller="OpenAI, LLC" 20.00 USD am 2026-04-08
+Antwort: {"matchedInvoiceId":"eee","confidence":92,"reason":"OpenAI eindeutig, USD-Betrag exakt zur Original-Currency","signals":{"issuerMatch":true,"amountExact":true,"dateInWindow":true,"invoiceNumberHit":false}}
+
+Beispiel F — Kein Match
+Transaktion: "REWE SAGT DANKE 12345" 23.40 EUR
+Kandidaten (3 Stück, alle unrelated SaaS-Rechnungen)
+Antwort: {"matchedInvoiceId":null,"confidence":0,"reason":"Supermarkt-Einkauf, keine passende Rechnung in der Liste","signals":{"issuerMatch":false,"amountExact":false,"dateInWindow":false,"invoiceNumberHit":false}}
+
+Beispiel G — Falsche Versuchung (Betrag zufällig nahe)
+Transaktion: "HONORIS FINANCE" 29.90 EUR
+Kandidat 1: ID=fff Aussteller="Raidboxes GmbH" 29.95 EUR
+Antwort: {"matchedInvoiceId":null,"confidence":0,"reason":"Aussteller komplett verschieden, knapper Betrag ist Zufall","signals":{"issuerMatch":false,"amountExact":false,"dateInWindow":false,"invoiceNumberHit":false}}`;
+
+// AI-Response-Schema (typed)
+type AIResult = {
+  matchedInvoiceId: string | null;
+  confidence: number;
+  reason: string;
+  signals?: {
+    issuerMatch?: boolean;
+    amountExact?: boolean;
+    dateInWindow?: boolean;
+    invoiceNumberHit?: boolean;
+  };
+};
+
+// =============================================================================
+// SECTION 5 — Helpers
+// =============================================================================
+
+// Supabase begrenzt Selects standardmaessig auf 1000 Rows. Pagination, sonst
+// verschwinden bei grossen Datensaetzen sowohl TX als auch already-matched
+// Invoice-IDs aus der Sicht der Function.
 async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {
   const PAGE_SIZE = 1000;
   const all: T[] = [];
@@ -63,23 +504,20 @@ async function fetchAllPaginated<T>(makeQuery: () => any): Promise<T[]> {
   return all;
 }
 
-// Pre-LLM dedup der Invoice-Kandidatenliste. Ohne diesen Schritt kriegt das
-// Modell bei identischen Duplikat-Rechnungen (gleicher Inhalt, versehentlich
-// zweimal ingested) mehrere Kandidaten mit identischen Feldern zur Auswahl und
-// entscheidet zufällig. Wir wählen pro Duplikat-Gruppe genau EINEN
-// Repräsentanten — bevorzugt den mit dem ältesten `created_at`, weil das der
-// "echte" Originaleintrag ist.
+// Pre-LLM-Dedup der Invoice-Kandidaten. Bei identischen Duplikat-Rechnungen
+// (gleicher Inhalt, doppelt ingested) wuerde das LLM zufaellig eine Kopie waehlen.
 function dedupInvoices(invoices: any[]): any[] {
-  const norm = (s: string | null | undefined) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const norm = (s: string | null | undefined) =>
+    (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const pickOldest = (group: any[]) => {
-    group.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+    group.sort(
+      (a, b) =>
+        new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime(),
+    );
     return group[0];
   };
 
-  // Pass 1: file_hash-Dedup. Zwei Rechnungen mit identischem file_hash sind
-  // byte-gleiche PDFs (Re-Upload) — da darf nur die aelteste ueberleben, sonst
-  // matchen beide Kopien parallel auf dieselbe Transaktion. Null/leere Hashes
-  // werden nicht gruppiert (unbekannter Hash != identisch).
+  // Pass 1: file_hash-Dedup
   const afterHash: any[] = [];
   const hashGroups = new Map<string, any[]>();
   for (const inv of invoices) {
@@ -95,7 +533,7 @@ function dedupInvoices(invoices: any[]): any[] {
     afterHash.push(pickOldest(group));
   }
 
-  // Pass 2: Metadaten-Dedup (invoice_number + amount, sonst date+issuer+amount).
+  // Pass 2: Metadaten-Dedup
   const keyOf = (inv: any) => {
     const num = norm(inv.invoice_number);
     if (num.length >= 3) return `num:${num}|${Math.round(Number(inv.amount) * 100)}`;
@@ -125,6 +563,152 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
   }
 }
 
+// extractOriginalAmount: parse Amex-FX-Field. Mehrere Formate, robust ggü.
+// Komma/Punkt-Decimal und Variationen.
+function extractOriginalAmount(originalCurrency: string | null): number | null {
+  if (!originalCurrency) return null;
+
+  // "Foreign Spend Amount: X.XX"
+  const foreignSpendMatch = originalCurrency.match(/Foreign Spend Amount:\s*([\d,.]+)/i);
+  if (foreignSpendMatch) {
+    const amountStr = foreignSpendMatch[1].replace(",", ".");
+    const amount = parseFloat(amountStr);
+    if (!isNaN(amount)) return amount;
+  }
+
+  // "X.XX CCY"
+  const simpleMatch = originalCurrency.match(/^([\d,.]+)\s*[A-Z]{3}/i);
+  if (simpleMatch) {
+    const amountStr = simpleMatch[1].replace(",", ".");
+    const amount = parseFloat(amountStr);
+    if (!isNaN(amount)) return amount;
+  }
+
+  // Number gefolgt von Currency-Code/Name
+  const anyMatch = originalCurrency.match(/([\d,.]+)\s*(?:US Dollars|USD|EUR|GBP|CHF|JPY)/i);
+  if (anyMatch) {
+    const amountStr = anyMatch[1].replace(",", ".");
+    const amount = parseFloat(amountStr);
+    if (!isNaN(amount)) return amount;
+  }
+
+  return null;
+}
+
+// =============================================================================
+// SECTION 6 — Sanity-Gate v2
+// =============================================================================
+//
+// Schutzwall gegen LLM-Halluzinationen.
+// Hard-Gate: Betrag MUSS in Toleranz liegen — egal was LLM behauptet.
+// Soft-Gate: Signal-Score-System.
+//   Strong-Signals (je 1 Punkt): exactAmount, highStringSim, issuerTokenInDesc,
+//                                aiSignalsAgree (issuerMatch=true) bei conf>=90
+//   Halbpunkt: recentDate (dateProximity >= 0.5)
+//   Required Score: 1.5 wenn aiConfidence >= 90, sonst 2.0
+//
+// Sonderfall: invoiceNumberInDesc → hard-pass (ueberschreibt alle anderen Soft-
+// Gates), Betrag-Hard-Gate gilt aber weiter.
+// -----------------------------------------------------------------------------
+
+type SanityArgs = {
+  exactAmount: boolean;
+  amountInTolerance: boolean;
+  highStringSim: boolean;
+  issuerTokenInDesc: boolean;
+  recentDate: boolean;
+  invoiceNumberInDesc: boolean;
+  aiSignalsAgree: boolean;
+  aiConfidence: number;
+};
+
+type SanityResult = {
+  pass: boolean;
+  breakdown: { hardGateAmount: boolean; insufficientSignals: boolean };
+};
+
+function passesSanityV2(args: SanityArgs): SanityResult {
+  if (!args.amountInTolerance) {
+    return {
+      pass: false,
+      breakdown: { hardGateAmount: true, insufficientSignals: false },
+    };
+  }
+  if (args.invoiceNumberInDesc) {
+    return {
+      pass: true,
+      breakdown: { hardGateAmount: false, insufficientSignals: false },
+    };
+  }
+
+  let strongSignals = 0;
+  if (args.exactAmount) strongSignals++;
+  if (args.highStringSim) strongSignals++;
+  if (args.issuerTokenInDesc) strongSignals++;
+  if (args.aiSignalsAgree && args.aiConfidence >= 90) strongSignals++;
+
+  const signalScore = strongSignals + (args.recentDate ? 0.5 : 0);
+  const required = args.aiConfidence >= 90 ? 1.5 : 2.0;
+
+  return {
+    pass: signalScore >= required,
+    breakdown: {
+      hardGateAmount: false,
+      insufficientSignals: signalScore < required,
+    },
+  };
+}
+
+// =============================================================================
+// SECTION 7 — Cooldown (Skip-Marker + Fingerprint)
+// =============================================================================
+//
+// Format: [auto-skip:YYYY-MM-DD:reason:fp=n=N;u=TIMESTAMP]
+//   reason: "no-candidates" | "ai-no-match" | "sanity-rejected"
+//   fp: Invoice-Fingerprint, damit der Cooldown bricht, sobald sich der
+//       Invoice-Pool aendert.
+//
+// Wichtig: Cooldown skippt nur Tier 3 (AI), NICHT Tier 1/2 — denn neue
+// Invoices koennten deterministisch matchen, auch wenn der Fingerprint sich
+// noch nicht geaendert hat (Edge-Case: alte Invoices, neue TX).
+// -----------------------------------------------------------------------------
+
+const SKIP_MARKER_PATTERN = /^\[auto-skip:(\d{4}-\d{2}-\d{2}):([a-z\-]+)(?::fp=([^\]]+))?\]/;
+
+function fingerprintInvoices(invoices: any[]): string {
+  const count = invoices.length;
+  const maxUpdated = invoices.reduce((m: number, i: any) => {
+    const t = new Date(i.updated_at ?? i.created_at ?? 0).getTime();
+    return Number.isFinite(t) ? Math.max(m, t) : m;
+  }, 0);
+  return `n=${count};u=${maxUpdated}`;
+}
+
+function shouldSkipBecauseCooldown(matchReason: string | null | undefined, currentFingerprint: string): boolean {
+  if (!matchReason) return false;
+  const m = matchReason.match(SKIP_MARKER_PATTERN);
+  if (!m) return false;
+  const lastSkipDate = new Date(m[1]);
+  if (!Number.isFinite(lastSkipDate.getTime())) return false;
+  const ageDays = (Date.now() - lastSkipDate.getTime()) / 86400000;
+  if (ageDays >= SKIP_COOLDOWN_DAYS) return false;
+  const oldFingerprint = m[3] ?? "";
+  if (oldFingerprint !== currentFingerprint) return false; // Pool veraendert
+  return true;
+}
+
+function buildSkipMarker(
+  reason: "no-candidates" | "ai-no-match" | "sanity-rejected",
+  fingerprint: string,
+): string {
+  const today = new Date().toISOString().slice(0, 10);
+  return `[auto-skip:${today}:${reason}:fp=${fingerprint}]`;
+}
+
+// =============================================================================
+// SECTION 8 — Main Handler
+// =============================================================================
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -140,9 +724,13 @@ serve(async (req) => {
       throw new Error("No authorization header");
     }
 
-    supabaseClient = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_ANON_KEY") ?? "", {
-      global: { headers: { Authorization: authHeader } },
-    });
+    supabaseClient = createClient(
+      Deno.env.get("SUPABASE_URL") ?? "",
+      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+      {
+        global: { headers: { Authorization: authHeader } },
+      },
+    );
 
     const {
       data: { user },
@@ -152,29 +740,15 @@ serve(async (req) => {
       throw new Error("Not authenticated");
     }
 
-    // --- PARALLEL-SAFE CLAIM ------------------------------------------------
-    // Mehrere parallele Invocations (Frontend feuert 4x gleichzeitig) muessen
-    // disjunkte Transaktions-Sets bearbeiten. Ohne Claim wuerden alle Calls
-    // dieselben Top-50 auswaehlen → doppelte OpenAI-Calls, Last-Write-Wins,
-    // Geldverschwendung.
-    //
-    // Mechanismus:
-    //   (a) Stale-Recovery: abgestuerzte Claims freigeben.
-    //   (b) Kandidaten oversamplen (4x Batch-Size), damit bei Kollisionen
-    //       trotzdem ein voller Batch zusammenkommt.
-    //   (c) Atomischer UPDATE `unmatched → ai_processing` mit RETURNING.
-    //       PostgREST gibt via .select() nur die Zeilen zurueck, die wir
-    //       tatsaechlich beansprucht haben. Parallele Calls sehen hier
-    //       disjunkte Sets — Postgres macht pro Row genau einen Gewinner.
-    //
-    // Einschraenkung: Invoice-Level-Kollisionen (zwei parallele Calls waehlen
-    // dieselbe Rechnung fuer unterschiedliche TX) sind weiter moeglich, da
-    // Rechnungen nicht gelockt werden. In der Praxis selten; der User kann
-    // eine doppelt zugeordnete Rechnung manuell entflechten.
+    // -----------------------------------------------------------------------
+    // PARALLEL-SAFE CLAIM
+    // -----------------------------------------------------------------------
+    // (a) Stale-Recovery
+    // (b) Kandidaten oversamplen
+    // (c) Atomischer UPDATE unmatched -> ai_processing
+    // (d) Optional Second-Try
+    // -----------------------------------------------------------------------
 
-    // (a) Stale-Recovery: Claims, die aelter sind als STALE_CLAIM_MS, zurueck
-    // auf 'unmatched' setzen. RLS schraenkt das automatisch auf den aktuellen
-    // User ein (Auth-Header wird durchgereicht).
     const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
     const { error: staleErr } = await supabaseClient
       .from("bank_transactions")
@@ -183,9 +757,6 @@ serve(async (req) => {
       .lt("updated_at", staleBefore);
     if (staleErr) console.warn("Stale-claim release failed (non-fatal):", staleErr.message);
 
-    // (b) Kandidaten-IDs auswaehlen. Oversample: bei 4 parallelen Calls
-    // kollidieren alle auf denselben Top-N; jeder Call braucht eine groessere
-    // Pipeline, um trotzdem MAX_TRANSACTIONS_PER_INVOCATION claimen zu koennen.
     const CLAIM_OVERSAMPLE = MAX_TRANSACTIONS_PER_INVOCATION * 2;
     const { data: candidateRows, error: candErr } = await supabaseClient
       .from("bank_transactions")
@@ -196,13 +767,8 @@ serve(async (req) => {
     if (candErr) throw candErr;
     const candidateIds = (candidateRows || []).map((r: any) => r.id);
 
-    // (c) Atomischer Claim. Nur Rows, die noch 'unmatched' sind, werden auf
-    // 'ai_processing' gesetzt. Parallele Invocations gewinnen jeweils nur eine
-    // Teilmenge — das ist gewollt.
     let claimed: any[] = [];
     if (candidateIds.length > 0) {
-      // Wir claimen in Chunks, damit wir nicht ueber MAX_TRANSACTIONS_PER_INVOCATION
-      // hinausschiessen, falls keine Kollisionen auftreten.
       const toClaim = candidateIds.slice(0, MAX_TRANSACTIONS_PER_INVOCATION);
       const { data: claimResult, error: claimErr } = await supabaseClient
         .from("bank_transactions")
@@ -214,14 +780,14 @@ serve(async (req) => {
       claimed = claimResult || [];
     }
 
-    // Fallback-Second-Try: wenn wir bei hoher Kollisionsrate aus den ersten
-    // MAX_TRANSACTIONS_PER_INVOCATION Kandidaten fast nichts bekommen haben,
-    // aber noch mehr im Oversample-Pool uebrig ist, zweite Claim-Runde mit den
-    // restlichen IDs. Verhindert leere Batches bei 4-fach-Parallelitaet.
-    if (claimed.length < MAX_TRANSACTIONS_PER_INVOCATION / 2 && candidateIds.length > MAX_TRANSACTIONS_PER_INVOCATION) {
+    // Second-Try bei hoher Kollisionsrate
+    if (
+      claimed.length < MAX_TRANSACTIONS_PER_INVOCATION / 2 &&
+      candidateIds.length > MAX_TRANSACTIONS_PER_INVOCATION
+    ) {
       const claimedSet = new Set(claimed.map((t: any) => t.id));
       const rest = candidateIds
-        .filter((id) => !claimedSet.has(id))
+        .filter((id: string) => !claimedSet.has(id))
         .slice(0, MAX_TRANSACTIONS_PER_INVOCATION - claimed.length);
       if (rest.length > 0) {
         const { data: secondClaim, error: secondErr } = await supabaseClient
@@ -235,18 +801,16 @@ serve(async (req) => {
       }
     }
 
-    // Zum Kompatibilitaets-Erhalt mit dem restlichen Code heisst der Batch
-    // weiter `allTransactions` — aber es ist jetzt nur unser geclaimter Teil.
     const allTransactions = claimed;
     claimedForCleanup = claimed;
 
-    // Release-Helper: nicht gematchte Claims zurueck auf 'unmatched' setzen.
-    // MUSS in jedem Return-Pfad (inkl. Fehler) aufgerufen werden, sonst bleiben
-    // TX bis zur Stale-Recovery (3min) in 'ai_processing' haengen.
+    // Release-Helper (alle Pfade muessen ihn aufrufen)
     const releaseUnmatchedClaims = async (matchedIds: Set<string>) => {
-      const toRelease = claimed.filter((t: any) => !matchedIds.has(t.id)).map((t: any) => t.id);
+      const toRelease = claimed
+        .filter((t: any) => !matchedIds.has(t.id))
+        .map((t: any) => t.id);
       if (toRelease.length === 0) return;
-      const { error } = await supabaseClient
+      const { error } = await supabaseClient!
         .from("bank_transactions")
         .update({ match_status: "unmatched" })
         .eq("match_status", "ai_processing")
@@ -254,28 +818,30 @@ serve(async (req) => {
       if (error) console.error("Release of unmatched claims failed:", error.message);
     };
 
-    const matchedInvoiceIds = await fetchAllPaginated<any>(() =>
-      supabaseClient.from("bank_transactions").select("matched_invoice_id").not("matched_invoice_id", "is", null),
+    // Already-matched IDs (paginiert)
+    const matchedInvoiceIdRows = await fetchAllPaginated<any>(() =>
+      supabaseClient!
+        .from("bank_transactions")
+        .select("matched_invoice_id")
+        .not("matched_invoice_id", "is", null),
+    );
+    const alreadyMatchedIds = new Set(
+      matchedInvoiceIdRows.map((t: any) => t.matched_invoice_id),
     );
 
-    const alreadyMatchedIds = new Set(matchedInvoiceIds.map((t: any) => t.matched_invoice_id));
+    const allInvoicesRaw = await fetchAllPaginated<any>(() =>
+      supabaseClient!.from("invoices").select("*"),
+    );
 
-    const allInvoicesRaw = await fetchAllPaginated<any>(() => supabaseClient.from("invoices").select("*"));
-
-    // Filter out already matched invoices
-    const invoicesAfterMatchFilter = allInvoicesRaw.filter((inv: any) => !alreadyMatchedIds.has(inv.id));
-    // Dedup auf Inhalt/Rechnungsnummer/Metadaten, damit das LLM bei echten
-    // Duplikat-Rechnungen nicht zufällig eine Kopie auswählt.
+    const invoicesAfterMatchFilter = allInvoicesRaw.filter(
+      (inv: any) => !alreadyMatchedIds.has(inv.id),
+    );
     const invoices = dedupInvoices(invoicesAfterMatchFilter);
     console.log(
       `Invoices: ${allInvoicesRaw.length} total → ${invoicesAfterMatchFilter.length} unmatched → ${invoices.length} after dedup`,
     );
 
-    // Backlog-Zaehlung: wieviel `unmatched` haengt nach unserem Claim noch in
-    // der DB? Wir zaehlen NICHT unsere gerade geclaimten (die sind jetzt
-    // 'ai_processing'). Parallele Invocations eines anderen Claims sind dort
-    // ebenfalls exkludiert — `remaining` spiegelt echte Restarbeit wider, die
-    // weder wir noch ein paralleler Call gerade bearbeitet.
+    // Backlog-Counter
     const { count: unmatchedAfterClaim } = await supabaseClient
       .from("bank_transactions")
       .select("id", { count: "exact", head: true })
@@ -286,8 +852,6 @@ serve(async (req) => {
     const totalUnmatched = remaining + transactions.length;
 
     if (transactions.length === 0 || invoices.length === 0) {
-      // Diagnostik: WARUM hat die Function nichts zu tun? Das war vorher
-      // unsichtbar — Frontend bekam nur stumm 0 zurueck.
       const reason =
         transactions.length === 0 && invoices.length === 0
           ? "Keine offenen Transaktionen UND keine unmatched Rechnungen sichtbar"
@@ -295,8 +859,6 @@ serve(async (req) => {
             ? `Keine 'unmatched' Transaktionen sichtbar (Auth-User sieht 0 unmatched). Insgesamt: ${totalUnmatched}`
             : `Keine unmatched Rechnungen sichtbar (allInvoicesRaw=${allInvoicesRaw.length}, nach Match-Filter=${invoicesAfterMatchFilter.length}, nach Dedup=${invoices.length})`;
       console.warn(`auto-match early-return: ${reason}`);
-      // Nichts gematcht → alle Claims zurueckgeben, damit der naechste Call
-      // sie sieht (falls Invoices inzwischen dazu gekommen sind).
       await releaseUnmatchedClaims(new Set());
       return new Response(
         JSON.stringify({
@@ -319,9 +881,7 @@ serve(async (req) => {
       );
     }
 
-    // LLM-Config: Gemini oder OpenAI, je nachdem welches Secret gesetzt ist.
-    // Beide nutzen den OpenAI-kompatiblen Endpoint — Google bietet den offiziell
-    // unter generativelanguage.googleapis.com/v1beta/openai an.
+    // LLM-Config
     const llm = resolveLLM();
     if (!llm) {
       return new Response(
@@ -341,16 +901,12 @@ serve(async (req) => {
       );
     }
 
-    // Vorschlaege wurden komplett entfernt: KI matched nur noch dann
-    // automatisch, wenn die Confidence so hoch ist dass der User es nicht
-    // nochmal pruefen muss. Alles darunter laesst die TX offen — der User
-    // ordnet sie dann manuell mit Relevanz-Scoring zu.
-    const AUTO_CONFIRM_THRESHOLD = 95;
+    // Cooldown-Fingerprint einmal pro Invocation berechnen
+    const invoiceFingerprint = fingerprintInvoices(invoices);
 
+    // Telemetrie-Counter
     let matchedCount = 0;
     let autoConfirmedCount = 0;
-    // Konkrete Liste aller neu zugeordneten Transaktionen — damit der User
-    // im UI sieht WAS gematcht wurde, nicht nur dass irgendwas passierte.
     const matchedTransactions: Array<{
       transactionId: string;
       transactionDescription: string;
@@ -365,237 +921,122 @@ serve(async (req) => {
       source: "deterministic" | "ai";
       status: "confirmed";
     }> = [];
-    // KI-Telemetrie, damit das Frontend Silent-Failures erkennen kann.
+
     let aiAttempted = 0;
     let aiSucceeded = 0;
     let aiTimeouts = 0;
     let aiHttpErrors = 0;
     let aiParseErrors = 0;
     let lastAiError: string | null = null;
-    // Entscheidungs-Telemetrie: wo landet jede TX? Damit wir bei "0 Treffer"
-    // sofort sehen auf welchem Pfad sie versanden.
-    let deterministicMatched = 0;
+    const aiLatencies: number[] = [];
+
+    let deterministicTier1 = 0;
+    let deterministicTier2 = 0;
+    let cooldownSkipped = 0;
     let noCandidates = 0;
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
     let aiRejectedSanity = 0;
+    let aiRejectedSanity_hardGateAmount = 0;
+    let aiRejectedSanity_insufficientSignals = 0;
     let aiReturnedNull = 0;
     let dbUpdateErrors = 0;
 
-    // Helper function to extract original amount from original_currency field
-    // Supports multiple formats:
-    // - "Foreign Spend Amount: 5.95 US Dollars Commission Amount: 0.1 Currency Exchange Rate: 1.1531"
-    // - "5.95 USD"
-    // - "350.00 GBP"
-    const extractOriginalAmount = (originalCurrency: string | null): number | null => {
-      if (!originalCurrency) return null;
-
-      // Try "Foreign Spend Amount: X.XX" format first
-      const foreignSpendMatch = originalCurrency.match(/Foreign Spend Amount:\s*([\d,.]+)/i);
-      if (foreignSpendMatch) {
-        const amountStr = foreignSpendMatch[1].replace(",", ".");
-        const amount = parseFloat(amountStr);
-        if (!isNaN(amount)) {
-          console.log(`Extracted Foreign Spend Amount: ${amount}`);
-          return amount;
-        }
-      }
-
-      // Try simple "X.XX CURRENCY" format (e.g., "5.95 USD", "350.00 GBP")
-      const simpleMatch = originalCurrency.match(/^([\d,.]+)\s*[A-Z]{3}/i);
-      if (simpleMatch) {
-        const amountStr = simpleMatch[1].replace(",", ".");
-        const amount = parseFloat(amountStr);
-        if (!isNaN(amount)) {
-          console.log(`Extracted simple amount: ${amount}`);
-          return amount;
-        }
-      }
-
-      // Try to find any number followed by currency code
-      const anyMatch = originalCurrency.match(/([\d,.]+)\s*(?:US Dollars|USD|EUR|GBP|CHF|JPY)/i);
-      if (anyMatch) {
-        const amountStr = anyMatch[1].replace(",", ".");
-        const amount = parseFloat(amountStr);
-        if (!isNaN(amount)) {
-          console.log(`Extracted amount from text: ${amount}`);
-          return amount;
-        }
-      }
-
-      return null;
-    };
-
-    // Process transactions
+    // -----------------------------------------------------------------------
+    // Pipeline-Loop pro Transaktion
+    // -----------------------------------------------------------------------
     for (const transaction of transactions) {
       const transactionAmount = Math.abs(transaction.amount);
-      const isAmexWithCurrencyConversion =
-        transaction.bank_statements?.bank_type === "amex" && transaction.original_currency !== null;
+      const isAmexFX =
+        transaction.bank_statements?.bank_type === "amex" &&
+        transaction.original_currency !== null;
 
-      let potentialMatches: any[] = [];
       let matchAmount = transactionAmount;
-
-      if (isAmexWithCurrencyConversion) {
-        // For Amex with currency conversion: Extract Foreign Spend Amount and match exactly
+      if (isAmexFX) {
         const foreignAmount = extractOriginalAmount(transaction.original_currency);
-
         if (foreignAmount !== null) {
           matchAmount = foreignAmount;
-          console.log(`Amex currency conversion - Using Foreign Spend Amount: ${foreignAmount} for matching`);
         }
       }
 
-      // IMPROVED MATCHING STRATEGY:
-      // 1. First find matches by name/description similarity
-      // 2. Then validate with amount (with currency tolerance)
+      // Step 1: cooldown-check (skipAI flag setzen, NICHT ganz skip)
+      const skipAI = shouldSkipBecauseCooldown(transaction.match_reason, invoiceFingerprint);
+      if (skipAI) {
+        cooldownSkipped++;
+      }
 
-      // Step 1: Find invoices with similar names/descriptions
-      const transactionDesc = transaction.description.toLowerCase();
+      // Step 2: Kandidaten berechnen mit normalize + scoring
+      const { normalized: normalizedDesc } = normalizeDescription(transaction.description ?? "");
+      const tolerancePct = resolveAmountTolerance(transaction);
 
-      // Calculate similarity score for each invoice based on name matching
-      const invoicesWithScores = invoices.map((inv: any) => {
-        const issuerLower = inv.issuer.toLowerCase();
-        let nameScore = 0;
-
-        // Check if issuer name is contained in transaction description
-        if (transactionDesc.includes(issuerLower)) {
-          nameScore = 100;
-        } else {
-          // Word-by-word matching. Wir bewerten zwei Signale parallel:
-          //  a) Anteil gematchter Issuer-Wörter (fractionScore) — gut wenn Issuer kurz ist
-          //  b) Stärkster Einzel-Token-Match (bestTokenScore) — rettet Fälle wie
-          //     "Udemy Ireland Ltd" vs. Verwendungszweck "UDEMYEU", wo nur ein
-          //     Token substring-matcht, das aber lang und eindeutig ist.
-          const issuerWords = issuerLower.split(/[\s,.-]+/).filter((w: string) => w.length > 2);
-          const descWords = transactionDesc.split(/[\s,.-]+/).filter((w: string) => w.length > 2);
-
-          let matchedWords = 0;
-          let bestTokenScore = 0;
-          for (const issuerWord of issuerWords) {
-            for (const descWord of descWords) {
-              if (descWord.includes(issuerWord) || issuerWord.includes(descWord)) {
-                matchedWords++;
-                const minLen = Math.min(issuerWord.length, descWord.length);
-                // Je länger der gemeinsame Kern, desto eindeutiger das Signal.
-                if (minLen >= 5) bestTokenScore = Math.max(bestTokenScore, 80);
-                else if (minLen >= 4) bestTokenScore = Math.max(bestTokenScore, 70);
-                else if (minLen >= 3) bestTokenScore = Math.max(bestTokenScore, 55);
-                break;
-              }
-            }
-          }
-
-          const fractionScore = issuerWords.length > 0 ? (matchedWords / issuerWords.length) * 80 : 0;
-          nameScore = Math.max(fractionScore, bestTokenScore);
-        }
-
-        // Amount matching with tolerance, zentral ueber resolveAmountTolerance.
-        // Same-Currency (kein original_currency auf der TX): 5% — nur Rundung
-        // & Gebuehren. FX-Fall (TX hat original_currency != EUR): 10%, weil
-        // Wechselkurs-Spread mehr als ein paar Cent kostet.
-        const tolerancePct = resolveAmountTolerance(transaction);
-        const amountDiff = Math.abs(matchAmount - inv.amount);
-        const amountTolerance = Math.max(matchAmount, inv.amount) * tolerancePct;
-        const exactMatch = amountDiff < 0.01;
-        const closeMatch = amountDiff <= amountTolerance;
-
-        let amountScore = 0;
-        if (exactMatch) {
-          amountScore = 100;
-        } else if (closeMatch) {
-          amountScore = 80 - (amountDiff / amountTolerance) * 30; // 50-80 for close matches
-        }
-
-        // Combined score: prioritize name matches, use amount as validation
-        const combinedScore = nameScore * 0.6 + amountScore * 0.4;
-
+      const allScored: ScoredCandidate[] = invoices.map((inv: any) => {
+        const invAmt = Number(inv.amount);
+        const subs: SubScores = {
+          // nameSim gegen normalized Desc — das ist der Standardpfad
+          nameSim: nameSimilarity(inv.issuer ?? "", normalizedDesc),
+          amountQuality: amountQuality(matchAmount, invAmt, tolerancePct),
+          dateProximity: dateProximity(transaction.date, inv.date),
+          invoiceNumberInDesc: invoiceNumberInDesc(inv.invoice_number, normalizedDesc),
+        };
+        const combined = combinedScore(subs);
+        const diff = Math.abs(matchAmount - invAmt);
+        const tolAbs = Math.max(matchAmount, invAmt) * tolerancePct;
         return {
           invoice: inv,
-          nameScore,
-          amountScore,
-          combinedScore,
-          exactAmountMatch: exactMatch,
-          closeAmountMatch: closeMatch,
+          subs,
+          combined,
+          exactAmount: diff < 0.01,
+          amountInTolerance: diff < 0.01 || diff <= tolAbs,
         };
       });
 
-      // Filter potential matches: bewusst großzügig — die KI soll entscheiden,
-      // nicht der lokale Pre-Filter. Der KI-Assistent-Dialog hat keine harte
-      // Schwelle und findet genau deswegen Treffer, die der alte Auto-Match-
-      // Pfad schluckt. Wir schicken jetzt ebenfalls Top-N ohne harten Cutoff.
-      potentialMatches = invoicesWithScores
-        .filter((item: any) => item.nameScore >= 25 || item.closeAmountMatch)
-        .sort((a: any, b: any) => b.combinedScore - a.combinedScore)
-        .slice(0, MAX_CANDIDATES_PER_TX)
-        .map((item: any) => item.invoice);
+      // Pre-Filter: Score >= SCORE_THRESHOLD_CANDIDATE oder amountInTolerance
+      let preFiltered = allScored
+        .filter(
+          (c) => c.combined >= SCORE_THRESHOLD_CANDIDATE || c.amountInTolerance,
+        )
+        .sort((a, b) => b.combined - a.combined)
+        .slice(0, MAX_CANDIDATES_PER_TX);
 
-      if (potentialMatches.length === 0) {
-        // Letzter Fallback: Top-N nach Score, auch wenn jedes Signal schwach war.
-        // Besser die KI sagt "keine Übereinstimmung" als dass wir die Transaktion
-        // komplett ohne Prüfung durchfallen lassen.
-        potentialMatches = invoicesWithScores
-          .sort((a: any, b: any) => b.combinedScore - a.combinedScore)
-          .slice(0, MAX_CANDIDATES_PER_TX)
-          .map((item: any) => item.invoice);
+      // Fallback: wenn nichts Pre-gefiltert wurde, Top-N nach Score nehmen,
+      // damit das LLM ueberhaupt eine Chance hat zu sagen "passt nichts".
+      if (preFiltered.length === 0) {
+        preFiltered = [...allScored]
+          .sort((a, b) => b.combined - a.combined)
+          .slice(0, MAX_CANDIDATES_PER_TX);
       }
 
-      if (potentialMatches.length === 0) {
+      if (preFiltered.length === 0) {
         noCandidates++;
+        // Skip-Marker schreiben, damit der naechste Run das auch sieht.
+        const marker = buildSkipMarker("no-candidates", invoiceFingerprint);
+        await supabaseClient
+          .from("bank_transactions")
+          .update({ match_status: "unmatched", match_reason: marker })
+          .eq("id", transaction.id);
         continue;
       }
 
-      // ------------------------------------------------------------------
-      // DETERMINISTISCHER PRE-KI-MATCH
-      // ------------------------------------------------------------------
-      // Bei Slam-dunk-Faellen (exakter Betrag ±0.01 + klarer Name-Substring +
-      // genau EINE passende Rechnung) ist die KI unnoetig. Wir matchen direkt.
-      // Zweck: immun gegen KI-Ausfaelle, JSON-Parse-Probleme, UUID-Validierung
-      // und was sonst alles zwischen KI-Response und DB-Zeile schiefgehen kann.
-      // Die KI bleibt fuer mehrdeutige Faelle zustaendig.
-      const txDescLower = transaction.description.toLowerCase();
-      const slamDunks = potentialMatches.filter((inv: any) => {
-        const amountOk = Math.abs(Number(inv.amount) - matchAmount) < 0.01;
-        if (!amountOk) return false;
-        // Klarer Name-Match: Issuer-Token (>=4 Zeichen) ist Substring der Desc,
-        // oder ein Desc-Token ist Substring des Issuers. Das matcht
-        // "SalesHub 2b" <-> "SALESHUB2B MUNCHEN", "Raidboxes GmbH" <->
-        // "CKO*RAIDBOXES.IO", "Meta" <-> "META *..." etc. Aber NICHT Meta <->
-        // FACEBK — dort kommt die KI zum Zug.
-        const issuerLower = (inv.issuer ?? "").toLowerCase();
-        const issuerTokens = issuerLower.split(/[\s,.\-_/]+/).filter((t: string) => t.length >= 4);
-        const descTokens = txDescLower.split(/[\s,.\-_/*]+/).filter((t: string) => t.length >= 4);
-        for (const it of issuerTokens) {
-          if (txDescLower.includes(it)) return true;
-          for (const dt of descTokens) {
-            if (it.includes(dt) || dt.includes(it)) return true;
-          }
-        }
-        return false;
-      });
-
-      if (slamDunks.length === 1) {
-        const pick = slamDunks[0];
-        const reason = `Deterministisch: exakter Betrag ${pick.amount} + eindeutiger Aussteller-Match (${pick.issuer})`;
-        // Invoice-Exklusivitaet: Die Partial-Unique-Migration (matched_invoice_id
-        // UNIQUE WHERE match_status='confirmed') wirft 23505, wenn diese
-        // Rechnung bereits anderswo confirmed-gematcht ist. Das darf die
-        // Invocation nicht killen — TX auf 'unmatched' zuruecksetzen, Fall
-        // loggen, mit naechster TX weiter.
+      // Step 3: Tier 1 — Slam-Dunk
+      const t1 = tier1SlamDunk(preFiltered, normalizedDesc);
+      if (t1) {
+        const pick = t1.invoice;
         const { error: upErr } = await supabaseClient
           .from("bank_transactions")
           .update({
             matched_invoice_id: pick.id,
             match_status: "confirmed",
-            match_confidence: 100,
-            match_reason: reason,
+            match_confidence: t1.confidence,
+            match_reason: t1.reason,
           })
           .eq("id", transaction.id);
         if (upErr) {
-          const isUniqueViolation = (upErr as any)?.code === "23505" ||
+          const isUniqueViolation =
+            (upErr as any)?.code === "23505" ||
             /duplicate key|unique/i.test(upErr.message ?? "");
           if (isUniqueViolation) {
             console.warn(
-              `invoice already confirmed elsewhere: tx ${transaction.id} -> invoice ${pick.id} (${pick.issuer}) — rolling back to unmatched`,
+              `[T1] invoice already confirmed elsewhere: tx ${transaction.id} -> invoice ${pick.id} (${pick.issuer}) — rolling back to unmatched`,
             );
             await supabaseClient
               .from("bank_transactions")
@@ -604,9 +1045,9 @@ serve(async (req) => {
             continue;
           }
           dbUpdateErrors++;
-          console.error(`DB update FAILED for tx ${transaction.id} (deterministic): ${upErr.message}`);
+          console.error(`DB update FAILED for tx ${transaction.id} (T1): ${upErr.message}`);
         } else {
-          deterministicMatched++;
+          deterministicTier1++;
           matchedCount++;
           autoConfirmedCount++;
           matchedTransactions.push({
@@ -618,294 +1059,370 @@ serve(async (req) => {
             invoiceIssuer: pick.issuer,
             invoiceAmount: Number(pick.amount),
             invoiceDate: pick.date,
-            confidence: 100,
-            reason,
+            confidence: t1.confidence,
+            reason: t1.reason,
             source: "deterministic",
             status: "confirmed",
           });
-          console.log(`DETERMINISTIC tx ${transaction.id} → invoice ${pick.id} (${pick.issuer} ${pick.amount})`);
+          console.log(`T1 tx ${transaction.id} → invoice ${pick.id} (${pick.issuer} ${pick.amount})`);
         }
         continue;
       }
 
-      if (potentialMatches.length >= 1) {
-        // KI-Matching fuer mehrdeutige Faelle
-        aiAttempted++;
-        try {
-          const buildPayload = () => ({
-            model: llm.model,
-            response_format: { type: "json_object" },
-            messages: [
-              {
-                role: "system",
-                content: `Du bist ein deutscher Buchhaltungs-Assistent, der Banktransaktionen Rechnungen zuordnet.
-
-DEINE AUFGABE: Finde die WAHRSCHEINLICHSTE Rechnung aus der Kandidatenliste und gib eine EHRLICHE Confidence zurück. Die Applikation entscheidet auf Basis deiner Confidence selbst, was damit passiert — du sollst NICHT selbst entscheiden "das ist zu unsicher, ich gebe null zurück". Gib null NUR zurück, wenn wirklich KEINE der Kandidaten-Rechnungen inhaltlich zur Transaktion passt.
-
-KRITERIEN (gewichtet):
-
-1. AUSSTELLER vs. VERWENDUNGSZWECK (wichtigstes Signal):
-   - Firmennamen variieren: "OpenAI" ↔ "OPENAI SAN FRANCISCO CA", "Hetzner" ↔ "HETZNER ONLINE GMBH NUERNBE", "Udemy Ireland Ltd" ↔ "UDEMYEU".
-   - Rechtsformen (GmbH, Ltd, Inc., LLC), Standorte und Zahlungsdienstleister-Präfixe ("PAYPAL *…", "AMZN Mktp") ignorieren.
-   - Der KERN des Firmennamens muss plausibel im Verwendungszweck auftauchen.
-
-2. BETRAG:
-   - Exakt (±0.01) → starkes Signal.
-   - Bei Fremdwährung/FX bis ~10% Abweichung plausibel (SEPA in USD/GBP-Rechnung).
-   - Reiner Betragstreffer ohne Name-Signal ist SCHWACH.
-
-3. DATUM:
-   - Rechnungsdatum typischerweise 0-45 Tage VOR der Transaktion.
-   - Bei Abos: gleicher Tag oder ±wenige Tage wiederkehrend.
-
-CONFIDENCE-SKALA (ehrlich ausfüllen, KEIN Selbst-Zensieren):
-- 95-100: Aussteller passt eindeutig + Betrag exakt + Datum plausibel
-- 70-94:  Aussteller passt klar, aber eine Dimension abweichend (Betrag leicht off ODER Datum weiter weg)
-- 40-69:  Aussteller passt teilweise (nur Kern-Token), oder starker Betragstreffer ohne klaren Name
-- 20-39:  Schwacher aber vorhandener Hinweis — trotzdem die beste Option von allen
-- null + confidence 0: KEINE der Kandidaten-Rechnungen passt inhaltlich
-
-WICHTIG: Die Applikation hat eine interne Schwelle. Du wirst deine Entscheidung NICHT damit "helfen" dass du knappe Matches auf null setzt — im Gegenteil, du machst es dadurch schlechter. Gib deine beste Option + ehrliche Confidence.
-
-ANTWORT: NUR ein JSON-Objekt, keine Code-Fences, kein Fließtext:
-{"matchedInvoiceId": <eine UUID aus der Kandidatenliste ODER null>, "confidence": <0-100>, "reason": "<ein kurzer deutscher Satz>"}`,
-              },
-              {
-                role: "user",
-                content: `### TRANSAKTION
-- Datum: ${transaction.date}
-- Verwendungszweck: ${transaction.description}
-- Betrag (EUR): ${transactionAmount}${isAmexWithCurrencyConversion ? `\n- Foreign Spend Amount (original): ${matchAmount}` : ""}${transaction.original_currency ? `\n- Original-Currency-Info: ${transaction.original_currency}` : ""}
-
-### KANDIDATEN-RECHNUNGEN
-${potentialMatches.map((inv: any, i: number) => `${i + 1}. ID=${inv.id} | Aussteller: ${inv.issuer} | Betrag: ${inv.amount} ${inv.currency || "EUR"} | Datum: ${inv.date}${inv.invoice_number ? ` | Rech-Nr: ${inv.invoice_number}` : ""}`).join("\n")}
-
-Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Confidence ehrlich an.`,
-              },
-            ],
-          });
-
-          const doFetch = () =>
-            fetchWithTimeout(
-              `${llm.baseUrl}/chat/completions`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: `Bearer ${llm.apiKey}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify(buildPayload()),
-              },
-              OPENAI_TIMEOUT_MS,
-            );
-
-          let response = await doFetch();
-
-          // Auto-Fallback: wenn das primaere Modell deprecated/entfernt wurde
-          // (Google gibt 404 "no longer available"), einmal auf den Fallback
-          // umschalten und diese Transaktion neu aufrufen. Der Switch bleibt
-          // fuer den Rest des Invocation-Runs aktiv — alle weiteren TX nutzen
-          // dann direkt das Fallback-Modell, ohne erneut 404 zu produzieren.
-          if (response.status === 404 && llm.fallbackModel && llm.model !== llm.fallbackModel) {
-            const deprecated = llm.model;
-            llm.model = llm.fallbackModel;
+      // Step 4: Tier 2 — Strong-Fuzzy
+      const t2 = tier2StrongFuzzy(preFiltered);
+      if (t2) {
+        const pick = t2.invoice;
+        const { error: upErr } = await supabaseClient
+          .from("bank_transactions")
+          .update({
+            matched_invoice_id: pick.id,
+            match_status: "confirmed",
+            match_confidence: t2.confidence,
+            match_reason: t2.reason,
+          })
+          .eq("id", transaction.id);
+        if (upErr) {
+          const isUniqueViolation =
+            (upErr as any)?.code === "23505" ||
+            /duplicate key|unique/i.test(upErr.message ?? "");
+          if (isUniqueViolation) {
             console.warn(
-              `Model ${deprecated} returned 404 — switching to fallback ${llm.model} for rest of invocation`,
+              `[T2] invoice already confirmed elsewhere: tx ${transaction.id} -> invoice ${pick.id} (${pick.issuer}) — rolling back to unmatched`,
             );
-            response = await doFetch();
+            await supabaseClient
+              .from("bank_transactions")
+              .update({ match_status: "unmatched" })
+              .eq("id", transaction.id);
+            continue;
           }
-
-          if (response.ok) {
-            const data = await response.json();
-            const content = data.choices?.[0]?.message?.content;
-
-            // Debug: erste 3 AI-Antworten pro Invocation verbatim loggen.
-            // Unverzichtbar zum Debuggen von "0 Treffer" trott vieler Kandidaten.
-            if (aiAttempted <= 3) {
-              console.log(
-                `[AI-DEBUG #${aiAttempted}] tx="${transaction.description}" (${matchAmount}) candidates=${potentialMatches.length} → content:`,
-                (content ?? "").slice(0, 500),
-              );
-            }
-
-            if (content) {
-              try {
-                const jsonMatch = content.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                  const result = JSON.parse(jsonMatch[0]);
-                  aiSucceeded++;
-                  if (aiAttempted <= 3) {
-                    console.log(`[AI-DEBUG #${aiAttempted}] parsed:`, JSON.stringify(result));
-                  }
-
-                  // Validierung: invoiceId muss wirklich ein UUID aus der
-                  // Kandidatenliste sein. trim() gegen ueberraschendes Whitespace.
-                  const candidateIds = new Set(potentialMatches.map((c: any) => c.id));
-                  const rawId = result.matchedInvoiceId;
-                  const trimmedId = typeof rawId === "string" ? rawId.trim() : null;
-                  const invoiceIdValid = trimmedId !== null && trimmedId !== "" && candidateIds.has(trimmedId);
-                  const confRaw = result.confidence;
-                  const confidenceNum =
-                    typeof confRaw === "number" ? confRaw : typeof confRaw === "string" ? parseFloat(confRaw) : NaN;
-                  const confidenceOk = Number.isFinite(confidenceNum);
-
-                  // Telemetrie nach Ablehnungsgrund. Vorschlaege gibt es nicht
-                  // mehr — alles unter AUTO_CONFIRM_THRESHOLD bleibt unmatched.
-                  if (rawId === null || rawId === undefined) {
-                    aiReturnedNull++;
-                  } else if (!invoiceIdValid) {
-                    aiRejectedInvalidId++;
-                    console.warn(
-                      `AI returned invalid invoiceId "${rawId}" for tx ${transaction.id} (not in candidate set)`,
-                    );
-                  } else if (!confidenceOk || confidenceNum < AUTO_CONFIRM_THRESHOLD) {
-                    aiRejectedLowConfidence++;
-                  }
-
-                  if (invoiceIdValid && confidenceOk && confidenceNum >= AUTO_CONFIRM_THRESHOLD) {
-                    // SANITY-GATE gegen KI-Halluzinationen.
-                    // Vorfall: Honoris Finance 29.90€ -> Raidboxes 18.33€ mit
-                    // 97% Confidence — Aussteller komplett anders, Betrag um 38%
-                    // off, KI hat die Begruendung frei erfunden. Wir trauen der
-                    // Confidence allein nicht mehr und erzwingen harte Kriterien:
-                    //   HARD GATE (unabhaengig von Name): Betrag muss innerhalb
-                    //   der zentralen Toleranz (5% same-ccy, 10% FX) liegen.
-                    //   SOFT GATE: exakter Betrag (±0.01) ODER Betrag in Toleranz
-                    //   UND Issuer-Token (>=4 Zeichen) im Verwendungszweck.
-                    // Alles andere wird unabhaengig von der KI-Confidence verworfen.
-                    const matchedInv = potentialMatches.find((c: any) => c.id === trimmedId);
-                    const invAmount = Number(matchedInv?.amount ?? 0);
-                    const aiAmountDiff = Math.abs(matchAmount - invAmount);
-                    const aiTolerancePct = resolveAmountTolerance(transaction);
-                    const aiAmountTolerance = Math.max(matchAmount, invAmount) * aiTolerancePct;
-                    const aiExactAmount = aiAmountDiff < 0.01;
-                    const aiCloseAmount = aiAmountDiff <= aiAmountTolerance;
-                    const issuerLowerSan = (matchedInv?.issuer ?? "").toLowerCase();
-                    const descLowerSan = transaction.description.toLowerCase();
-                    const issuerHasTokenInDesc = issuerLowerSan
-                      .split(/[\s,.\-_/]+/)
-                      .filter((t: string) => t.length >= 4)
-                      .some((t: string) => descLowerSan.includes(t));
-                    // Hard post-validation: Betrag ausserhalb Toleranz → immer
-                    // rejecten, egal was die KI fuer eine Confidence liefert.
-                    // Das ist der Schutzwall gegen frei erfundene hoch-confident
-                    // Matches bei komplett abweichenden Betraegen.
-                    const sanityPass = aiExactAmount || (aiCloseAmount && issuerHasTokenInDesc);
-                    if (!sanityPass) {
-                      aiRejectedSanity++;
-                      console.warn(
-                        `AI HALLUCINATION REJECTED tx="${transaction.description.slice(0, 60)}" (${matchAmount}€) -> "${matchedInv?.issuer}" (${invAmount}€) at conf=${confidenceNum}%: amountDiff=${aiAmountDiff.toFixed(2)}, tolerancePct=${aiTolerancePct}, exactAmount=${aiExactAmount}, closeAmount=${aiCloseAmount}, issuerToken=${issuerHasTokenInDesc}`,
-                      );
-                      continue;
-                    }
-
-                    // Invoice-Exklusivitaet (Partial-Unique-Constraint): falls
-                    // die Rechnung bereits anderswo confirmed-gematcht ist,
-                    // wirft Postgres 23505. Wir fangen das ab, setzen die TX
-                    // zurueck auf 'unmatched' und machen mit der naechsten TX
-                    // weiter — sonst haengt die ganze Invocation.
-                    const { error: upErr } = await supabaseClient
-                      .from("bank_transactions")
-                      .update({
-                        matched_invoice_id: trimmedId,
-                        match_status: "confirmed",
-                        match_confidence: confidenceNum,
-                        match_reason: result.reason ?? null,
-                      })
-                      .eq("id", transaction.id);
-
-                    if (upErr) {
-                      const isUniqueViolation = (upErr as any)?.code === "23505" ||
-                        /duplicate key|unique/i.test(upErr.message ?? "");
-                      if (isUniqueViolation) {
-                        console.warn(
-                          `invoice already confirmed elsewhere: tx ${transaction.id} -> invoice ${trimmedId} — rolling back to unmatched`,
-                        );
-                        await supabaseClient
-                          .from("bank_transactions")
-                          .update({ match_status: "unmatched" })
-                          .eq("id", transaction.id);
-                        continue;
-                      }
-                      dbUpdateErrors++;
-                      console.error(`DB update FAILED for tx ${transaction.id} (AI match): ${upErr.message}`);
-                    } else {
-                      console.log(
-                        `AUTO-CONFIRMED tx ${transaction.id} → invoice ${trimmedId} (${confidenceNum}%): ${result.reason}`,
-                      );
-                      matchedCount++;
-                      autoConfirmedCount++;
-                      const matchedInv = potentialMatches.find((c: any) => c.id === trimmedId);
-                      matchedTransactions.push({
-                        transactionId: transaction.id,
-                        transactionDescription: transaction.description,
-                        transactionAmount: transaction.amount,
-                        transactionDate: transaction.date,
-                        invoiceId: trimmedId!,
-                        invoiceIssuer: matchedInv?.issuer ?? "?",
-                        invoiceAmount: Number(matchedInv?.amount ?? 0),
-                        invoiceDate: matchedInv?.date ?? "",
-                        confidence: confidenceNum,
-                        reason: (result.reason ?? "").toString(),
-                        source: "ai",
-                        status: "confirmed",
-                      });
-                    }
-                    continue;
-                  }
-                }
-              } catch (parseError: any) {
-                aiParseErrors++;
-                lastAiError = `parse: ${parseError?.message ?? parseError}`;
-                console.error("Failed to parse AI response:", parseError);
-              }
-            } else {
-              aiParseErrors++;
-              lastAiError = "empty response content";
-            }
-          } else {
-            aiHttpErrors++;
-            const errBody = await response.text().catch(() => "");
-            lastAiError = `http ${response.status}: ${errBody.slice(0, 200)}`;
-            console.error("OpenAI HTTP error:", response.status, errBody.slice(0, 500));
-          }
-        } catch (aiError: any) {
-          if (aiError?.name === "AbortError") {
-            aiTimeouts++;
-            lastAiError = `timeout after ${OPENAI_TIMEOUT_MS}ms`;
-          } else {
-            aiHttpErrors++;
-            lastAiError = `fetch: ${aiError?.message ?? aiError}`;
-          }
-          console.error("AI matching error:", aiError);
+          dbUpdateErrors++;
+          console.error(`DB update FAILED for tx ${transaction.id} (T2): ${upErr.message}`);
+        } else {
+          deterministicTier2++;
+          matchedCount++;
+          autoConfirmedCount++;
+          matchedTransactions.push({
+            transactionId: transaction.id,
+            transactionDescription: transaction.description,
+            transactionAmount: transaction.amount,
+            transactionDate: transaction.date,
+            invoiceId: pick.id,
+            invoiceIssuer: pick.issuer,
+            invoiceAmount: Number(pick.amount),
+            invoiceDate: pick.date,
+            confidence: t2.confidence,
+            reason: t2.reason,
+            source: "deterministic",
+            status: "confirmed",
+          });
+          console.log(
+            `T2 tx ${transaction.id} → invoice ${pick.id} (${pick.issuer} ${pick.amount}, score=${Math.round(t2.confidence)})`,
+          );
         }
+        continue;
       }
 
-      // Kein Amount-only-Fallback mehr: hat zu Falsch-Treffern gefuehrt
-      // (z.B. Apple 9.99 EUR <-> Make 10.00 EUR nur weil zufaellig genau
-      // eine Rechnung mit aehnlichem Betrag uebrig war). Wenn weder
-      // deterministisch noch KI eine Zuordnung findet, bleibt die TX
-      // unmatched und wartet auf manuelle Pruefung.
+      // Step 5: AI gating — Cooldown skippt nur Tier 3
+      if (skipAI) {
+        // Kein AI-Call, kein neues Memo (das alte bleibt) — TX bleibt unmatched.
+        continue;
+      }
+
+      // Step 6: Tier 3 — AI-Call
+      const potentialMatches = preFiltered.map((c) => {
+        // Fuer den Prompt brauchen wir _combinedScore am invoice-Objekt
+        return { ...c.invoice, _combinedScore: c.combined };
+      });
+
+      aiAttempted++;
+      const aiStart = Date.now();
+      try {
+        const userPrompt = `### TRANSAKTION
+- Datum: ${transaction.date}
+- Verwendungszweck (raw): ${transaction.description}
+- Verwendungszweck (normalisiert): ${normalizedDesc}
+- Betrag: ${transactionAmount} EUR
+${isAmexFX ? `- Betrag in Original-Währung (für Match): ${matchAmount}` : ""}
+${transaction.original_currency ? `- Original-Currency-Info: ${transaction.original_currency}` : ""}
+
+### KANDIDATEN-RECHNUNGEN (Top N, vor-sortiert)
+${potentialMatches
+  .map(
+    (inv: any, i: number) =>
+      `${i + 1}. ID=${inv.id}\n   Aussteller: ${inv.issuer}\n   Betrag: ${inv.amount} ${inv.currency || "EUR"}\n   Datum: ${inv.date}${inv.invoice_number ? `\n   Rech-Nr: ${inv.invoice_number}` : ""}\n   PreScore: ${Math.round(inv._combinedScore)}/100`,
+  )
+  .join("\n\n")}
+
+Antworte mit dem JSON-Schema oben.`;
+
+        const buildPayload = () => ({
+          model: llm.model,
+          temperature: 0.0,
+          top_p: 0.1,
+          response_format: { type: "json_object" },
+          max_tokens: 400,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT_V2 },
+            { role: "user", content: userPrompt },
+          ],
+        });
+
+        const doFetch = () =>
+          fetchWithTimeout(
+            `${llm.baseUrl}/chat/completions`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${llm.apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(buildPayload()),
+            },
+            OPENAI_TIMEOUT_MS,
+          );
+
+        let response = await doFetch();
+
+        // 404 → Auto-Fallback aufs Fallback-Modell, fuer Rest der Invocation aktiv
+        if (response.status === 404 && llm.fallbackModel && llm.model !== llm.fallbackModel) {
+          const deprecated = llm.model;
+          llm.model = llm.fallbackModel;
+          console.warn(
+            `Model ${deprecated} returned 404 — switching to fallback ${llm.model} for rest of invocation`,
+          );
+          response = await doFetch();
+        }
+
+        if (!response.ok) {
+          aiHttpErrors++;
+          const errBody = await response.text().catch(() => "");
+          lastAiError = `http ${response.status}: ${errBody.slice(0, 200)}`;
+          console.error("LLM HTTP error:", response.status, errBody.slice(0, 500));
+          aiLatencies.push(Date.now() - aiStart);
+          continue;
+        }
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        aiLatencies.push(Date.now() - aiStart);
+
+        // Erste 3 Antworten verbatim loggen
+        if (aiAttempted <= 3) {
+          console.log(
+            `[AI-DEBUG #${aiAttempted}] tx="${transaction.description}" (${matchAmount}) candidates=${potentialMatches.length} → content:`,
+            (content ?? "").slice(0, 500),
+          );
+        }
+
+        if (!content) {
+          aiParseErrors++;
+          lastAiError = "empty response content";
+          continue;
+        }
+
+        let result: AIResult | null = null;
+        try {
+          const jsonMatch = (content as string).match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            result = JSON.parse(jsonMatch[0]) as AIResult;
+          }
+        } catch (parseError: any) {
+          aiParseErrors++;
+          lastAiError = `parse: ${parseError?.message ?? parseError}`;
+          console.error("Failed to parse AI response:", parseError);
+        }
+
+        if (!result) {
+          // Unparseable
+          continue;
+        }
+
+        aiSucceeded++;
+
+        if (aiAttempted <= 3) {
+          console.log(`[AI-DEBUG #${aiAttempted}] parsed:`, JSON.stringify(result));
+        }
+
+        // Validierung der invoiceId
+        const candidateIdSet = new Set(potentialMatches.map((c: any) => c.id));
+        const rawId = result.matchedInvoiceId;
+        const trimmedId = typeof rawId === "string" ? rawId.trim() : null;
+        const invoiceIdValid = trimmedId !== null && trimmedId !== "" && candidateIdSet.has(trimmedId);
+        const confRaw = result.confidence;
+        const confidenceNum =
+          typeof confRaw === "number"
+            ? confRaw
+            : typeof confRaw === "string"
+              ? parseFloat(confRaw)
+              : NaN;
+        const confidenceOk = Number.isFinite(confidenceNum);
+
+        // Telemetrie nach Ablehnungsgrund
+        if (rawId === null || rawId === undefined) {
+          aiReturnedNull++;
+          // Skip-Marker schreiben fuer Cooldown
+          const marker = buildSkipMarker("ai-no-match", invoiceFingerprint);
+          await supabaseClient
+            .from("bank_transactions")
+            .update({ match_status: "unmatched", match_reason: marker })
+            .eq("id", transaction.id);
+          continue;
+        }
+        if (!invoiceIdValid) {
+          aiRejectedInvalidId++;
+          console.warn(
+            `AI returned invalid invoiceId "${rawId}" for tx ${transaction.id} (not in candidate set)`,
+          );
+          continue;
+        }
+        if (!confidenceOk || confidenceNum < AUTO_CONFIRM_THRESHOLD) {
+          aiRejectedLowConfidence++;
+          continue;
+        }
+
+        // Sanity-Gate v2
+        const matchedInv = potentialMatches.find((c: any) => c.id === trimmedId);
+        const matchedScored = preFiltered.find((c) => c.invoice.id === trimmedId);
+        const invAmount = Number(matchedInv?.amount ?? 0);
+        const aiAmountDiff = Math.abs(matchAmount - invAmount);
+        const aiTolerancePct = resolveAmountTolerance(transaction);
+        const aiAmountTolerance = Math.max(matchAmount, invAmount) * aiTolerancePct;
+        const exactAmount = aiAmountDiff < 0.01;
+        const amountInTolerance = exactAmount || aiAmountDiff <= aiAmountTolerance;
+
+        // highStringSim: nameSim(rawDesc, issuer) >= 0.55 OR nameSim(normalized, issuer) >= 0.55
+        const issuerStr = (matchedInv?.issuer ?? "") as string;
+        const nameSimRaw = nameSimilarity(issuerStr, transaction.description ?? "");
+        const nameSimNorm = nameSimilarity(issuerStr, normalizedDesc);
+        const highStringSim = nameSimRaw >= 0.55 || nameSimNorm >= 0.55;
+
+        const issuerHasTokenInDesc = issuerTokenInDesc(issuerStr, normalizedDesc, 4);
+
+        const recentDate = (matchedScored?.subs.dateProximity ?? 0) >= 0.5;
+        const invoiceNumberHit = (matchedScored?.subs.invoiceNumberInDesc ?? 0) > 0;
+
+        const aiSignalsAgree = result.signals?.issuerMatch === true;
+
+        const sanityArgs: SanityArgs = {
+          exactAmount,
+          amountInTolerance,
+          highStringSim,
+          issuerTokenInDesc: issuerHasTokenInDesc,
+          recentDate,
+          invoiceNumberInDesc: invoiceNumberHit,
+          aiSignalsAgree,
+          aiConfidence: confidenceNum,
+        };
+        const sanity = passesSanityV2(sanityArgs);
+
+        if (!sanity.pass) {
+          aiRejectedSanity++;
+          if (sanity.breakdown.hardGateAmount) aiRejectedSanity_hardGateAmount++;
+          if (sanity.breakdown.insufficientSignals) aiRejectedSanity_insufficientSignals++;
+
+          console.warn(
+            `AI SANITY-REJECT tx="${(transaction.description ?? "").slice(0, 60)}" (${matchAmount}€) -> "${matchedInv?.issuer}" (${invAmount}€) at conf=${confidenceNum}%: hardGateAmount=${sanity.breakdown.hardGateAmount}, insufficientSignals=${sanity.breakdown.insufficientSignals}, exactAmt=${exactAmount}, tolerance=${amountInTolerance}, highSim=${highStringSim}, tokenInDesc=${issuerHasTokenInDesc}, recentDate=${recentDate}, aiSignalsAgree=${aiSignalsAgree}`,
+          );
+
+          // Skip-Marker schreiben fuer Cooldown
+          const marker = buildSkipMarker("sanity-rejected", invoiceFingerprint);
+          await supabaseClient
+            .from("bank_transactions")
+            .update({ match_status: "unmatched", match_reason: marker })
+            .eq("id", transaction.id);
+          continue;
+        }
+
+        // Confirm
+        const { error: upErr } = await supabaseClient
+          .from("bank_transactions")
+          .update({
+            matched_invoice_id: trimmedId,
+            match_status: "confirmed",
+            match_confidence: confidenceNum,
+            match_reason: result.reason ?? null,
+          })
+          .eq("id", transaction.id);
+
+        if (upErr) {
+          const isUniqueViolation =
+            (upErr as any)?.code === "23505" ||
+            /duplicate key|unique/i.test(upErr.message ?? "");
+          if (isUniqueViolation) {
+            console.warn(
+              `[T3] invoice already confirmed elsewhere: tx ${transaction.id} -> invoice ${trimmedId} — rolling back to unmatched`,
+            );
+            await supabaseClient
+              .from("bank_transactions")
+              .update({ match_status: "unmatched" })
+              .eq("id", transaction.id);
+            continue;
+          }
+          dbUpdateErrors++;
+          console.error(`DB update FAILED for tx ${transaction.id} (AI): ${upErr.message}`);
+        } else {
+          console.log(
+            `T3 AUTO-CONFIRMED tx ${transaction.id} → invoice ${trimmedId} (${confidenceNum}%): ${result.reason}`,
+          );
+          matchedCount++;
+          autoConfirmedCount++;
+          matchedTransactions.push({
+            transactionId: transaction.id,
+            transactionDescription: transaction.description,
+            transactionAmount: transaction.amount,
+            transactionDate: transaction.date,
+            invoiceId: trimmedId!,
+            invoiceIssuer: matchedInv?.issuer ?? "?",
+            invoiceAmount: Number(matchedInv?.amount ?? 0),
+            invoiceDate: matchedInv?.date ?? "",
+            confidence: confidenceNum,
+            reason: (result.reason ?? "").toString(),
+            source: "ai",
+            status: "confirmed",
+          });
+        }
+      } catch (aiError: any) {
+        aiLatencies.push(Date.now() - aiStart);
+        if (aiError?.name === "AbortError") {
+          aiTimeouts++;
+          lastAiError = `timeout after ${OPENAI_TIMEOUT_MS}ms`;
+        } else {
+          aiHttpErrors++;
+          lastAiError = `fetch: ${aiError?.message ?? aiError}`;
+        }
+        console.error("AI matching error:", aiError);
+      }
     }
 
-    // Release: Claims, die wir NICHT erfolgreich gematched haben, zurueck auf
-    // 'unmatched'. Sonst haengen sie in 'ai_processing' und waeren fuer den
-    // naechsten Call unsichtbar bis zur Stale-Recovery.
-    const matchedTxIds = new Set<string>(matchedTransactions.map((m: any) => m.transactionId));
+    // -----------------------------------------------------------------------
+    // Cleanup + Response
+    // -----------------------------------------------------------------------
+
+    const matchedTxIds = new Set<string>(
+      matchedTransactions.map((m: any) => m.transactionId),
+    );
     await releaseUnmatchedClaims(matchedTxIds);
 
-    // `remaining` neu lesen nach Release — unsere freigegebenen TX sind jetzt
-    // wieder im Backlog fuer den naechsten Call.
     const { count: finalRemaining } = await supabaseClient
       .from("bank_transactions")
       .select("id", { count: "exact", head: true })
       .eq("match_status", "unmatched");
 
+    // Latency-Aggregate
+    const sortedLatencies = [...aiLatencies].sort((a, b) => a - b);
+    const avgLatencyMs =
+      sortedLatencies.length === 0
+        ? 0
+        : Math.round(sortedLatencies.reduce((a, b) => a + b, 0) / sortedLatencies.length);
+    const p95LatencyMs =
+      sortedLatencies.length === 0
+        ? 0
+        : sortedLatencies[Math.min(sortedLatencies.length - 1, Math.floor(sortedLatencies.length * 0.95))];
+
     return new Response(
       JSON.stringify({
         success: true,
-        // Version-Tag: bei "0 Treffer" sofort im Network-Tab erkennbar ob
-        // ueberhaupt die neue Edge-Function-Version live ist.
         version: EDGE_VERSION,
         matchedCount,
         autoConfirmedCount,
@@ -921,14 +1438,24 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
           httpErrors: aiHttpErrors,
           parseErrors: aiParseErrors,
           lastError: lastAiError,
+          avgLatencyMs,
+          p95LatencyMs,
         },
         decisions: {
-          deterministicMatched,
+          // Backwards-compat: deterministicMatched = t1 + t2
+          deterministicMatched: deterministicTier1 + deterministicTier2,
+          deterministicTier1,
+          deterministicTier2,
+          cooldownSkipped,
           noCandidates,
           aiReturnedNull,
           aiRejectedInvalidId,
           aiRejectedLowConfidence,
           aiRejectedSanity,
+          aiRejectedSanityBreakdown: {
+            hardGateAmount: aiRejectedSanity_hardGateAmount,
+            insufficientSignals: aiRejectedSanity_insufficientSignals,
+          },
           dbUpdateErrors,
         },
         matchedTransactions,
@@ -938,9 +1465,6 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("Auto-match error:", error);
-    // Claims freigeben, damit nicht bis zur Stale-Recovery (3min) blockiert.
-    // WHERE match_status='ai_processing' stellt sicher, dass erfolgreich
-    // gematchte ('confirmed') Rows nicht rueckgaengig gemacht werden.
     if (supabaseClient && claimedForCleanup.length > 0) {
       try {
         await supabaseClient
@@ -959,6 +1483,10 @@ Wähle die plausibelste Rechnung aus dieser Liste (oder null) und gib deine Conf
   }
 });
 
+// =============================================================================
+// SECTION 9 — LLM Resolve
+// =============================================================================
+
 type LLMConfig = {
   provider: "gemini" | "openai";
   apiKey: string;
@@ -967,24 +1495,18 @@ type LLMConfig = {
   fallbackModel: string | null;
 };
 
-// Gemini bevorzugt (der User hat explizit darauf umgestellt). OpenAI nur als
-// Fallback, damit ein altes Secret nicht sofort zu Downtime führt.
+// Gemini bevorzugt (User hat darauf umgestellt). OpenAI als Fallback.
+// gemini-2.5-flash (NICHT -lite) — der Plan v2 verlangt das stabilere
+// Pro-Modell, weil Multi-Shot-Prompt + Sanity-Gate zuverlaessigere Antworten
+// brauchen, als die Lite-Variante liefert.
 function resolveLLM(): LLMConfig | null {
   const geminiKey = Deno.env.get("GEMINI_API_KEY");
   if (geminiKey) {
     return {
       provider: "gemini",
       apiKey: geminiKey,
-      // Google stellt einen OpenAI-kompatiblen Endpoint unter /v1beta/openai bereit.
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      // gemini-2.5-flash-lite: neu, guenstig, schnell, kein Thinking-Mode by
-      // default — ideal fuer strukturiertes JSON-Matching. gemini-2.0-flash ist
-      // fuer neue API-Keys nicht mehr verfuegbar (404), 2.5-flash laeuft per
-      // Default im teuren Thinking-Mode.
-      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash-lite",
-      // gemini-flash-latest ist ein Alias auf das aktuell beste Flash-Modell.
-      // Wenn das primaere Modell mit 404 deprecated wird, fallen wir darauf
-      // zurueck — dann laeuft zumindest etwas, statt dass alle Matches ausfallen.
+      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash",
       fallbackModel: Deno.env.get("LLM_MODEL_FALLBACK") ?? "gemini-flash-latest",
     };
   }

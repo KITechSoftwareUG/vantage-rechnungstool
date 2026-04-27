@@ -68,12 +68,19 @@ export default function MatchingPage() {
     processed: number;
     confirmed: number;
     deterministic: number;
+    deterministicTier1: number;
+    deterministicTier2: number;
+    cooldownSkipped: number;
     aiAttempted: number;
     aiSucceeded: number;
     aiReturnedNull: number;
     aiRejectedInvalidId: number;
     aiRejectedLowConfidence: number;
     aiRejectedSanity: number;
+    aiRejectedSanityHardGateAmount: number;
+    aiRejectedSanityInsufficientSignals: number;
+    aiAvgLatencyMs: number | null;
+    aiP95LatencyMs: number | null;
     dbErrors: number;
     edgeVersion: string | null;
     aiModel: string | null;
@@ -238,10 +245,18 @@ export default function MatchingPage() {
     let aiModel: string | null = null;
     let edgeVersion: string | null = null;
     let deterministicMatched = 0;
+    let deterministicTier1 = 0;
+    let deterministicTier2 = 0;
+    let cooldownSkipped = 0;
     let aiReturnedNull = 0;
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
     let aiRejectedSanity = 0;
+    let aiRejectedSanityHardGateAmount = 0;
+    let aiRejectedSanityInsufficientSignals = 0;
+    let aiAvgLatencyAccum = 0;
+    let aiAvgLatencySamples = 0;
+    let aiP95LatencyMax = 0;
     let dbUpdateErrors = 0;
     let earlyReturnReason: string | null = null;
     let rawCounts: {
@@ -334,14 +349,34 @@ export default function MatchingPage() {
             aiParseErrors += data.ai.parseErrors ?? 0;
             if (data.ai.lastError) lastAiError = data.ai.lastError;
             if (data.ai.model) aiModel = data.ai.model;
+            // Latenz aggregieren: gewichteter Avg ueber alle Calls einer Welle,
+            // p95 als Max ueber die einzelnen p95-Werte (grobe Naeherung — wir
+            // haben nicht die einzelnen Sample-Werte pro Welle).
+            const callCount = data.ai.attempted ?? 0;
+            if (callCount > 0 && typeof data.ai.avgLatencyMs === "number") {
+              aiAvgLatencyAccum += data.ai.avgLatencyMs * callCount;
+              aiAvgLatencySamples += callCount;
+            }
+            if (typeof data.ai.p95LatencyMs === "number") {
+              aiP95LatencyMax = Math.max(aiP95LatencyMax, data.ai.p95LatencyMs);
+            }
           }
           if (data.version) edgeVersion = data.version;
           if (data.decisions) {
             deterministicMatched += data.decisions.deterministicMatched ?? 0;
+            deterministicTier1 += data.decisions.deterministicTier1 ?? 0;
+            deterministicTier2 += data.decisions.deterministicTier2 ?? 0;
+            cooldownSkipped += data.decisions.cooldownSkipped ?? 0;
             aiReturnedNull += data.decisions.aiReturnedNull ?? 0;
             aiRejectedInvalidId += data.decisions.aiRejectedInvalidId ?? 0;
             aiRejectedLowConfidence += data.decisions.aiRejectedLowConfidence ?? 0;
             aiRejectedSanity += data.decisions.aiRejectedSanity ?? 0;
+            if (data.decisions.aiRejectedSanityBreakdown) {
+              aiRejectedSanityHardGateAmount +=
+                data.decisions.aiRejectedSanityBreakdown.hardGateAmount ?? 0;
+              aiRejectedSanityInsufficientSignals +=
+                data.decisions.aiRejectedSanityBreakdown.insufficientSignals ?? 0;
+            }
             dbUpdateErrors += data.decisions.dbUpdateErrors ?? 0;
           }
           if (Array.isArray(data.matchedTransactions)) {
@@ -411,12 +446,20 @@ export default function MatchingPage() {
           processed: totalProcessed,
           confirmed: totalAutoConfirmed,
           deterministic: deterministicMatched,
+          deterministicTier1,
+          deterministicTier2,
+          cooldownSkipped,
           aiAttempted,
           aiSucceeded,
           aiReturnedNull,
           aiRejectedInvalidId,
           aiRejectedLowConfidence,
           aiRejectedSanity,
+          aiRejectedSanityHardGateAmount,
+          aiRejectedSanityInsufficientSignals,
+          aiAvgLatencyMs:
+            aiAvgLatencySamples > 0 ? Math.round(aiAvgLatencyAccum / aiAvgLatencySamples) : null,
+          aiP95LatencyMs: aiP95LatencyMax > 0 ? aiP95LatencyMax : null,
           dbErrors: dbUpdateErrors,
           edgeVersion,
           aiModel,
@@ -826,10 +869,13 @@ export default function MatchingPage() {
                     {autoMatchSummary.processed} TX geprüft
                   </div>
                   <div className="text-muted-foreground">
-                    Pfade: deterministisch={autoMatchSummary.deterministic}
+                    Pfade: deterministisch t1={autoMatchSummary.deterministicTier1}, t2={autoMatchSummary.deterministicTier2}
+                    {autoMatchSummary.cooldownSkipped > 0 && ` · Cooldown übersprungen: ${autoMatchSummary.cooldownSkipped}`}
                     {autoMatchSummary.aiAttempted > 0 && ` · KI ${autoMatchSummary.aiSucceeded}/${autoMatchSummary.aiAttempted} (${autoMatchSummary.aiModel ?? "?"})`}
+                    {autoMatchSummary.aiAvgLatencyMs !== null &&
+                      ` · ⌀${autoMatchSummary.aiAvgLatencyMs}ms${autoMatchSummary.aiP95LatencyMs ? ` p95 ${autoMatchSummary.aiP95LatencyMs}ms` : ""}`}
                     {(autoMatchSummary.aiReturnedNull + autoMatchSummary.aiRejectedInvalidId + autoMatchSummary.aiRejectedLowConfidence + autoMatchSummary.aiRejectedSanity) > 0 &&
-                      ` · KI-Ablehnungen: null=${autoMatchSummary.aiReturnedNull}, bad-id=${autoMatchSummary.aiRejectedInvalidId}, low-conf=${autoMatchSummary.aiRejectedLowConfidence}, sanity=${autoMatchSummary.aiRejectedSanity}`}
+                      ` · KI-Ablehnungen: null=${autoMatchSummary.aiReturnedNull}, bad-id=${autoMatchSummary.aiRejectedInvalidId}, low-conf=${autoMatchSummary.aiRejectedLowConfidence}, sanity=${autoMatchSummary.aiRejectedSanity} (Betrag/Signale: ${autoMatchSummary.aiRejectedSanityHardGateAmount}/${autoMatchSummary.aiRejectedSanityInsufficientSignals})`}
                     {autoMatchSummary.dbErrors > 0 && ` · ⚠️ DB-Fehler: ${autoMatchSummary.dbErrors}`}
                   </div>
                   <div className="text-muted-foreground">
