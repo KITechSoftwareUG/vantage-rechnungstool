@@ -24,3 +24,6 @@ verify_jwt = true
 
 [functions.zahnfunnel-health-check]
 verify_jwt = true
+
+[functions.tax-export-to-drive]
+verify_jwt = true

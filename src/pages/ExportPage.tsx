@@ -4,6 +4,7 @@ import { de } from "date-fns/locale";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Cloud,
   Download,
   ExternalLink,
   FileText,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { useExportTransactions, ExportTransaction } from "@/hooks/useExportTransactions";
 import { useAuth } from "@/hooks/useAuth";
+import { useTaxExportToDrive } from "@/hooks/useTaxExportToDrive";
 import { resolveStorageUrl, createLongLivedSignedUrl } from "@/lib/resolveStorageUrl";
 import {
   Card,
@@ -267,9 +269,47 @@ function triggerDownload(html: string, filename: string) {
 export default function ExportPage() {
   const { user } = useAuth();
   const { data: transactions, isLoading } = useExportTransactions();
+  const driveExport = useTaxExportToDrive();
   const [isSending, setIsSending] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
+
+  const handleDriveExport = () => {
+    if (!transactions || transactions.length === 0) {
+      toast.error("Keine Transaktionen zum Exportieren");
+      return;
+    }
+    driveExport.mutate(undefined, {
+      onSuccess: (data) => {
+        if (data.uploaded.length === 0) {
+          toast.info(data.message ?? "Nichts zu exportieren");
+          return;
+        }
+        // Bei mehreren Jahren mehrere Files. Toast mit Klick auf das erste,
+        // weitere im Body — pragmatischer als ein Modal.
+        const lines = data.uploaded
+          .map((u) => `${u.year}: ${u.rowCount} Buchungen`)
+          .join(" · ");
+        toast.success(
+          `In Drive abgelegt (${data.uploaded.length} ${data.uploaded.length === 1 ? "Datei" : "Dateien"}): ${lines}`,
+          {
+            action: data.uploaded[0]?.webViewLink
+              ? {
+                  label: "In Drive oeffnen",
+                  onClick: () => window.open(data.uploaded[0].webViewLink, "_blank", "noopener,noreferrer"),
+                }
+              : undefined,
+            duration: 12000,
+          },
+        );
+        if (data.failed && data.failed.length > 0) {
+          toast.error(
+            `${data.failed.length} Jahr(e) fehlgeschlagen: ${data.failed.map((f) => `${f.year} (${f.reason})`).join(", ")}`,
+          );
+        }
+      },
+    });
+  };
 
   // Gruppiert nach Jahr fuer den Steuerberater-Workflow ("Buchungsjahr 2025"
   // separat von 2024). Innerhalb des Jahres chronologisch absteigend wie
@@ -434,8 +474,26 @@ export default function ExportPage() {
         </div>
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
           <Button
+            onClick={handleDriveExport}
+            disabled={driveExport.isPending || isLoading || !transactions?.length}
+            className="w-full gap-2 sm:w-auto"
+          >
+            {driveExport.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Wird abgelegt...
+              </>
+            ) : (
+              <>
+                <Cloud className="h-4 w-4" />
+                In Drive ablegen
+              </>
+            )}
+          </Button>
+          <Button
             onClick={handleDownloadHtml}
             disabled={isDownloading || isLoading || !transactions?.length}
+            variant="outline"
             className="w-full gap-2 sm:w-auto"
           >
             {isDownloading ? (
