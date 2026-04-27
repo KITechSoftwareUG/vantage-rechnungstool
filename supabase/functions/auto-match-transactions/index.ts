@@ -74,7 +74,7 @@ const SKIP_COOLDOWN_DAYS = 14;
 
 // Version-Tag. Bei jedem Code-Change hochzaehlen, damit das Frontend live
 // nachvollziehen kann, ob die neue Edge-Function-Version auch wirklich aktiv ist.
-const EDGE_VERSION = "2026-04-27-pipeline-v2-claim-filter";
+const EDGE_VERSION = "2026-04-27-pipeline-v2-worker-pool";
 
 // =============================================================================
 // SECTION 1 — String Normalization & Similarity
@@ -729,6 +729,23 @@ serve(async (req) => {
       throw new Error("Not authenticated");
     }
 
+    // Optional Body: { txIds?: string[] }
+    // Wenn das Frontend explizit eine Liste mitliefert, ueberspringen wir die
+    // SELECT-Race komplett — der Caller hat die Arbeit schon disjunkt
+    // partitioniert. Ohne txIds laeuft die alte Logik (Legacy-Modus).
+    let providedTxIds: string[] | null = null;
+    try {
+      const body = await req.json();
+      if (body && Array.isArray(body.txIds) && body.txIds.length > 0) {
+        // String-only und auf MAX limitieren, damit Wallclock im Rahmen bleibt
+        providedTxIds = body.txIds
+          .filter((x: unknown) => typeof x === "string")
+          .slice(0, MAX_TRANSACTIONS_PER_INVOCATION);
+      }
+    } catch {
+      // kein body / kein json — Legacy-Modus
+    }
+
     // -----------------------------------------------------------------------
     // PARALLEL-SAFE CLAIM
     // -----------------------------------------------------------------------
@@ -826,40 +843,57 @@ serve(async (req) => {
       }
     }
 
-    // (d) Kandidaten — jetzt mit Filter "kein aktiver Skip-Marker"
-    // PostgREST or-Syntax: match_reason ist NULL ODER stimmt nicht mit
-    // "[auto-skip:" ueberein.
-    const CLAIM_OVERSAMPLE = MAX_TRANSACTIONS_PER_INVOCATION * 2;
-    const { data: candidateRows, error: candErr } = await supabaseClient
-      .from("bank_transactions")
-      .select("id")
-      .eq("match_status", "unmatched")
-      .or("match_reason.is.null,match_reason.not.like.[auto-skip:*")
-      .order("date", { ascending: false })
-      .limit(CLAIM_OVERSAMPLE);
-    if (candErr) throw candErr;
-    const candidateIds = (candidateRows || []).map((r: any) => r.id);
+    // (d) Kandidaten ermitteln. Zwei Modi:
+    //   - body.txIds gegeben (NEUER Modus, vom Frontend-Worker-Pool):
+    //     wir nehmen die Liste 1:1, der Caller hat das Splitting schon gemacht.
+    //   - sonst (Legacy / curl): SELECT mit Date-DESC-Order, mit Filter
+    //     "kein aktiver Skip-Marker" + Oversampling.
+    let candidateIds: string[];
+    if (providedTxIds && providedTxIds.length > 0) {
+      candidateIds = providedTxIds;
+    } else {
+      const CLAIM_OVERSAMPLE = MAX_TRANSACTIONS_PER_INVOCATION * 2;
+      const { data: candidateRows, error: candErr } = await supabaseClient
+        .from("bank_transactions")
+        .select("id")
+        .eq("match_status", "unmatched")
+        .or("match_reason.is.null,match_reason.not.like.[auto-skip:*")
+        .order("date", { ascending: false })
+        .limit(CLAIM_OVERSAMPLE);
+      if (candErr) throw candErr;
+      candidateIds = (candidateRows || []).map((r: any) => r.id);
+    }
 
     let claimed: any[] = [];
     if (candidateIds.length > 0) {
       const toClaim = candidateIds.slice(0, MAX_TRANSACTIONS_PER_INVOCATION);
+      // Im txIds-Modus filtern wir trotzdem nochmal auf "kein aktiver
+      // Skip-Marker" als Defense-in-Depth: falls das Frontend eine Liste vor
+      // einem Cooldown-Cleanup geschickt hat, werden cooldown'd TX hier
+      // nicht versehentlich nochmal angefasst.
       const { data: claimResult, error: claimErr } = await supabaseClient
         .from("bank_transactions")
         .update({ match_status: "ai_processing" })
         .eq("match_status", "unmatched")
+        .or("match_reason.is.null,match_reason.not.like.[auto-skip:*")
         .in("id", toClaim)
         .select("*, bank_statements(bank_type)");
       if (claimErr) throw claimErr;
       claimed = claimResult || [];
     }
 
-    // (f) Second-Try bei hoher Kollisionsrate
+    // (f) Second-Try nur im Legacy-Modus (txIds-Modus liefert disjunkte Listen
+    // — kein Race, kein Second-Try noetig). Im Legacy-Modus retry mit dem
+    // ZWEITEN Slice von candidateIds (nicht dem ersten — sonst probiert die
+    // Function dieselben IDs nochmal).
     if (
+      !providedTxIds &&
       claimed.length < MAX_TRANSACTIONS_PER_INVOCATION / 2 &&
       candidateIds.length > MAX_TRANSACTIONS_PER_INVOCATION
     ) {
       const claimedSet = new Set(claimed.map((t: any) => t.id));
       const rest = candidateIds
+        .slice(MAX_TRANSACTIONS_PER_INVOCATION)
         .filter((id: string) => !claimedSet.has(id))
         .slice(0, MAX_TRANSACTIONS_PER_INVOCATION - claimed.length);
       if (rest.length > 0) {
@@ -867,6 +901,7 @@ serve(async (req) => {
           .from("bank_transactions")
           .update({ match_status: "ai_processing" })
           .eq("match_status", "unmatched")
+          .or("match_reason.is.null,match_reason.not.like.[auto-skip:*")
           .in("id", rest)
           .select("*, bank_statements(bank_type)");
         if (secondErr) console.warn("Second-try claim failed (non-fatal):", secondErr.message);

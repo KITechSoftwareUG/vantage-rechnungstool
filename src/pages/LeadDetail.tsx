@@ -424,7 +424,7 @@ function FirstContactCard({ lead }: { lead: Lead }) {
           ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Noch leer. „Vorschlag generieren" klicken oder eigenen Text schreiben."
+          placeholder={"Noch leer. „Vorschlag generieren“ klicken oder eigenen Text schreiben."}
           maxLength={FIRST_CONTACT_MAX_CHARS}
           className="min-h-[100px] resize-none"
           disabled={markSent.isPending}

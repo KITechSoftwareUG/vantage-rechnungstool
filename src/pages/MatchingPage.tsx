@@ -17,6 +17,7 @@ import {
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllPaginated } from "@/lib/fetchAllPaginated";
 import { MONTH_NAMES } from "@/types/documents";
 import { MatchingAgentDialog } from "@/components/matching/MatchingAgentDialog";
 import { Bot } from "lucide-react";
@@ -246,14 +247,25 @@ export default function MatchingPage() {
         if (data !== undefined) queryClient.setQueryData(key, data);
       }
     };
-    // Edge Function verarbeitet aus Wall-Clock-Gründen nur N Transaktionen
-    // pro Aufruf. Wir loopen, bis sie `remaining: 0` meldet. Safety-Cap
-    // verhindert eine Endlosschleife bei einem fehlerhaften Backend.
-    const MAX_BATCHES = 50;
-    let totalMatched = 0;
+    // ---------------------------------------------------------------------
+    // ARCHITEKTUR (v3, Worker-Pool):
+    // 1. Wir holen einmalig ALLE eligible (unmatched, kein aktiver Cooldown)
+    //    TX-IDs aus der DB. Damit kennen wir den exakten Total-Workload
+    //    BEVOR irgendein Edge-Function-Call startet → exakter Progress-Bar.
+    // 2. Wir splitten die Liste in 50er-Batches.
+    // 3. CONCURRENCY=4 Worker-Coroutines ziehen Batches aus einer gemeinsamen
+    //    Queue (atomic via let-counter im Closure). Jeder Worker schickt
+    //    seinen Batch via `body: { txIds: [...] }` an die Edge Function, die
+    //    GENAU diese Liste verarbeitet — kein Race um SELECT-Top-N.
+    // 4. Nach jedem Batch-Return wird die Progress-Anzeige exakt aktualisiert
+    //    (X/N TX, Y gematcht, Z gerade in Bearbeitung).
+    // ---------------------------------------------------------------------
+    const BATCH_SIZE = 50;
+    const CONCURRENCY = 4;
+
+    // Aggregator-State (closure-shared zwischen Workern)
     let totalAutoConfirmed = 0;
     let totalProcessed = 0;
-    let initialBacklog: number | null = null;
     let aiAttempted = 0;
     let aiSucceeded = 0;
     let aiTimeouts = 0;
@@ -278,130 +290,172 @@ export default function MatchingPage() {
     let aiAvgLatencySamples = 0;
     let aiP95LatencyMax = 0;
     let dbUpdateErrors = 0;
-    let earlyReturnReason: string | null = null;
-    let rawCounts: {
-      unmatchedTransactions?: number;
-      allInvoices?: number;
-      unmatchedInvoices?: number;
-      invoicesAfterDedup?: number;
-    } | null = null;
     const allResults: AutoMatchResult[] = [];
-
-    // 4-fach Parallelitaet: die Edge Function claimt pro Call atomisch bis zu
-    // 50 TX (match_status: unmatched → ai_processing). Parallele Calls sehen
-    // disjunkte Sets, dadurch ~4x Speedup. Details siehe Edge Function v9.
-    const CONCURRENCY = 4;
 
     let wasCancelled = false;
     try {
-      waveLoop: for (let wave = 0; wave < MAX_BATCHES; wave++) {
-        if (autoMatchCancelRef.current) {
-          wasCancelled = true;
-          break;
-        }
-        const signal = autoMatchAbortRef.current?.signal;
+      // 1) Pre-fetch: alle eligible TX-IDs holen.
+      const eligibleRowsResp = await fetchAllPaginated<{ id: string }>(() =>
+        supabase
+          .from("bank_transactions")
+          .select("id")
+          .eq("match_status", "unmatched")
+          .or("match_reason.is.null,match_reason.not.like.[auto-skip:*")
+          .order("date", { ascending: false }),
+      );
+      const eligibleIds = eligibleRowsResp.map((r) => r.id);
+      const totalEligible = eligibleIds.length;
 
-        // Live-Poll-Setup: waehrend die Edge Function lauft, fragen wir alle
-        // 1.5s die DB nach dem aktuellen Stand und aktualisieren die Anzeige
-        // (in_flight = ai_processing, confirmed = neu seit waveStartIso).
-        // Das gibt dem User eine X/Y-Granularitaet ohne dass wir Streaming
-        // brauchen.
-        const waveStartIso = new Date().toISOString();
-        const pollAbort = new AbortController();
-        const livePoll = (async () => {
-          // Warm-up: ai_processing sollte gleich nach Start hochgehen.
-          // Wir verwenden den Max-Wert in dieser Welle als "waveTotal".
-          let waveTotalSeen = 0;
-          while (!pollAbort.signal.aborted) {
-            try {
-              const [{ count: aiProc }, { count: confirmedNew }, { count: backlogActive }, { count: backlogCooldown }] = await Promise.all([
-                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "ai_processing"),
-                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "confirmed").gte("updated_at", waveStartIso),
-                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "unmatched").or("match_reason.is.null,match_reason.not.like.[auto-skip:*"),
-                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "unmatched").like("match_reason", "[auto-skip:%"),
-              ]);
-              const inFlight = aiProc ?? 0;
-              waveTotalSeen = Math.max(waveTotalSeen, inFlight);
-              const waveConfirmedNow = confirmedNew ?? 0;
-              const waveProcessedNow = Math.max(0, waveTotalSeen - inFlight);
-              setAutoMatchProgress({
-                batch: wave + 1,
-                processed: totalProcessed + waveProcessedNow,
-                confirmed: totalAutoConfirmed + waveConfirmedNow,
-                waveTotal: waveTotalSeen,
-                waveProcessed: waveProcessedNow,
-                waveConfirmed: waveConfirmedNow,
-                waveInFlight: inFlight,
-                backlogRemaining: backlogActive ?? 0,
-                cooldownInBacklog: backlogCooldown ?? 0,
-              });
-            } catch {
-              // ignore poll errors — sind nicht kritisch
-            }
-            await new Promise((r) => setTimeout(r, 1500));
-          }
-        })();
+      // Cooldown-Backlog separat zaehlen (nur fuer Anzeige).
+      const { count: cooldownCount } = await supabase
+        .from("bank_transactions")
+        .select("id", { count: "exact", head: true })
+        .eq("match_status", "unmatched")
+        .like("match_reason", "[auto-skip:%");
+      cooldownInBacklog = cooldownCount ?? 0;
 
-        // Welle von CONCURRENCY parallelen Calls. Alle teilen sich denselben
-        // AbortController → ein Cancel bricht alle 4 gleichzeitig ab.
-        const wavePromises = Array.from({ length: CONCURRENCY }, async () => {
+      // Initialer Progress-Stand mit korrektem Total
+      setAutoMatchProgress({
+        batch: 0,
+        processed: 0,
+        confirmed: 0,
+        waveTotal: totalEligible,
+        waveProcessed: 0,
+        waveConfirmed: 0,
+        waveInFlight: 0,
+        backlogRemaining: totalEligible,
+        cooldownInBacklog,
+      });
+
+      if (totalEligible === 0) {
+        // Nichts zu tun. Trotzdem das Result-Modal mit Cooldown-Info anzeigen.
+        setAutoMatchResults([]);
+        setAutoMatchSummary({
+          processed: 0,
+          confirmed: 0,
+          deterministic: 0,
+          deterministicTier1: 0,
+          deterministicTier2: 0,
+          cooldownSkipped: 0,
+          cooldownInBacklog,
+          cooldownClearedFingerprint: 0,
+          aiAttempted: 0,
+          aiSucceeded: 0,
+          aiReturnedNull: 0,
+          aiRejectedInvalidId: 0,
+          aiRejectedLowConfidence: 0,
+          aiRejectedSanity: 0,
+          aiRejectedSanityHardGateAmount: 0,
+          aiRejectedSanityInsufficientSignals: 0,
+          aiAvgLatencyMs: null,
+          aiP95LatencyMs: null,
+          dbErrors: 0,
+          edgeVersion: null,
+          aiModel: null,
+          earlyReturnReason:
+            cooldownInBacklog > 0
+              ? `Keine eligible TX — alle ${cooldownInBacklog} verbleibenden sind im Cooldown (warten ≤14d oder neue Rechnung).`
+              : "Keine offenen Transaktionen zum Matchen.",
+          rawCounts: null,
+        });
+        toast({
+          title: "Nichts zu tun",
+          description:
+            cooldownInBacklog > 0
+              ? `${cooldownInBacklog} TX im Cooldown — Pool unveraendert seit letztem Run.`
+              : "Keine offenen Transaktionen.",
+        });
+        return;
+      }
+
+      // 2) In Batches splitten
+      const batches: string[][] = [];
+      for (let i = 0; i < eligibleIds.length; i += BATCH_SIZE) {
+        batches.push(eligibleIds.slice(i, i + BATCH_SIZE));
+      }
+      const totalBatches = batches.length;
+
+      // 3) Worker-Pool. Jeder Worker zieht atomisch einen Batch aus der Queue.
+      let nextBatchIdx = 0;
+      let inFlight = 0;
+      let processedBatches = 0;
+      const signal = autoMatchAbortRef.current?.signal;
+
+      // Helper: aktuelle Progress-Anzeige aktualisieren.
+      const refreshProgress = () => {
+        setAutoMatchProgress({
+          batch: Math.min(processedBatches + 1, totalBatches),
+          processed: totalProcessed,
+          confirmed: totalAutoConfirmed,
+          waveTotal: totalEligible,
+          waveProcessed: totalProcessed,
+          waveConfirmed: totalAutoConfirmed,
+          waveInFlight: inFlight * BATCH_SIZE, // grobe Schaetzung — wir
+          // wissen nicht exakt wieviele TX innerhalb eines Batches gerade
+          // beim AI-Call sind, aber das gibt eine sinnvolle Ober-Anzeige.
+          backlogRemaining: Math.max(0, totalEligible - totalProcessed),
+          cooldownInBacklog,
+        });
+      };
+
+      const worker = async (workerIdx: number) => {
+        while (true) {
+          if (autoMatchCancelRef.current) return;
+          const myBatchIdx = nextBatchIdx++;
+          if (myBatchIdx >= totalBatches) return;
+          const batch = batches[myBatchIdx];
+
+          inFlight++;
+          refreshProgress();
+
+          let data: any = null;
+          let invokeErr: any = null;
           try {
-            const res = await supabase.functions.invoke("auto-match-transactions", { signal });
-            return { data: res.data, error: res.error, aborted: false };
-          } catch (invokeErr: any) {
-            if (signal?.aborted || invokeErr?.name === "AbortError") {
-              return { data: null, error: null, aborted: true };
+            const res = await supabase.functions.invoke("auto-match-transactions", {
+              body: { txIds: batch },
+            });
+            data = res.data;
+            if (res.error) invokeErr = res.error;
+          } catch (e: any) {
+            if (signal?.aborted || e?.name === "AbortError") {
+              wasCancelled = true;
+              inFlight--;
+              return;
             }
-            return { data: null, error: invokeErr, aborted: false };
+            invokeErr = e;
           }
-        });
 
-        // Race: entweder alle 4 Calls antworten, oder der User klickt Abbrechen.
-        // Das Cancel-Promise wird im onClick-Handler synchron resolved, damit
-        // die UI nicht auf die laufenden Edge-Function-Calls wartet.
-        const cancelPromise = new Promise<"cancelled">((resolve) => {
-          autoMatchCancelResolveRef.current = () => resolve("cancelled");
-        });
-        const raceResult = await Promise.race([
-          Promise.all(wavePromises).then((r) => ({ kind: "done" as const, results: r })),
-          cancelPromise.then(() => ({ kind: "cancelled" as const })),
-        ]);
-        autoMatchCancelResolveRef.current = null;
-        // Polling stoppen, sobald die Welle fertig ist (oder abgebrochen wurde).
-        pollAbort.abort();
-        // wir warten kurz auf den Abort, kein await auf livePoll noetig — lauft eh aus.
-        void livePoll;
-        if (raceResult.kind === "cancelled") {
-          wasCancelled = true;
-          break waveLoop;
-        }
-        const results = raceResult.results;
+          inFlight--;
 
-        let waveProcessed = 0;
-        let lastRemaining = 0;
-        for (const r of results) {
-          if (r.aborted) {
-            wasCancelled = true;
+          if (invokeErr) {
+            // Wir laufen nicht weiter, wenn ein einzelner Batch komplett
+            // crashed — der User bekommt einen Toast und die anderen Worker
+            // brechen ab. Cancel-Flag setzen.
+            autoMatchCancelRef.current = true;
+            throw invokeErr;
+          }
+
+          if (!data) {
+            processedBatches++;
+            refreshProgress();
             continue;
           }
-          if (r.error) throw r.error;
-          const data = r.data;
-          if (!data) continue;
 
           if (data.aiKeyMissing) {
+            autoMatchCancelRef.current = true;
             toast({
               title: "KI-Matching nicht konfiguriert",
               description:
-                "OPENAI_API_KEY fehlt in den Supabase-Edge-Function-Secrets. In Supabase Dashboard setzen und Function redeployen.",
+                "GEMINI_API_KEY/OPENAI_API_KEY fehlt in den Supabase-Edge-Function-Secrets.",
               variant: "destructive",
             });
             return;
           }
 
-          totalMatched += data.matchedCount ?? 0;
+          // Aggregate
           totalAutoConfirmed += data.autoConfirmedCount ?? 0;
-          totalProcessed += data.processedCount ?? 0;
-          waveProcessed += data.processedCount ?? 0;
+          totalProcessed += data.processedCount ?? batch.length;
+          if (data.version) edgeVersion = data.version;
 
           if (data.ai) {
             aiAttempted += data.ai.attempted ?? 0;
@@ -411,9 +465,6 @@ export default function MatchingPage() {
             aiParseErrors += data.ai.parseErrors ?? 0;
             if (data.ai.lastError) lastAiError = data.ai.lastError;
             if (data.ai.model) aiModel = data.ai.model;
-            // Latenz aggregieren: gewichteter Avg ueber alle Calls einer Welle,
-            // p95 als Max ueber die einzelnen p95-Werte (grobe Naeherung — wir
-            // haben nicht die einzelnen Sample-Werte pro Welle).
             const callCount = data.ai.attempted ?? 0;
             if (callCount > 0 && typeof data.ai.avgLatencyMs === "number") {
               aiAvgLatencyAccum += data.ai.avgLatencyMs * callCount;
@@ -423,13 +474,12 @@ export default function MatchingPage() {
               aiP95LatencyMax = Math.max(aiP95LatencyMax, data.ai.p95LatencyMs);
             }
           }
-          if (data.version) edgeVersion = data.version;
+
           if (data.decisions) {
             deterministicMatched += data.decisions.deterministicMatched ?? 0;
             deterministicTier1 += data.decisions.deterministicTier1 ?? 0;
             deterministicTier2 += data.decisions.deterministicTier2 ?? 0;
             cooldownSkipped += data.decisions.cooldownSkipped ?? 0;
-            cooldownInBacklog = Math.max(cooldownInBacklog, data.decisions.cooldownInBacklog ?? 0);
             cooldownClearedFingerprint += data.decisions.cooldownClearedFingerprint ?? 0;
             aiReturnedNull += data.decisions.aiReturnedNull ?? 0;
             aiRejectedInvalidId += data.decisions.aiRejectedInvalidId ?? 0;
@@ -443,57 +493,39 @@ export default function MatchingPage() {
             }
             dbUpdateErrors += data.decisions.dbUpdateErrors ?? 0;
           }
+
           if (Array.isArray(data.matchedTransactions)) {
             allResults.push(...(data.matchedTransactions as AutoMatchResult[]));
           }
-          // earlyReturnReason / rawCounts nur uebernehmen, wenn dieser konkrete
-          // Call NICHT gearbeitet hat. Bei 4-fach-Parallelitaet claimed oft
-          // ein Call alle TX, die anderen 3 sehen dann legitim 0 — deren
-          // earlyReturnReason wuerde sonst die produktive Arbeit "uebermalen".
-          if (data.earlyReturnReason && (data.processedCount ?? 0) === 0) {
-            earlyReturnReason = data.earlyReturnReason;
-          }
-          if (data.rawCounts && (data.processedCount ?? 0) === 0) {
-            rawCounts = data.rawCounts;
-          }
 
-          lastRemaining = data.remaining ?? 0;
-          if (initialBacklog === null) {
-            initialBacklog = (data.totalUnmatched ?? 0) as number;
-          }
+          processedBatches++;
+          refreshProgress();
+          // Cache aus dem Snapshot zurueckrollen — falls irgendein Mechanismus
+          // (Focus-Refetch/etc.) zwischenzeitlich frischere Daten eingespielt
+          // hat. Sichtbar wird der neue Stand erst beim Refetch nach Modal-Close.
+          restoreTxSnapshots();
         }
+      };
 
-        // Welle ist fertig → endgueltige Werte ueberschreiben den letzten Live-Poll.
-        setAutoMatchProgress({
-          batch: wave + 1,
-          processed: totalProcessed,
-          confirmed: totalAutoConfirmed,
-          waveTotal: 0,
-          waveProcessed: 0,
-          waveConfirmed: 0,
-          waveInFlight: 0,
-          backlogRemaining: lastRemaining,
-          cooldownInBacklog,
-        });
+      // Cancel-Promise (synchron resolved im Click-Handler) gegen
+      // das Promise.all der Worker rennen lassen.
+      const cancelPromise = new Promise<"cancelled">((resolve) => {
+        autoMatchCancelResolveRef.current = () => resolve("cancelled");
+      });
 
-        // Cache auf Snapshot zurueckrollen: falls irgendein Mechanismus
-        // (Realtime/Focus-Refetch/etc.) zwischenzeitlich frischere DB-Daten
-        // eingespielt hat, ueberschreiben wir sie wieder mit dem Start-Stand.
-        // Sichtbar wird der neue Stand erst beim Refetch nach Modal-Close.
-        restoreTxSnapshots();
+      const workersPromise = Promise.all(
+        Array.from({ length: CONCURRENCY }, (_, i) => worker(i)),
+      );
 
-        if (wasCancelled) break waveLoop;
-
-        // Terminierung: keine offene Arbeit mehr. `remaining` ist der globale
-        // DB-Backlog — nicht pro Call. Wenn alle Calls 0 verarbeitet haben UND
-        // noch was uebrig ist, liegt ein Problem vor (z.B. alle TX stecken in
-        // ai_processing durch einen parallelen Run eines anderen Tabs). Safety-
-        // Cap MAX_BATCHES faengt das ab; Stale-Recovery (3min) loest es dauerhaft.
-        if (lastRemaining === 0) break;
-        if (waveProcessed === 0) break;
+      const raceResult = await Promise.race([
+        workersPromise.then(() => "done" as const),
+        cancelPromise,
+      ]);
+      autoMatchCancelResolveRef.current = null;
+      if (raceResult === "cancelled") {
+        wasCancelled = true;
       }
 
-      const aiErrorsTotal = aiTimeouts + aiHttpErrors + aiParseErrors;
       // Wenn die KI zwar aufgerufen wurde, aber nie erfolgreich geantwortet hat,
       // ist das ein Konfig-/Model-Problem — nicht einfach "keine Treffer".
       if (aiAttempted > 0 && aiSucceeded === 0) {
@@ -507,9 +539,6 @@ export default function MatchingPage() {
         // "Function konnte nichts verarbeiten" — egal was parallele Idle-Calls
         // berichtet haben. Nur wenn der gesamte Run 0 TX angefasst hat, bleibt
         // die Diagnose-Meldung aussagekraeftig.
-        const displayEarlyReturnReason = totalProcessed > 0 ? null : earlyReturnReason;
-        const displayRawCounts = totalProcessed > 0 ? null : rawCounts;
-
         // Result-Modal: zeigt jede einzelne neu zugeordnete TX. Damit sieht der
         // User auf einen Blick was passiert ist, statt nur eine abstrakte Zahl.
         setAutoMatchResults(allResults);
@@ -536,8 +565,8 @@ export default function MatchingPage() {
           dbErrors: dbUpdateErrors,
           edgeVersion,
           aiModel,
-          earlyReturnReason: displayEarlyReturnReason,
-          rawCounts: displayRawCounts,
+          earlyReturnReason: null,
+          rawCounts: null,
         });
         // Kurzer Toast als Bestaetigung, das Modal hat die Details.
         const cancelNote = wasCancelled ? " (abgebrochen)" : "";
@@ -605,57 +634,45 @@ export default function MatchingPage() {
             </div>
             {autoMatchProgress && (
               <div className="flex w-full flex-col gap-2 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-sm">
-                {/* Aktuelle Welle: Live-Progress aus DB-Polling.
-                    waveTotal=0 = Welle gerade gestartet oder fertig — dann
-                    fallen wir auf den kumulativen Stand zurueck. */}
-                {autoMatchProgress.waveTotal > 0 ? (
-                  <>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Welle {autoMatchProgress.batch}</span>
-                      <span className="font-mono font-semibold text-foreground">
-                        {autoMatchProgress.waveProcessed}/{autoMatchProgress.waveTotal} TX
-                      </span>
-                    </div>
-                    {/* Progress-Bar fuer die aktuelle Welle */}
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full bg-primary transition-[width] duration-500"
-                        style={{
-                          width: `${Math.min(100, Math.round((autoMatchProgress.waveProcessed / Math.max(1, autoMatchProgress.waveTotal)) * 100))}%`,
-                        }}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">
-                        {autoMatchProgress.waveInFlight} laufen, {autoMatchProgress.waveConfirmed} gematcht
-                      </span>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Welle {autoMatchProgress.batch}</span>
-                    <span className="font-semibold text-foreground">startet…</span>
-                  </div>
-                )}
-                <div className="my-1 h-px bg-border/40" />
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Insgesamt geprüft</span>
+                {/* Hauptanzeige: X/N TX exakt — wir kennen den Total upfront. */}
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">
+                    {autoMatchProgress.waveTotal > 0
+                      ? `Batch ${autoMatchProgress.batch} von ${Math.ceil(autoMatchProgress.waveTotal / 50)}`
+                      : "Lade…"}
+                  </span>
                   <span className="font-mono font-semibold text-foreground">
-                    {autoMatchProgress.processed}
+                    {autoMatchProgress.processed}/{autoMatchProgress.waveTotal} TX
                   </span>
+                </div>
+                {/* Exakter Progress-Bar */}
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary transition-[width] duration-300"
+                    style={{
+                      width: `${
+                        autoMatchProgress.waveTotal > 0
+                          ? Math.min(100, Math.round((autoMatchProgress.processed / autoMatchProgress.waveTotal) * 100))
+                          : 0
+                      }%`,
+                    }}
+                  />
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Insgesamt zugeordnet</span>
-                  <span className="font-mono font-semibold text-success">
-                    {autoMatchProgress.confirmed}
+                  <span className="text-success font-medium">
+                    {autoMatchProgress.confirmed} gematcht
                   </span>
+                  {autoMatchProgress.waveInFlight > 0 && (
+                    <span className="text-muted-foreground">
+                      ~{autoMatchProgress.waveInFlight} in Bearbeitung
+                    </span>
+                  )}
                 </div>
-                {(autoMatchProgress.backlogRemaining > 0 || autoMatchProgress.cooldownInBacklog > 0) && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">Noch offen</span>
+                {autoMatchProgress.cooldownInBacklog > 0 && (
+                  <div className="flex items-center justify-between text-xs pt-1 border-t border-border/40">
+                    <span className="text-muted-foreground">Im Cooldown</span>
                     <span className="font-mono text-muted-foreground">
-                      {autoMatchProgress.backlogRemaining}
-                      {autoMatchProgress.cooldownInBacklog > 0 && ` (+${autoMatchProgress.cooldownInBacklog} Cooldown)`}
+                      {autoMatchProgress.cooldownInBacklog}
                     </span>
                   </div>
                 )}
