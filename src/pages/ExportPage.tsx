@@ -1,17 +1,101 @@
 import { useState } from "react";
 import { format } from "date-fns";
 import { de } from "date-fns/locale";
-import { FileText, Download, ExternalLink, ArrowDownRight, ArrowUpRight, Send, Loader2, Wallet } from "lucide-react";
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  ExternalLink,
+  FileText,
+  Loader2,
+  Send,
+  Wallet,
+} from "lucide-react";
 import { useExportTransactions, ExportTransaction } from "@/hooks/useExportTransactions";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAuth } from "@/hooks/useAuth";
+import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+
+function formatAmount(amount: number) {
+  return new Intl.NumberFormat("de-DE", {
+    style: "currency",
+    currency: "EUR",
+  }).format(amount);
+}
+
+function deriveYearMonth(dateIso: string): { year: number; month: number } | null {
+  try {
+    const d = new Date(dateIso);
+    if (Number.isNaN(d.getTime())) return null;
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  } catch {
+    return null;
+  }
+}
 
 export default function ExportPage() {
+  const { user } = useAuth();
   const { data: transactions, isLoading } = useExportTransactions();
   const [isSending, setIsSending] = useState(false);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+
+  // Gruppiert nach Jahr fuer den Steuerberater-Workflow ("Buchungsjahr 2025"
+  // separat von 2024). Innerhalb des Jahres chronologisch absteigend wie
+  // schon im Hook sortiert.
+  const groupedByYear = (transactions ?? []).reduce<Record<string, ExportTransaction[]>>(
+    (acc, t) => {
+      const ym = deriveYearMonth(t.date);
+      const year = ym ? String(ym.year) : "ohne Datum";
+      (acc[year] ??= []).push(t);
+      return acc;
+    },
+    {},
+  );
+  const years = Object.keys(groupedByYear).sort((a, b) => b.localeCompare(a));
+
+  const handleOpenInvoice = async (t: ExportTransaction) => {
+    const inv = t.matchedInvoice;
+    if (!inv || !user?.id) {
+      toast.error("Keine Rechnung verknuepft");
+      return;
+    }
+    setOpeningId(t.id);
+    try {
+      const ym = deriveYearMonth(inv.date);
+      if (!ym) {
+        // Fallback: Wenn das invoice-Datum kaputt ist, versuchen wir den
+        // direkt gespeicherten file_url. Klappt nur wenn der bereits eine
+        // browser-erreichbare signedUrl ist — sonst zeigt der neue Tab "404".
+        if (inv.fileUrl) {
+          window.open(inv.fileUrl, "_blank", "noopener,noreferrer");
+          return;
+        }
+        toast.error("Datei nicht aufloesbar");
+        return;
+      }
+      const url = await resolveStorageUrl(user.id, ym.year, ym.month, inv.fileName, inv.fileUrl);
+      if (!url) {
+        toast.error("Datei nicht im Storage gefunden");
+        return;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error("open invoice failed:", err);
+      toast.error("Fehler beim Oeffnen der Rechnung");
+    } finally {
+      setOpeningId(null);
+    }
+  };
 
   const handleSendToN8n = async () => {
     if (!transactions || transactions.length === 0) {
@@ -21,7 +105,6 @@ export default function ExportPage() {
 
     setIsSending(true);
     try {
-      // Prepare data with base64 encoded files
       const exportData = await Promise.all(
         transactions.map(async (transaction: ExportTransaction) => {
           let fileBase64: string | null = null;
@@ -29,7 +112,6 @@ export default function ExportPage() {
 
           if (transaction.matchedInvoice?.fileUrl) {
             try {
-              // fileUrl is already a full URL, fetch it directly
               const response = await fetch(transaction.matchedInvoice.fileUrl);
               if (response.ok) {
                 const blob = await response.blob();
@@ -53,44 +135,36 @@ export default function ExportPage() {
             transactionType: transaction.transactionType,
             bank: transaction.bankStatement?.bank || null,
             bankType: transaction.bankStatement?.bankType || null,
-            invoice: transaction.matchedInvoice ? {
-              id: transaction.matchedInvoice.id,
-              fileName: transaction.matchedInvoice.fileName,
-              issuer: transaction.matchedInvoice.issuer,
-              amount: transaction.matchedInvoice.amount,
-              date: transaction.matchedInvoice.date,
-              type: transaction.matchedInvoice.type,
-              fileBase64,
-              fileMimeType,
-            } : null,
+            invoice: transaction.matchedInvoice
+              ? {
+                  id: transaction.matchedInvoice.id,
+                  fileName: transaction.matchedInvoice.fileName,
+                  issuer: transaction.matchedInvoice.issuer,
+                  amount: transaction.matchedInvoice.amount,
+                  date: transaction.matchedInvoice.date,
+                  type: transaction.matchedInvoice.type,
+                  fileBase64,
+                  fileMimeType,
+                }
+              : null,
           };
-        })
+        }),
       );
 
       const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
-      if (!webhookUrl) {
-        throw new Error("Webhook URL nicht konfiguriert");
-      }
+      if (!webhookUrl) throw new Error("Webhook URL nicht konfiguriert");
 
-      const response = await fetch(
-        webhookUrl,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            exportDate: new Date().toISOString(),
-            transactionCount: exportData.length,
-            transactions: exportData,
-          }),
-        }
-      );
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exportDate: new Date().toISOString(),
+          transactionCount: exportData.length,
+          transactions: exportData,
+        }),
+      });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error: ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
       toast.success(`${exportData.length} Transaktionen erfolgreich gesendet`);
     } catch (error) {
       console.error("Send to n8n error:", error);
@@ -98,48 +172,6 @@ export default function ExportPage() {
     } finally {
       setIsSending(false);
     }
-  };
-
-  const handleDownload = async (fileUrl: string | null, fileName: string) => {
-    if (!fileUrl) {
-      toast.error("Keine Datei verfügbar");
-      return;
-    }
-
-    try {
-      // fileUrl is already a full URL, fetch it directly
-      const response = await fetch(fileUrl);
-      if (!response.ok) throw new Error("Download failed");
-      
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error("Download error:", error);
-      toast.error("Fehler beim Herunterladen");
-    }
-  };
-
-  const handleView = (fileUrl: string | null) => {
-    if (!fileUrl) {
-      toast.error("Keine Datei verfügbar");
-      return;
-    }
-    // fileUrl is already a full URL, open directly
-    window.open(fileUrl, "_blank");
-  };
-
-  const formatAmount = (amount: number) => {
-    return new Intl.NumberFormat("de-DE", {
-      style: "currency",
-      currency: "EUR",
-    }).format(amount);
   };
 
   return (
@@ -150,12 +182,13 @@ export default function ExportPage() {
             Steuerberater Export
           </h1>
           <p className="mt-1 text-sm sm:text-base text-muted-foreground">
-            Alle zugeordneten Transaktionen mit ihren Rechnungen
+            Alle zugeordneten Transaktionen mit Klick-Link zur Rechnung
           </p>
         </div>
         <Button
           onClick={handleSendToN8n}
           disabled={isSending || isLoading || !transactions?.length}
+          variant="outline"
           className="w-full gap-2 sm:w-auto"
         >
           {isSending ? (
@@ -166,135 +199,260 @@ export default function ExportPage() {
           ) : (
             <>
               <Send className="h-4 w-4" />
-              An Steuerberater senden
+              An n8n senden
             </>
           )}
         </Button>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="h-5 w-5 text-primary" />
-            Zugeordnete Transaktionen
-          </CardTitle>
-          <CardDescription>
-            {transactions?.length || 0} Transaktionen mit zugeordneten Rechnungen
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="space-y-4">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-24 w-full" />
-              ))}
-            </div>
-          ) : transactions && transactions.length > 0 ? (
-            <div className="space-y-4">
-              {transactions.map((transaction) => (
-                <div
-                  key={transaction.id}
-                  className="flex flex-col gap-4 rounded-lg border bg-card p-4 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      {transaction.transactionType === "debit" ? (
-                        <ArrowDownRight className="h-4 w-4 text-destructive" />
-                      ) : (
-                        <ArrowUpRight className="h-4 w-4 text-green-500" />
-                      )}
-                      <span className="font-medium">
-                        {format(new Date(transaction.date), "dd.MM.yyyy", { locale: de })}
-                      </span>
-                      {transaction.isCashPayment ? (
-                        <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/20">
-                          <Wallet className="mr-1 h-3 w-3" />
-                          Kasse
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs">
-                          {transaction.bankStatement?.bank || "Unbekannt"}
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="text-sm text-muted-foreground line-clamp-1">
-                      {transaction.description}
-                    </p>
-                    <div className="flex items-center gap-4">
-                      <span className={`font-semibold ${
-                        transaction.transactionType === "debit" 
-                          ? "text-destructive" 
-                          : "text-green-500"
-                      }`}>
-                        {transaction.transactionType === "debit" ? "-" : "+"}
-                        {formatAmount(Math.abs(transaction.amount))}
-                      </span>
-                    </div>
-                  </div>
+      {isLoading ? (
+        <Card>
+          <CardContent className="space-y-3 p-6">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </CardContent>
+        </Card>
+      ) : transactions && transactions.length > 0 ? (
+        <div className="space-y-6">
+          {years.map((year) => (
+            <YearSection
+              key={year}
+              year={year}
+              transactions={groupedByYear[year]}
+              onOpen={handleOpenInvoice}
+              openingId={openingId}
+            />
+          ))}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <FileText className="h-12 w-12 text-muted-foreground/50" />
+            <p className="mt-4 text-lg font-medium">Keine zugeordneten Transaktionen</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Ordnen Sie zuerst Transaktionen Rechnungen zu
+            </p>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
 
-                  {transaction.matchedInvoice && (
-                    <div className="flex flex-col gap-2 rounded-md border bg-muted/50 p-3 sm:min-w-[280px] sm:max-w-[320px]">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-primary" />
-                          <span className="text-sm font-medium">
-                            {transaction.matchedInvoice.issuer}
-                          </span>
-                        </div>
-                        <Badge 
-                          variant={transaction.matchedInvoice.type === "incoming" ? "default" : "secondary"}
-                          className="text-xs"
-                        >
-                          {transaction.matchedInvoice.type === "incoming" ? "Eingang" : "Ausgang"}
-                        </Badge>
-                      </div>
-                      {transaction.matchedInvoice.invoiceNumber && (
-                        <p className="text-xs font-mono text-primary">
-                          #{transaction.matchedInvoice.invoiceNumber}
-                        </p>
-                      )}
-                      <p className="text-xs text-muted-foreground truncate">
-                        {transaction.matchedInvoice.fileName}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-1"
-                          onClick={() => handleView(transaction.matchedInvoice?.fileUrl || null)}
-                        >
-                          <ExternalLink className="mr-1 h-3 w-3" />
-                          Ansehen
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="default"
-                          className="flex-1"
-                          onClick={() => handleDownload(
-                            transaction.matchedInvoice?.fileUrl || null,
-                            transaction.matchedInvoice?.fileName || "rechnung.pdf"
-                          )}
-                        >
-                          <Download className="mr-1 h-3 w-3" />
-                          Download
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+function YearSection({
+  year,
+  transactions,
+  onOpen,
+  openingId,
+}: {
+  year: string;
+  transactions: ExportTransaction[];
+  onOpen: (t: ExportTransaction) => void;
+  openingId: string | null;
+}) {
+  const total = transactions.reduce((sum, t) => {
+    return sum + (t.transactionType === "credit" ? t.amount : -Math.abs(t.amount));
+  }, 0);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-2">
+            <FileText className="h-5 w-5 text-primary" />
+            {year}
+          </span>
+          <span className="text-sm font-normal tabular-nums text-muted-foreground">
+            Saldo {formatAmount(total)}
+          </span>
+        </CardTitle>
+        <CardDescription>
+          {transactions.length} {transactions.length === 1 ? "Buchung" : "Buchungen"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        {/* Desktop: echte Tabelle. Mobile: Karten-Liste, weil 5 Spalten zu eng werden. */}
+        <div className="hidden md:block">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+                <th className="px-4 py-2 text-left font-medium">Datum</th>
+                <th className="px-4 py-2 text-left font-medium">Beschreibung</th>
+                <th className="px-4 py-2 text-left font-medium">Quelle</th>
+                <th className="px-4 py-2 text-right font-medium">Betrag</th>
+                <th className="px-4 py-2 text-left font-medium">Rechnung</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((t) => (
+                <ExportRow
+                  key={t.id}
+                  t={t}
+                  onOpen={onOpen}
+                  isOpening={openingId === t.id}
+                />
               ))}
-            </div>
+            </tbody>
+          </table>
+        </div>
+        <div className="space-y-2 p-3 md:hidden">
+          {transactions.map((t) => (
+            <ExportCard
+              key={t.id}
+              t={t}
+              onOpen={onOpen}
+              isOpening={openingId === t.id}
+            />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ExportRow({
+  t,
+  onOpen,
+  isOpening,
+}: {
+  t: ExportTransaction;
+  onOpen: (t: ExportTransaction) => void;
+  isOpening: boolean;
+}) {
+  const isDebit = t.transactionType === "debit";
+  const inv = t.matchedInvoice;
+
+  return (
+    <tr className="border-b last:border-b-0 hover:bg-muted/30">
+      <td className="whitespace-nowrap px-4 py-2.5 align-top tabular-nums text-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          {isDebit ? (
+            <ArrowDownRight className="h-3.5 w-3.5 text-destructive" />
           ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <FileText className="h-12 w-12 text-muted-foreground/50" />
-              <p className="mt-4 text-lg font-medium">Keine zugeordneten Transaktionen</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Ordnen Sie zuerst Transaktionen Rechnungen zu
-              </p>
-            </div>
+            <ArrowUpRight className="h-3.5 w-3.5 text-green-600" />
           )}
-        </CardContent>
-      </Card>
+          {format(new Date(t.date), "dd.MM.yyyy", { locale: de })}
+        </span>
+      </td>
+      <td className="px-4 py-2.5 align-top text-foreground">
+        <span className="line-clamp-1" title={t.description}>
+          {t.description}
+        </span>
+      </td>
+      <td className="px-4 py-2.5 align-top">
+        {t.isCashPayment ? (
+          <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20">
+            <Wallet className="mr-1 h-3 w-3" />
+            Kasse
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="font-normal">
+            {t.bankStatement?.bank || "—"}
+          </Badge>
+        )}
+      </td>
+      <td
+        className={cn(
+          "whitespace-nowrap px-4 py-2.5 text-right align-top font-semibold tabular-nums",
+          isDebit ? "text-destructive" : "text-green-600",
+        )}
+      >
+        {isDebit ? "−" : "+"}
+        {formatAmount(Math.abs(t.amount))}
+      </td>
+      <td className="px-4 py-2.5 align-top">
+        {inv ? (
+          <button
+            type="button"
+            onClick={() => onOpen(t)}
+            disabled={isOpening}
+            className="group inline-flex max-w-[280px] items-center gap-1.5 text-left text-primary hover:underline disabled:opacity-60"
+            title={`${inv.issuer} · ${inv.fileName}`}
+          >
+            {isOpening ? (
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            ) : (
+              <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70 group-hover:opacity-100" />
+            )}
+            <span className="truncate">
+              {inv.invoiceNumber ? `#${inv.invoiceNumber} · ` : ""}
+              {inv.issuer}
+            </span>
+          </button>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function ExportCard({
+  t,
+  onOpen,
+  isOpening,
+}: {
+  t: ExportTransaction;
+  onOpen: (t: ExportTransaction) => void;
+  isOpening: boolean;
+}) {
+  const isDebit = t.transactionType === "debit";
+  const inv = t.matchedInvoice;
+
+  return (
+    <div className="rounded-md border bg-card p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+          {isDebit ? (
+            <ArrowDownRight className="h-3.5 w-3.5 text-destructive" />
+          ) : (
+            <ArrowUpRight className="h-3.5 w-3.5 text-green-600" />
+          )}
+          {format(new Date(t.date), "dd.MM.yyyy", { locale: de })}
+        </span>
+        <span
+          className={cn(
+            "text-sm font-semibold tabular-nums",
+            isDebit ? "text-destructive" : "text-green-600",
+          )}
+        >
+          {isDebit ? "−" : "+"}
+          {formatAmount(Math.abs(t.amount))}
+        </span>
+      </div>
+      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.description}</p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        {t.isCashPayment ? (
+          <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20">
+            <Wallet className="mr-1 h-3 w-3" />
+            Kasse
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="font-normal">
+            {t.bankStatement?.bank || "—"}
+          </Badge>
+        )}
+        {inv ? (
+          <button
+            type="button"
+            onClick={() => onOpen(t)}
+            disabled={isOpening}
+            className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline disabled:opacity-60"
+          >
+            {isOpening ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ExternalLink className="h-3.5 w-3.5" />
+            )}
+            <span className="max-w-[160px] truncate">
+              {inv.invoiceNumber ? `#${inv.invoiceNumber}` : inv.issuer}
+            </span>
+          </button>
+        ) : (
+          <span className="text-sm text-muted-foreground">keine Rechnung</span>
+        )}
+      </div>
     </div>
   );
 }
