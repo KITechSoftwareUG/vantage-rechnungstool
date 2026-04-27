@@ -415,16 +415,19 @@ Deno.serve(async (req) => {
   }
 
   // --- Transaktionen + Invoices laden ---
+  // Single-User-Setup: KEIN user_id-Filter (Memory: "authenticated sees
+  // all"). Daten liegen unter Alex' UUID, der eingeloggte User hat ggf.
+  // eine andere UUID (Dev-Account). user_id der Invoice nehmen wir aus
+  // der Row selbst fuer den Storage-Pfad.
   const { data: txData, error: txErr } = await supabase
     .from("bank_transactions")
     .select(`
       id, date, description, amount, transaction_type, matched_invoice_id, bank_statement_id,
       invoices!bank_transactions_matched_invoice_id_fkey (
-        id, file_name, file_url, issuer, amount, date, type, year, month, invoice_number
+        id, user_id, file_name, file_url, issuer, amount, date, type, year, month, invoice_number
       ),
       bank_statements!bank_transactions_bank_statement_id_fkey ( bank, bank_type )
     `)
-    .eq("user_id", userId)
     .eq("match_status", "confirmed")
     .not("matched_invoice_id", "is", null)
     .order("date", { ascending: true });
@@ -448,9 +451,12 @@ Deno.serve(async (req) => {
     let signedUrl: string | null = null;
     const inv = t.invoices;
     if (inv) {
+      // user_id des Invoice-Owners aus der Row (nicht JWT-userId), siehe
+      // Kommentar bei der Query oben.
+      const ownerId = inv.user_id ?? userId;
       const ivYear = Number(inv.year) || (new Date(inv.date).getFullYear());
       const ivMonth = Number(inv.month) || (new Date(inv.date).getMonth() + 1);
-      const path = `${userId}/${ivYear}/${ivMonth}/${inv.file_name}`;
+      const path = `${ownerId}/${ivYear}/${ivMonth}/${inv.file_name}`;
       const { data: signed } = await supabase.storage
         .from("documents")
         .createSignedUrl(path, SIGNED_URL_TTL_SEC);
@@ -458,7 +464,7 @@ Deno.serve(async (req) => {
         signedUrl = signed.signedUrl;
       } else {
         // Fallback auf zero-padded Month, wie resolveStorageUrl es im Frontend macht.
-        const path2 = `${userId}/${ivYear}/${String(ivMonth).padStart(2, "0")}/${inv.file_name}`;
+        const path2 = `${ownerId}/${ivYear}/${String(ivMonth).padStart(2, "0")}/${inv.file_name}`;
         const { data: signed2 } = await supabase.storage
           .from("documents")
           .createSignedUrl(path2, SIGNED_URL_TTL_SEC);

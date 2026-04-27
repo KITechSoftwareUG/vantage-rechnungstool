@@ -13,7 +13,6 @@ import {
   Wallet,
 } from "lucide-react";
 import { useExportTransactions, ExportTransaction } from "@/hooks/useExportTransactions";
-import { useAuth } from "@/hooks/useAuth";
 import { useTaxExportToDrive } from "@/hooks/useTaxExportToDrive";
 import { resolveStorageUrl, createLongLivedSignedUrl } from "@/lib/resolveStorageUrl";
 import {
@@ -59,17 +58,16 @@ function escapeHtml(s: string): string {
 // (1 Jahr) damit der Empfaenger die Rechnungen auch in Wochen/Monaten noch
 // oeffnen kann. Inline-CSS ohne Abhaengigkeiten — Datei muss im Drive-
 // Preview, lokalem Browser und Druck-Dialog gleich gut aussehen.
-async function buildExportHtml(
-  transactions: ExportTransaction[],
-  userId: string,
-): Promise<string> {
+async function buildExportHtml(transactions: ExportTransaction[]): Promise<string> {
   const withUrls = await Promise.all(
     transactions.map(async (t) => {
       if (!t.matchedInvoice) return { t, url: null as string | null };
       const ym = deriveYearMonth(t.matchedInvoice.date);
       if (!ym) return { t, url: null };
+      // Storage-Pfad nutzt den Invoice-Owner, NICHT den eingeloggten User —
+      // Daten liegen unter Alex' UUID, Dev-Login hat eine andere UUID.
       const url = await createLongLivedSignedUrl(
-        userId,
+        t.matchedInvoice.userId,
         ym.year,
         ym.month,
         t.matchedInvoice.fileName,
@@ -267,7 +265,6 @@ function triggerDownload(html: string, filename: string) {
 }
 
 export default function ExportPage() {
-  const { user } = useAuth();
   const { data: transactions, isLoading } = useExportTransactions();
   const driveExport = useTaxExportToDrive();
   const [isSending, setIsSending] = useState(false);
@@ -327,7 +324,7 @@ export default function ExportPage() {
 
   const handleOpenInvoice = async (t: ExportTransaction) => {
     const inv = t.matchedInvoice;
-    if (!inv || !user?.id) {
+    if (!inv) {
       toast.error("Keine Rechnung verknuepft");
       return;
     }
@@ -345,7 +342,8 @@ export default function ExportPage() {
         toast.error("Datei nicht aufloesbar");
         return;
       }
-      const url = await resolveStorageUrl(user.id, ym.year, ym.month, inv.fileName, inv.fileUrl);
+      // Pfad mit Invoice-Owner-userId, nicht mit Login-userId.
+      const url = await resolveStorageUrl(inv.userId, ym.year, ym.month, inv.fileName, inv.fileUrl);
       if (!url) {
         toast.error("Datei nicht im Storage gefunden");
         return;
@@ -364,13 +362,9 @@ export default function ExportPage() {
       toast.error("Keine Transaktionen zum Exportieren");
       return;
     }
-    if (!user?.id) {
-      toast.error("Kein angemeldeter Nutzer");
-      return;
-    }
     setIsDownloading(true);
     try {
-      const html = await buildExportHtml(transactions, user.id);
+      const html = await buildExportHtml(transactions);
       const stamp = format(new Date(), "yyyy-MM-dd", { locale: de });
       triggerDownload(html, `Steuerexport-${stamp}.html`);
       toast.success(

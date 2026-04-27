@@ -2,6 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 
+// Single-User-Setup: RLS ist "authenticated sees all", deshalb KEIN
+// user_id-Filter mehr. Wenn der eingeloggte Account ein anderer ist als
+// der, der die Matches angelegt hat (Dev-Account vs. Owner-Account),
+// wuerde ein user_id-Filter false-negativen leeren Export liefern. Login
+// reicht aus, um alle confirmed Matches zu sehen.
+
 export interface ExportTransaction {
   id: string;
   date: string;
@@ -10,6 +16,11 @@ export interface ExportTransaction {
   transactionType: "debit" | "credit";
   matchedInvoice: {
     id: string;
+    // user_id des Invoice-Owners — wir brauchen das fuer den Storage-Pfad
+    // {userId}/{year}/{month}/{fileName}, weil im Single-User-Setup die
+    // Daten unter Alex' UUID liegen, der eingeloggte Dev-Account aber
+    // eine andere UUID hat.
+    userId: string;
     fileName: string;
     fileUrl: string | null;
     issuer: string;
@@ -46,6 +57,7 @@ export function useExportTransactions() {
           bank_statement_id,
           invoices!bank_transactions_matched_invoice_id_fkey (
             id,
+            user_id,
             file_name,
             file_url,
             issuer,
@@ -60,7 +72,6 @@ export function useExportTransactions() {
             bank_type
           )
         `)
-        .eq("user_id", user.id)
         .eq("match_status", "confirmed")
         .not("matched_invoice_id", "is", null)
         .order("date", { ascending: false });
@@ -75,6 +86,7 @@ export function useExportTransactions() {
         transactionType: t.transaction_type as "debit" | "credit",
         matchedInvoice: t.invoices ? {
           id: t.invoices.id,
+          userId: t.invoices.user_id,
           fileName: t.invoices.file_name,
           fileUrl: t.invoices.file_url,
           issuer: t.invoices.issuer,
