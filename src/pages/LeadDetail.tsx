@@ -35,7 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useLead, useUpdateLeadStatus } from "@/hooks/useLeads";
+import { useLead, useUpdateLeadStatus, useWaMessages } from "@/hooks/useLeads";
 import { useSuggestReply } from "@/hooks/useSuggestReply";
 import { useMarkManualWaSent } from "@/hooks/useMarkManualWaSent";
 import { useToast } from "@/hooks/use-toast";
@@ -279,19 +279,32 @@ export default function LeadDetail() {
         <SaidByLead lead={lead} />
       </div>
 
-      {/* Erstkontakt — nur sichtbar solange noch keine WA-Konversation existiert.
-          Sobald die erste Nachricht (manuell oder spaeter via Meta) geloggt ist,
-          uebernimmt die Inbox-Compose-Bar. */}
-      {lead.message_count === 0 && (
-        <div className="animate-fade-in" style={{ animationDelay: "0.1s" }}>
-          <FirstContactCard lead={lead} />
+      <LeadConversationSection lead={lead} />
+    </div>
+  );
+}
+
+// Entscheidet, was unter den Lead-Daten kommt:
+//   - Eingehende WA-Nachrichten gibt's? -> Thread anzeigen.
+//   - Wir haben noch nicht geantwortet (kein outbound)? -> FirstContactCard.
+// Beides gleichzeitig ist der Direct-WhatsApp-Fall: Lead hat geschrieben,
+// wir bereiten unsere erste Antwort vor.
+function LeadConversationSection({ lead }: { lead: Lead }) {
+  const { data: messages = [] } = useWaMessages(lead.id);
+  const hasAnyMessages = messages.length > 0;
+  const hasOutbound = messages.some((m) => m.direction === "outbound");
+
+  return (
+    <>
+      {hasAnyMessages && (
+        <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.1s" }}>
+          <WhatsAppThread leadId={lead.id} />
         </div>
       )}
 
-      {/* WhatsApp-Konversation — nur wenn schon was da ist */}
-      {lead.message_count > 0 && (
-        <div className="glass-card p-4 sm:p-6 animate-fade-in" style={{ animationDelay: "0.15s" }}>
-          <WhatsAppThread leadId={lead.id} />
+      {!hasOutbound && (
+        <div className="animate-fade-in" style={{ animationDelay: "0.15s" }}>
+          <FirstContactCard lead={lead} />
         </div>
       )}
 
@@ -299,7 +312,7 @@ export default function LeadDetail() {
       <div className="animate-fade-in" style={{ animationDelay: "0.2s" }}>
         <TrackingCollapsible tracking={lead.meta.tracking} />
       </div>
-    </div>
+    </>
   );
 }
 

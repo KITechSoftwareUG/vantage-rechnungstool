@@ -48,6 +48,7 @@ interface LeadRow {
   phone: string | null;
   email: string | null;
   meta: Record<string, unknown> | null;
+  source: string | null;
 }
 
 interface WaMessageRow {
@@ -176,7 +177,7 @@ Deno.serve(async (req) => {
   // --- Lead laden ---
   const { data: leadData, error: leadErr } = await supabase
     .from("leads")
-    .select("id, name, phone, email, meta")
+    .select("id, name, phone, email, meta, source")
     .eq("id", leadId)
     .maybeSingle();
 
@@ -248,30 +249,47 @@ Deno.serve(async (req) => {
     `Konversation schon laeuft. Keine Signatur. Maximal 3 Saetze. Nur den ` +
     `Antwort-Text ausgeben, keine Erklaerung.`;
 
-  // first_contact: Erstnachricht via WhatsApp. Lead hat noch nichts geschrieben,
-  // nur das Formular ausgefuellt. Tone: persoenlich, salesy, "Du", konkret auf
-  // angekreuzte Anamnese-Felder Bezug nehmend, klare CTA.
+  // first_contact: Erstnachricht via WhatsApp. Zwei moegliche Eingangskanaele:
+  //   A) Lead kam ueber das Formular -> Anamnese im "meta"-Block ist gefuellt.
+  //   B) Lead hat direkt auf WhatsApp geschrieben (kein Funnel) -> meta leer,
+  //      stattdessen liegt eine inbound-Message in der Konversation.
+  // Tone: locker, freundlich, ENGLISCH, Du-Form. Wie ein guter Bekannter,
+  // der gleich was rueberschickt — keine formellen Sales-Phrasen.
   const firstContactSystem =
-    `Du bist ${name} von ${firma}, persoenlicher Ansprechpartner fuer ${typ}. ` +
-    `Du schreibst gerade selbst auf WhatsApp an einen frischen Interessenten, ` +
-    `der das Anfrage-Formular ausgefuellt hat. Tonalitaet: locker per Du, ` +
-    `direkt, salesy aber sympathisch — wie ein Berater, der Bock auf den ` +
-    `Termin hat. Stil: kurze Saetze, ein bisschen Schwung, KEINE Floskeln ` +
-    `wie "Ich hoffe es geht Ihnen gut". Keine Emojis. Keine Signatur.\n\n` +
-    `Aufbau der Nachricht (3-5 kurze Saetze, EIN Absatz):\n` +
-    `1) "Hey ${leadFirstName ?? "[Vorname]"}, hier ist ${name} – dein ` +
-    `persoenlicher Ansprechpartner bei ${firma}."\n` +
-    `2) Konkreter Bezug auf 1-2 Dinge, die er/sie im Formular angegeben hat ` +
-    `(z.B. "Hab gesehen du hast X angekreuzt / Y eingetragen"). Niemals ` +
-    `medizinische Details aufzaehlen, die er nicht selbst genannt hat.\n` +
-    `3) Ein konkretes salesy Angebot: ein passendes Angebot rausschicken, ` +
-    `Tarife durchgehen, kurzer Call. KEIN "Wir melden uns".\n` +
-    `4) Eine niedrigschwellige Frage am Ende, auf die er einfach mit "Ja" ` +
-    `oder einem Wunschzeitpunkt antworten kann.\n\n` +
-    `Du bekommst zusaetzlich eine "Analyse" (2-3 Saetze, fuer den Berater ` +
-    `zum schnellen Reinkommen, NICHT an den Lead): Wer ist das, was will er, ` +
-    `was ist der Sales-Hook?\n\n` +
-    `Antworte AUSSCHLIESSLICH als JSON in genau diesem Format:\n` +
+    `You are ${name} from ${firma}, the personal contact for ${typ}. ` +
+    `You're typing the very first WhatsApp message to a fresh lead — yourself, ` +
+    `not as a bot.\n\n` +
+    `Write the suggestion in ENGLISH. Tone: super casual, friendly, first-name ` +
+    `basis. Like texting a friend who happens to need your help. Short sentences, ` +
+    `natural English, a bit of energy. NO filler ("I hope you're doing well"). ` +
+    `NO emojis. NO signature.\n\n` +
+    `There are two possible cases — figure out which applies from the data ` +
+    `you receive:\n\n` +
+    `CASE A — Lead came via the form (the "Anamnese" block has actual entries):\n` +
+    `- Reference 1-2 concrete things they put in the form. Never invent ` +
+    `medical details they didn't mention themselves.\n` +
+    `- Pivot fast to a concrete next step (send tariffs, quick call, tailored ` +
+    `proposal).\n\n` +
+    `CASE B — Lead wrote directly on WhatsApp (Anamnese block is empty / says ` +
+    `"keine ..." AND/OR there is an inbound message in the conversation):\n` +
+    `- Don't reference form data.\n` +
+    `- If they already sent a message, briefly acknowledge what they asked.\n` +
+    `- If they only said "hi" or similar, just welcome them and ask what ` +
+    `they're looking for in ${typ}.\n\n` +
+    `Structure (3-5 short sentences, ONE paragraph):\n` +
+    `1) Open: "Hey ${leadFirstName ?? "there"}, this is ${name} from ${firma}!"\n` +
+    `2) Hook: reference what they shared (form OR their message). If neither ` +
+    `gives you anything concrete, go with "great that you reached out".\n` +
+    `3) A concrete, sales-y but chill offer — pick what fits: "I'll send the ` +
+    `best options right over", "let's hop on a quick call", "I'll put together ` +
+    `a tailored proposal for you". NEVER "we'll get back to you".\n` +
+    `4) End with an easy, low-friction question they can answer with "yes" ` +
+    `or a quick time slot.\n\n` +
+    `Also produce an "analysis" (2-3 Saetze, IN GERMAN, for the advisor only — ` +
+    `NOT sent to the lead): wer ist das, was will er, was ist der Sales-Hook? ` +
+    `Wenn Direct-WhatsApp-Lead ohne Formular: das in der Analyse erwaehnen, ` +
+    `damit der Berater den Kontext kennt.\n\n` +
+    `Reply ONLY as JSON, exactly:\n` +
     `{"analysis": "...", "suggestion": "..."}`;
 
   const system = mode === "first_contact" ? firstContactSystem : replySystem;
@@ -283,6 +301,8 @@ Deno.serve(async (req) => {
 
   const userPrompt =
     `Lead-Name: ${lead.name ?? "(unbekannt)"}\n` +
+    `Lead-Source: ${lead.source ?? "(unbekannt)"} ` +
+    `(${lead.source === "whatsapp" ? "DIRECT WHATSAPP — kein Formular ausgefuellt" : "vom Formular / Funnel"})\n` +
     `Anamnese (vom Lead aus dem Formular):\n` +
     `${formatMeta(lead.meta)}\n\n` +
     `WhatsApp-Konversation (chronologisch):\n` +
