@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { BankTransaction, BankType } from "@/types/matching";
+import { fetchAllPaginated } from "@/lib/fetchAllPaginated";
 
 // Fetch all bank transactions (no filtering)
 export function useBankTransactions() {
@@ -10,16 +11,16 @@ export function useBankTransactions() {
   return useQuery({
     queryKey: ["bank_transactions", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bank_transactions")
-        .select(`
-          *,
-          bank_statements(bank, bank_type),
-          invoices(id, user_id, year, month, issuer, amount, date, file_name, file_url)
-        `)
-        .order("date", { ascending: false });
-
-      if (error) throw error;
+      const data = await fetchAllPaginated<any>(() =>
+        supabase
+          .from("bank_transactions")
+          .select(`
+            *,
+            bank_statements(bank, bank_type),
+            invoices(id, user_id, year, month, issuer, amount, date, file_name, file_url)
+          `)
+          .order("date", { ascending: false }),
+      );
 
       return data.map((t: any) => ({
         id: t.id,
@@ -178,24 +179,27 @@ export function useUnmatchedInvoices() {
   return useQuery({
     queryKey: ["unmatched_invoices", user?.id],
     queryFn: async () => {
-      // Get all invoices that are already linked to a confirmed transaction.
-      const { data: matchedIds } = await supabase
-        .from("bank_transactions")
-        .select("matched_invoice_id")
-        .eq("match_status", "confirmed")
-        .not("matched_invoice_id", "is", null);
+      // Client-seitiges Filtern statt .not("id", "in", "(uuid,uuid,...)"):
+      // PostgREST limitiert die URL auf ~8KB, was bei UUID-Listen schon
+      // bei ~150-200 confirmed Matches reisst und den Request lautlos
+      // kappt. Beide Listen werden paginiert geholt, dann lokal gefiltert.
+      const matchedRows = await fetchAllPaginated<{ matched_invoice_id: string | null }>(() =>
+        supabase
+          .from("bank_transactions")
+          .select("matched_invoice_id")
+          .eq("match_status", "confirmed")
+          .not("matched_invoice_id", "is", null),
+      );
 
-      const matchedInvoiceIds = matchedIds?.map((t) => t.matched_invoice_id).filter(Boolean) || [];
+      const matchedIds = new Set(
+        matchedRows.map((t) => t.matched_invoice_id).filter(Boolean) as string[],
+      );
 
-      let query = supabase.from("invoices").select("*").order("date", { ascending: false });
+      const all = await fetchAllPaginated<any>(() =>
+        supabase.from("invoices").select("*").order("date", { ascending: false }),
+      );
 
-      if (matchedInvoiceIds.length > 0) {
-        query = query.not("id", "in", `(${matchedInvoiceIds.join(",")})`);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
+      return all.filter((inv) => !matchedIds.has(inv.id));
     },
     enabled: !!user,
   });
