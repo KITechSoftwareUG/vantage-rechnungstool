@@ -75,3 +75,32 @@ export async function resolveStorageUrl(
 
   return fileUrl || "";
 }
+
+// Long-lived signedUrl fuer den Steuerberater-Export. Standard ist 1 Jahr —
+// die generierte HTML-Datei landet bei einem Dritten (Steuerberater) und
+// muss noch funktionieren wenn er sie Wochen/Monate spaeter oeffnet.
+// KEIN Cache: jeder Export-Klick erzeugt einen frischen URL-Stempel, sonst
+// kollidieren wir mit der 1h-Cache-Logik fuer die App-interne PDF-Vorschau.
+export async function createLongLivedSignedUrl(
+  userId: string,
+  year: number,
+  month: number,
+  fileName: string,
+  fileUrl?: string | null,
+  ttlSec = 60 * 60 * 24 * 365,
+): Promise<string | null> {
+  const fromUrl = fileUrl ? extractStoragePath(fileUrl) : null;
+  const candidates = [
+    fromUrl,
+    `${userId}/${year}/${month}/${fileName}`,
+    `${userId}/${year}/${String(month).padStart(2, "0")}/${fileName}`,
+  ].filter(Boolean) as string[];
+
+  for (const path of candidates) {
+    const { data, error } = await supabase.storage
+      .from("documents")
+      .createSignedUrl(path, ttlSec);
+    if (!error && data?.signedUrl) return data.signedUrl;
+  }
+  return null;
+}

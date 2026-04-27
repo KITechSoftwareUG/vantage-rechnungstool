@@ -4,6 +4,7 @@ import { de } from "date-fns/locale";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Download,
   ExternalLink,
   FileText,
   Loader2,
@@ -12,7 +13,7 @@ import {
 } from "lucide-react";
 import { useExportTransactions, ExportTransaction } from "@/hooks/useExportTransactions";
 import { useAuth } from "@/hooks/useAuth";
-import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
+import { resolveStorageUrl, createLongLivedSignedUrl } from "@/lib/resolveStorageUrl";
 import {
   Card,
   CardContent,
@@ -43,10 +44,231 @@ function deriveYearMonth(dateIso: string): { year: number; month: number } | nul
   }
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Baut die schicke HTML-Datei fuer den Steuerberater. Long-lived signedUrls
+// (1 Jahr) damit der Empfaenger die Rechnungen auch in Wochen/Monaten noch
+// oeffnen kann. Inline-CSS ohne Abhaengigkeiten — Datei muss im Drive-
+// Preview, lokalem Browser und Druck-Dialog gleich gut aussehen.
+async function buildExportHtml(
+  transactions: ExportTransaction[],
+  userId: string,
+): Promise<string> {
+  const withUrls = await Promise.all(
+    transactions.map(async (t) => {
+      if (!t.matchedInvoice) return { t, url: null as string | null };
+      const ym = deriveYearMonth(t.matchedInvoice.date);
+      if (!ym) return { t, url: null };
+      const url = await createLongLivedSignedUrl(
+        userId,
+        ym.year,
+        ym.month,
+        t.matchedInvoice.fileName,
+        t.matchedInvoice.fileUrl,
+      );
+      return { t, url };
+    }),
+  );
+
+  const byYear = withUrls.reduce<Record<string, typeof withUrls>>((acc, item) => {
+    const ym = deriveYearMonth(item.t.date);
+    const key = ym ? String(ym.year) : "ohne Datum";
+    (acc[key] ??= []).push(item);
+    return acc;
+  }, {});
+  const years = Object.keys(byYear).sort((a, b) => b.localeCompare(a));
+
+  const generatedAt = format(new Date(), "dd.MM.yyyy 'um' HH:mm 'Uhr'", { locale: de });
+  const validUntil = format(
+    new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+    "dd.MM.yyyy",
+    { locale: de },
+  );
+
+  const tablesHtml = years
+    .map((year) => {
+      const items = byYear[year];
+      const saldo = items.reduce((sum, { t }) => {
+        return sum + (t.transactionType === "credit" ? t.amount : -Math.abs(t.amount));
+      }, 0);
+
+      const rowsHtml = items
+        .map(({ t, url }) => {
+          const isDebit = t.transactionType === "debit";
+          const sign = isDebit ? "−" : "+";
+          const cls = isDebit ? "debit" : "credit";
+          const date = format(new Date(t.date), "dd.MM.yyyy", { locale: de });
+          const desc = escapeHtml(t.description ?? "");
+          const quelle = t.isCashPayment
+            ? "Kasse"
+            : escapeHtml(t.bankStatement?.bank ?? "—");
+          const amount = formatAmount(Math.abs(t.amount));
+          const inv = t.matchedInvoice;
+          const linkCell = inv && url
+            ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${
+                inv.invoiceNumber ? `#${escapeHtml(inv.invoiceNumber)} · ` : ""
+              }${escapeHtml(inv.issuer)}</a>`
+            : inv
+            ? `<span class="muted">${escapeHtml(inv.issuer)} (Datei nicht erreichbar)</span>`
+            : `<span class="muted">—</span>`;
+
+          return `<tr>
+  <td class="num">${date}</td>
+  <td>${desc}</td>
+  <td>${quelle}</td>
+  <td class="num amount ${cls}">${sign}${amount}</td>
+  <td>${linkCell}</td>
+</tr>`;
+        })
+        .join("\n");
+
+      return `<section>
+  <h2>Buchungsjahr ${escapeHtml(year)} <span class="muted">· ${items.length} ${
+        items.length === 1 ? "Buchung" : "Buchungen"
+      } · Saldo ${formatAmount(saldo)}</span></h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Datum</th>
+        <th>Beschreibung</th>
+        <th>Quelle</th>
+        <th class="num">Betrag</th>
+        <th>Rechnung</th>
+      </tr>
+    </thead>
+    <tbody>
+${rowsHtml}
+    </tbody>
+  </table>
+</section>`;
+    })
+    .join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Steuerexport ${escapeHtml(generatedAt)}</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: #1a1a1a;
+    background: #f7f7f8;
+    line-height: 1.5;
+  }
+  main { max-width: 1100px; margin: 0 auto; }
+  header {
+    border-bottom: 2px solid #d8d8dc;
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+  }
+  h1 { font-size: 28px; margin: 0 0 4px; font-weight: 700; }
+  h2 { font-size: 18px; margin: 32px 0 12px; font-weight: 600; }
+  .meta { font-size: 13px; color: #6b6b73; margin: 0; }
+  .muted { color: #8a8a92; font-weight: 400; font-size: 13px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border: 1px solid #e3e3e7;
+    border-radius: 6px;
+    overflow: hidden;
+    font-size: 14px;
+  }
+  thead th {
+    text-align: left;
+    background: #f0f0f3;
+    color: #4a4a52;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 10px 14px;
+    border-bottom: 1px solid #e3e3e7;
+  }
+  tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #ececef;
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: #fafafb; }
+  td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.amount { font-weight: 600; }
+  td.amount.debit { color: #b22222; }
+  td.amount.credit { color: #1f7a3a; }
+  a {
+    color: #1f5fbe;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+  }
+  a:hover { border-bottom-color: #1f5fbe; }
+  footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid #d8d8dc;
+    font-size: 12px;
+    color: #8a8a92;
+  }
+  @media print {
+    body { background: #fff; padding: 0; }
+    main { max-width: none; }
+    table { border: 1px solid #ccc; }
+    tbody tr:hover { background: transparent; }
+    a { color: #000; border-bottom: 1px solid #999; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Steuerexport</h1>
+    <p class="meta">Erstellt am ${escapeHtml(generatedAt)} · ${transactions.length} ${
+    transactions.length === 1 ? "Buchung" : "Buchungen"
+  } · Rechnungs-Links gueltig bis ${escapeHtml(validUntil)}</p>
+  </header>
+${tablesHtml}
+  <footer>
+    Erzeugt von Vantage Rechnungstool. Klick auf eine Rechnung oeffnet das
+    PDF im Browser. Alle Links sind privat signiert und laufen am
+    ${escapeHtml(validUntil)} ab — fuer aelteren Zugriff einen neuen Export
+    generieren.
+  </footer>
+</main>
+</body>
+</html>`;
+}
+
+function triggerDownload(html: string, filename: string) {
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Kurzer Delay vor revoke, damit der Browser den Download tatsaechlich
+  // gestartet hat — sonst race-condition in manchen Chrome-Versionen.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export default function ExportPage() {
   const { user } = useAuth();
   const { data: transactions, isLoading } = useExportTransactions();
   const [isSending, setIsSending] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
 
   // Gruppiert nach Jahr fuer den Steuerberater-Workflow ("Buchungsjahr 2025"
@@ -94,6 +316,31 @@ export default function ExportPage() {
       toast.error("Fehler beim Oeffnen der Rechnung");
     } finally {
       setOpeningId(null);
+    }
+  };
+
+  const handleDownloadHtml = async () => {
+    if (!transactions || transactions.length === 0) {
+      toast.error("Keine Transaktionen zum Exportieren");
+      return;
+    }
+    if (!user?.id) {
+      toast.error("Kein angemeldeter Nutzer");
+      return;
+    }
+    setIsDownloading(true);
+    try {
+      const html = await buildExportHtml(transactions, user.id);
+      const stamp = format(new Date(), "yyyy-MM-dd", { locale: de });
+      triggerDownload(html, `Steuerexport-${stamp}.html`);
+      toast.success(
+        "HTML heruntergeladen — jetzt in den Drive-Jahresordner ziehen und mit dem Steuerberater teilen.",
+      );
+    } catch (err) {
+      console.error("HTML export failed:", err);
+      toast.error("Fehler beim Erzeugen des Exports");
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -185,24 +432,43 @@ export default function ExportPage() {
             Alle zugeordneten Transaktionen mit Klick-Link zur Rechnung
           </p>
         </div>
-        <Button
-          onClick={handleSendToN8n}
-          disabled={isSending || isLoading || !transactions?.length}
-          variant="outline"
-          className="w-full gap-2 sm:w-auto"
-        >
-          {isSending ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Wird gesendet...
-            </>
-          ) : (
-            <>
-              <Send className="h-4 w-4" />
-              An n8n senden
-            </>
-          )}
-        </Button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <Button
+            onClick={handleDownloadHtml}
+            disabled={isDownloading || isLoading || !transactions?.length}
+            className="w-full gap-2 sm:w-auto"
+          >
+            {isDownloading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Wird erzeugt...
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4" />
+                HTML herunterladen
+              </>
+            )}
+          </Button>
+          <Button
+            onClick={handleSendToN8n}
+            disabled={isSending || isLoading || !transactions?.length}
+            variant="outline"
+            className="w-full gap-2 sm:w-auto"
+          >
+            {isSending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Wird gesendet...
+              </>
+            ) : (
+              <>
+                <Send className="h-4 w-4" />
+                An n8n senden
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
