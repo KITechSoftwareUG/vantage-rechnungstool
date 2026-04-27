@@ -60,6 +60,12 @@ export default function MatchingPage() {
     batch: number;
     processed: number;
     confirmed: number;
+    waveTotal: number;       // wieviele TX in dieser Welle claimed wurden
+    waveProcessed: number;   // wieviele davon gerade fertig sind (live-poll)
+    waveConfirmed: number;   // wieviele davon gerade confirmed sind (live-poll)
+    waveInFlight: number;    // wieviele gerade in ai_processing sind (live-poll)
+    backlogRemaining: number; // wieviele unmatched (ohne cooldown) noch warten
+    cooldownInBacklog: number; // wieviele cooldown'd auf naechsten Run warten
   } | null>(null);
   const [agentOpen, setAgentOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -71,6 +77,8 @@ export default function MatchingPage() {
     deterministicTier1: number;
     deterministicTier2: number;
     cooldownSkipped: number;
+    cooldownInBacklog: number;
+    cooldownClearedFingerprint: number;
     aiAttempted: number;
     aiSucceeded: number;
     aiReturnedNull: number;
@@ -211,7 +219,17 @@ export default function MatchingPage() {
   const handleAutoMatch = async () => {
     autoMatchCancelRef.current = false;
     autoMatchAbortRef.current = new AbortController();
-    setAutoMatchProgress({ batch: 0, processed: 0, confirmed: 0 });
+    setAutoMatchProgress({
+      batch: 0,
+      processed: 0,
+      confirmed: 0,
+      waveTotal: 0,
+      waveProcessed: 0,
+      waveConfirmed: 0,
+      waveInFlight: 0,
+      backlogRemaining: 0,
+      cooldownInBacklog: 0,
+    });
     setIsAutoMatching(true);
 
     // UI-Freeze: Snapshot der bank_transactions-Queries. Irgendwas
@@ -248,6 +266,8 @@ export default function MatchingPage() {
     let deterministicTier1 = 0;
     let deterministicTier2 = 0;
     let cooldownSkipped = 0;
+    let cooldownInBacklog = 0;
+    let cooldownClearedFingerprint = 0;
     let aiReturnedNull = 0;
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
@@ -281,6 +301,47 @@ export default function MatchingPage() {
         }
         const signal = autoMatchAbortRef.current?.signal;
 
+        // Live-Poll-Setup: waehrend die Edge Function lauft, fragen wir alle
+        // 1.5s die DB nach dem aktuellen Stand und aktualisieren die Anzeige
+        // (in_flight = ai_processing, confirmed = neu seit waveStartIso).
+        // Das gibt dem User eine X/Y-Granularitaet ohne dass wir Streaming
+        // brauchen.
+        const waveStartIso = new Date().toISOString();
+        const pollAbort = new AbortController();
+        const livePoll = (async () => {
+          // Warm-up: ai_processing sollte gleich nach Start hochgehen.
+          // Wir verwenden den Max-Wert in dieser Welle als "waveTotal".
+          let waveTotalSeen = 0;
+          while (!pollAbort.signal.aborted) {
+            try {
+              const [{ count: aiProc }, { count: confirmedNew }, { count: backlogActive }, { count: backlogCooldown }] = await Promise.all([
+                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "ai_processing"),
+                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "confirmed").gte("updated_at", waveStartIso),
+                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "unmatched").or("match_reason.is.null,match_reason.not.like.[auto-skip:*"),
+                supabase.from("bank_transactions").select("id", { count: "exact", head: true }).eq("match_status", "unmatched").like("match_reason", "[auto-skip:%"),
+              ]);
+              const inFlight = aiProc ?? 0;
+              waveTotalSeen = Math.max(waveTotalSeen, inFlight);
+              const waveConfirmedNow = confirmedNew ?? 0;
+              const waveProcessedNow = Math.max(0, waveTotalSeen - inFlight);
+              setAutoMatchProgress({
+                batch: wave + 1,
+                processed: totalProcessed + waveProcessedNow,
+                confirmed: totalAutoConfirmed + waveConfirmedNow,
+                waveTotal: waveTotalSeen,
+                waveProcessed: waveProcessedNow,
+                waveConfirmed: waveConfirmedNow,
+                waveInFlight: inFlight,
+                backlogRemaining: backlogActive ?? 0,
+                cooldownInBacklog: backlogCooldown ?? 0,
+              });
+            } catch {
+              // ignore poll errors — sind nicht kritisch
+            }
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+        })();
+
         // Welle von CONCURRENCY parallelen Calls. Alle teilen sich denselben
         // AbortController → ein Cancel bricht alle 4 gleichzeitig ab.
         const wavePromises = Array.from({ length: CONCURRENCY }, async () => {
@@ -306,11 +367,12 @@ export default function MatchingPage() {
           cancelPromise.then(() => ({ kind: "cancelled" as const })),
         ]);
         autoMatchCancelResolveRef.current = null;
+        // Polling stoppen, sobald die Welle fertig ist (oder abgebrochen wurde).
+        pollAbort.abort();
+        // wir warten kurz auf den Abort, kein await auf livePoll noetig — lauft eh aus.
+        void livePoll;
         if (raceResult.kind === "cancelled") {
           wasCancelled = true;
-          // In-flight Calls laufen im Hintergrund weiter; ihre Claims werden
-          // entweder normal commited (confirmed) oder nach 3min via Stale-
-          // Recovery freigegeben. Wir warten NICHT auf sie.
           break waveLoop;
         }
         const results = raceResult.results;
@@ -367,6 +429,8 @@ export default function MatchingPage() {
             deterministicTier1 += data.decisions.deterministicTier1 ?? 0;
             deterministicTier2 += data.decisions.deterministicTier2 ?? 0;
             cooldownSkipped += data.decisions.cooldownSkipped ?? 0;
+            cooldownInBacklog = Math.max(cooldownInBacklog, data.decisions.cooldownInBacklog ?? 0);
+            cooldownClearedFingerprint += data.decisions.cooldownClearedFingerprint ?? 0;
             aiReturnedNull += data.decisions.aiReturnedNull ?? 0;
             aiRejectedInvalidId += data.decisions.aiRejectedInvalidId ?? 0;
             aiRejectedLowConfidence += data.decisions.aiRejectedLowConfidence ?? 0;
@@ -399,10 +463,17 @@ export default function MatchingPage() {
           }
         }
 
+        // Welle ist fertig → endgueltige Werte ueberschreiben den letzten Live-Poll.
         setAutoMatchProgress({
           batch: wave + 1,
           processed: totalProcessed,
           confirmed: totalAutoConfirmed,
+          waveTotal: 0,
+          waveProcessed: 0,
+          waveConfirmed: 0,
+          waveInFlight: 0,
+          backlogRemaining: lastRemaining,
+          cooldownInBacklog,
         });
 
         // Cache auf Snapshot zurueckrollen: falls irgendein Mechanismus
@@ -449,6 +520,8 @@ export default function MatchingPage() {
           deterministicTier1,
           deterministicTier2,
           cooldownSkipped,
+          cooldownInBacklog,
+          cooldownClearedFingerprint,
           aiAttempted,
           aiSucceeded,
           aiReturnedNull,
@@ -532,24 +605,60 @@ export default function MatchingPage() {
             </div>
             {autoMatchProgress && (
               <div className="flex w-full flex-col gap-2 rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Welle</span>
-                  <span className="font-semibold text-foreground">
-                    {autoMatchProgress.batch}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Geprüft</span>
-                  <span className="font-semibold text-foreground">
+                {/* Aktuelle Welle: Live-Progress aus DB-Polling.
+                    waveTotal=0 = Welle gerade gestartet oder fertig — dann
+                    fallen wir auf den kumulativen Stand zurueck. */}
+                {autoMatchProgress.waveTotal > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Welle {autoMatchProgress.batch}</span>
+                      <span className="font-mono font-semibold text-foreground">
+                        {autoMatchProgress.waveProcessed}/{autoMatchProgress.waveTotal} TX
+                      </span>
+                    </div>
+                    {/* Progress-Bar fuer die aktuelle Welle */}
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full bg-primary transition-[width] duration-500"
+                        style={{
+                          width: `${Math.min(100, Math.round((autoMatchProgress.waveProcessed / Math.max(1, autoMatchProgress.waveTotal)) * 100))}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">
+                        {autoMatchProgress.waveInFlight} laufen, {autoMatchProgress.waveConfirmed} gematcht
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Welle {autoMatchProgress.batch}</span>
+                    <span className="font-semibold text-foreground">startet…</span>
+                  </div>
+                )}
+                <div className="my-1 h-px bg-border/40" />
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Insgesamt geprüft</span>
+                  <span className="font-mono font-semibold text-foreground">
                     {autoMatchProgress.processed}
                   </span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Zugeordnet</span>
-                  <span className="font-semibold text-success">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Insgesamt zugeordnet</span>
+                  <span className="font-mono font-semibold text-success">
                     {autoMatchProgress.confirmed}
                   </span>
                 </div>
+                {(autoMatchProgress.backlogRemaining > 0 || autoMatchProgress.cooldownInBacklog > 0) && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Noch offen</span>
+                    <span className="font-mono text-muted-foreground">
+                      {autoMatchProgress.backlogRemaining}
+                      {autoMatchProgress.cooldownInBacklog > 0 && ` (+${autoMatchProgress.cooldownInBacklog} Cooldown)`}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
             <Button
@@ -870,7 +979,8 @@ export default function MatchingPage() {
                   </div>
                   <div className="text-muted-foreground">
                     Pfade: deterministisch t1={autoMatchSummary.deterministicTier1}, t2={autoMatchSummary.deterministicTier2}
-                    {autoMatchSummary.cooldownSkipped > 0 && ` · Cooldown übersprungen: ${autoMatchSummary.cooldownSkipped}`}
+                    {autoMatchSummary.cooldownInBacklog > 0 && ` · ${autoMatchSummary.cooldownInBacklog} TX im Cooldown (warten ≤14d oder neue Rechnung)`}
+                    {autoMatchSummary.cooldownClearedFingerprint > 0 && ` · ${autoMatchSummary.cooldownClearedFingerprint} Cooldowns aufgehoben (Pool geändert)`}
                     {autoMatchSummary.aiAttempted > 0 && ` · KI ${autoMatchSummary.aiSucceeded}/${autoMatchSummary.aiAttempted} (${autoMatchSummary.aiModel ?? "?"})`}
                     {autoMatchSummary.aiAvgLatencyMs !== null &&
                       ` · ⌀${autoMatchSummary.aiAvgLatencyMs}ms${autoMatchSummary.aiP95LatencyMs ? ` p95 ${autoMatchSummary.aiP95LatencyMs}ms` : ""}`}

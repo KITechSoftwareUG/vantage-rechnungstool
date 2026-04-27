@@ -74,7 +74,7 @@ const SKIP_COOLDOWN_DAYS = 14;
 
 // Version-Tag. Bei jedem Code-Change hochzaehlen, damit das Frontend live
 // nachvollziehen kann, ob die neue Edge-Function-Version auch wirklich aktiv ist.
-const EDGE_VERSION = "2026-04-27-pipeline-v2";
+const EDGE_VERSION = "2026-04-27-pipeline-v2-claim-filter";
 
 // =============================================================================
 // SECTION 1 — String Normalization & Similarity
@@ -668,12 +668,14 @@ function passesSanityV2(args: SanityArgs): SanityResult {
 //   fp: Invoice-Fingerprint, damit der Cooldown bricht, sobald sich der
 //       Invoice-Pool aendert.
 //
-// Wichtig: Cooldown skippt nur Tier 3 (AI), NICHT Tier 1/2 — denn neue
-// Invoices koennten deterministisch matchen, auch wenn der Fingerprint sich
-// noch nicht geaendert hat (Edge-Case: alte Invoices, neue TX).
+// Cooldown wird ueber zwei Mechanismen erzwungen:
+//   1. Cleanup-Pass am Anfang der Invocation: Marker mit Datum < cutoff oder
+//      mit anderem Fingerprint werden geloescht (match_reason auf NULL).
+//   2. Claim-Filter: TX mit `match_reason LIKE '[auto-skip:%'` werden gar
+//      nicht erst claimed.
+// Damit ist der TX-Loop selbst cooldown-frei — alles, was reinkommt, wird
+// auch verarbeitet.
 // -----------------------------------------------------------------------------
-
-const SKIP_MARKER_PATTERN = /^\[auto-skip:(\d{4}-\d{2}-\d{2}):([a-z\-]+)(?::fp=([^\]]+))?\]/;
 
 function fingerprintInvoices(invoices: any[]): string {
   const count = invoices.length;
@@ -682,19 +684,6 @@ function fingerprintInvoices(invoices: any[]): string {
     return Number.isFinite(t) ? Math.max(m, t) : m;
   }, 0);
   return `n=${count};u=${maxUpdated}`;
-}
-
-function shouldSkipBecauseCooldown(matchReason: string | null | undefined, currentFingerprint: string): boolean {
-  if (!matchReason) return false;
-  const m = matchReason.match(SKIP_MARKER_PATTERN);
-  if (!m) return false;
-  const lastSkipDate = new Date(m[1]);
-  if (!Number.isFinite(lastSkipDate.getTime())) return false;
-  const ageDays = (Date.now() - lastSkipDate.getTime()) / 86400000;
-  if (ageDays >= SKIP_COOLDOWN_DAYS) return false;
-  const oldFingerprint = m[3] ?? "";
-  if (oldFingerprint !== currentFingerprint) return false; // Pool veraendert
-  return true;
 }
 
 function buildSkipMarker(
@@ -744,11 +733,21 @@ serve(async (req) => {
     // PARALLEL-SAFE CLAIM
     // -----------------------------------------------------------------------
     // (a) Stale-Recovery
-    // (b) Kandidaten oversamplen
-    // (c) Atomischer UPDATE unmatched -> ai_processing
-    // (d) Optional Second-Try
+    // (b) Cooldown-Maintenance: stale Skip-Marker raeumen, bevor sie den
+    //     Claim-Filter unnoetig blocken
+    // (c) Invoice-Fetch + Fingerprint frueher, damit (b) Fingerprint-Mismatches
+    //     erkennen kann
+    // (d) Kandidaten oversamplen — JETZT mit Filter "kein aktiver Skip-Marker"
+    // (e) Atomischer UPDATE unmatched -> ai_processing
+    // (f) Optional Second-Try
+    //
+    // Damit landen cooldown'd TX gar nicht erst in der Verarbeitung. Das
+    // verhindert (1) den Wave-Loop ohne Fortschritt im Frontend und (2) dass
+    // updated_at fuer cooldown'd TX bei jedem Run gebumped wird (= keine
+    // visuelle Reshuffle der Liste).
     // -----------------------------------------------------------------------
 
+    // (a) Stale-Recovery
     const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
     const { error: staleErr } = await supabaseClient
       .from("bank_transactions")
@@ -757,11 +756,85 @@ serve(async (req) => {
       .lt("updated_at", staleBefore);
     if (staleErr) console.warn("Stale-claim release failed (non-fatal):", staleErr.message);
 
+    // (b+c) Invoices vorab laden, Fingerprint berechnen, dann stale Skip-Marker
+    // raeumen. Das geht VOR dem Claim, weil der Claim-Filter spaeter die noch
+    // vorhandenen Marker als "active cooldown" interpretiert.
+    const allInvoicesRawEarly = await fetchAllPaginated<any>(() =>
+      supabaseClient!.from("invoices").select("*"),
+    );
+    const matchedInvoiceIdRowsEarly = await fetchAllPaginated<any>(() =>
+      supabaseClient!
+        .from("bank_transactions")
+        .select("matched_invoice_id")
+        .not("matched_invoice_id", "is", null),
+    );
+    const alreadyMatchedIdsEarly = new Set(
+      matchedInvoiceIdRowsEarly.map((t: any) => t.matched_invoice_id),
+    );
+    const invoicesUnmatchedEarly = allInvoicesRawEarly.filter(
+      (inv: any) => !alreadyMatchedIdsEarly.has(inv.id),
+    );
+    const invoicesEarly = dedupInvoices(invoicesUnmatchedEarly);
+    const invoiceFingerprintEarly = fingerprintInvoices(invoicesEarly);
+
+    // Cooldown-Cleanup Pass 1: alle Marker mit Datum aelter als Cutoff loeschen.
+    // Dadurch werden TX, deren Cooldown abgelaufen ist, beim naechsten Claim
+    // wieder als regulaere unmatched-TX behandelt.
+    const cooldownCutoffDate = new Date(Date.now() - SKIP_COOLDOWN_DAYS * 86400000)
+      .toISOString()
+      .slice(0, 10);
+    const cooldownCutoffMarker = `[auto-skip:${cooldownCutoffDate}`;
+    // Lexicographic compare auf "[auto-skip:YYYY-MM-DD" funktioniert weil
+    // unsere Marker immer mit diesem Prefix-Format starten.
+    const { error: clearStaleErr } = await supabaseClient
+      .from("bank_transactions")
+      .update({ match_reason: null })
+      .eq("match_status", "unmatched")
+      .like("match_reason", "[auto-skip:%")
+      .lt("match_reason", cooldownCutoffMarker);
+    if (clearStaleErr) {
+      console.warn("Cooldown-Cleanup (date) fehlgeschlagen (non-fatal):", clearStaleErr.message);
+    }
+
+    // Cooldown-Cleanup Pass 2: Marker mit Fingerprint-Mismatch loeschen.
+    // PostgREST kann kein "endsWith"-Filter; wir holen die Marker und filtern
+    // client-side. Bei realistischer Backlog-Groesse (≤300 cooldown'd TX) ist
+    // das cheap.
+    const { data: markerRows, error: markerFetchErr } = await supabaseClient
+      .from("bank_transactions")
+      .select("id, match_reason")
+      .eq("match_status", "unmatched")
+      .like("match_reason", "[auto-skip:%");
+    let cooldownClearedFingerprint = 0;
+    if (markerFetchErr) {
+      console.warn("Cooldown-Marker-Fetch fehlgeschlagen (non-fatal):", markerFetchErr.message);
+    } else if (markerRows && markerRows.length > 0) {
+      const expectedSuffix = `:fp=${invoiceFingerprintEarly}]`;
+      const staleByFingerprint = (markerRows as Array<{ id: string; match_reason: string | null }>)
+        .filter((r) => r.match_reason && !r.match_reason.endsWith(expectedSuffix))
+        .map((r) => r.id);
+      if (staleByFingerprint.length > 0) {
+        const { error: clearFpErr } = await supabaseClient
+          .from("bank_transactions")
+          .update({ match_reason: null })
+          .in("id", staleByFingerprint);
+        if (clearFpErr) {
+          console.warn("Cooldown-Cleanup (fingerprint) fehlgeschlagen (non-fatal):", clearFpErr.message);
+        } else {
+          cooldownClearedFingerprint = staleByFingerprint.length;
+        }
+      }
+    }
+
+    // (d) Kandidaten — jetzt mit Filter "kein aktiver Skip-Marker"
+    // PostgREST or-Syntax: match_reason ist NULL ODER stimmt nicht mit
+    // "[auto-skip:" ueberein.
     const CLAIM_OVERSAMPLE = MAX_TRANSACTIONS_PER_INVOCATION * 2;
     const { data: candidateRows, error: candErr } = await supabaseClient
       .from("bank_transactions")
       .select("id")
       .eq("match_status", "unmatched")
+      .or("match_reason.is.null,match_reason.not.like.[auto-skip:*")
       .order("date", { ascending: false })
       .limit(CLAIM_OVERSAMPLE);
     if (candErr) throw candErr;
@@ -780,7 +853,7 @@ serve(async (req) => {
       claimed = claimResult || [];
     }
 
-    // Second-Try bei hoher Kollisionsrate
+    // (f) Second-Try bei hoher Kollisionsrate
     if (
       claimed.length < MAX_TRANSACTIONS_PER_INVOCATION / 2 &&
       candidateIds.length > MAX_TRANSACTIONS_PER_INVOCATION
@@ -818,37 +891,35 @@ serve(async (req) => {
       if (error) console.error("Release of unmatched claims failed:", error.message);
     };
 
-    // Already-matched IDs (paginiert)
-    const matchedInvoiceIdRows = await fetchAllPaginated<any>(() =>
-      supabaseClient!
-        .from("bank_transactions")
-        .select("matched_invoice_id")
-        .not("matched_invoice_id", "is", null),
-    );
-    const alreadyMatchedIds = new Set(
-      matchedInvoiceIdRows.map((t: any) => t.matched_invoice_id),
-    );
-
-    const allInvoicesRaw = await fetchAllPaginated<any>(() =>
-      supabaseClient!.from("invoices").select("*"),
-    );
-
-    const invoicesAfterMatchFilter = allInvoicesRaw.filter(
-      (inv: any) => !alreadyMatchedIds.has(inv.id),
-    );
-    const invoices = dedupInvoices(invoicesAfterMatchFilter);
+    // Invoice-Liste fuer den TX-Loop wieder verwenden (frueher in (b+c) geladen).
+    const allInvoicesRaw = allInvoicesRawEarly;
+    const invoicesAfterMatchFilter = invoicesUnmatchedEarly;
+    const invoices = invoicesEarly;
     console.log(
       `Invoices: ${allInvoicesRaw.length} total → ${invoicesAfterMatchFilter.length} unmatched → ${invoices.length} after dedup`,
     );
 
-    // Backlog-Counter
-    const { count: unmatchedAfterClaim } = await supabaseClient
+    // Backlog-Counter — `remaining` ist die ECHTE Restarbeit fuer den naechsten
+    // Frontend-Wave (cooldown'd TX zaehlen NICHT mit, weil sie eh nicht
+    // claimed werden). Damit terminiert der Frontend-Loop natuerlich, sobald
+    // nur noch cooldown'd TX uebrig sind.
+    const { count: unmatchedActiveAfterClaim } = await supabaseClient
+      .from("bank_transactions")
+      .select("id", { count: "exact", head: true })
+      .eq("match_status", "unmatched")
+      .or("match_reason.is.null,match_reason.not.like.[auto-skip:*");
+
+    // Total-Counter inkl. cooldown'd — fuer Telemetrie/Anzeige.
+    const { count: unmatchedTotalAfterClaim } = await supabaseClient
       .from("bank_transactions")
       .select("id", { count: "exact", head: true })
       .eq("match_status", "unmatched");
 
+    const cooldownInBacklog =
+      Math.max(0, (unmatchedTotalAfterClaim ?? 0) - (unmatchedActiveAfterClaim ?? 0));
+
     const transactions = allTransactions;
-    const remaining = unmatchedAfterClaim ?? 0;
+    const remaining = unmatchedActiveAfterClaim ?? 0;
     const totalUnmatched = remaining + transactions.length;
 
     if (transactions.length === 0 || invoices.length === 0) {
@@ -901,8 +972,10 @@ serve(async (req) => {
       );
     }
 
-    // Cooldown-Fingerprint einmal pro Invocation berechnen
-    const invoiceFingerprint = fingerprintInvoices(invoices);
+    // Cooldown-Fingerprint — wurde frueher schon fuer den Cleanup-Pass
+    // berechnet (`invoiceFingerprintEarly`). Wir verwenden denselben Wert,
+    // damit Cleanup, Claim-Filter und Skip-Marker-Writes konsistent sind.
+    const invoiceFingerprint = invoiceFingerprintEarly;
 
     // Telemetrie-Counter
     let matchedCount = 0;
@@ -932,7 +1005,11 @@ serve(async (req) => {
 
     let deterministicTier1 = 0;
     let deterministicTier2 = 0;
-    let cooldownSkipped = 0;
+    // cooldownSkipped == 0 in v2 — TX sind durch den Claim-Filter erst gar
+    // nicht in den Loop gekommen. Wir reporten stattdessen `cooldownInBacklog`
+    // als Anzahl wartender cooldown'd TX. Das Feld bleibt im JSON fuer
+    // Frontend-Backwards-Compat.
+    const cooldownSkipped = 0;
     let noCandidates = 0;
     let aiRejectedInvalidId = 0;
     let aiRejectedLowConfidence = 0;
@@ -959,11 +1036,10 @@ serve(async (req) => {
         }
       }
 
-      // Step 1: cooldown-check (skipAI flag setzen, NICHT ganz skip)
-      const skipAI = shouldSkipBecauseCooldown(transaction.match_reason, invoiceFingerprint);
-      if (skipAI) {
-        cooldownSkipped++;
-      }
+      // Cooldown wird jetzt VOR dem Claim gefiltert (siehe Section 5,
+      // PARALLEL-SAFE CLAIM Schritt d). Wenn eine TX hier landet, ist sie
+      // garantiert nicht im Cooldown. skipAI-Flag entfaellt — Tier 3 laeuft
+      // immer, wenn Tier 1/2 keinen Match liefern.
 
       // Step 2: Kandidaten berechnen mit normalize + scoring
       const { normalized: normalizedDesc } = normalizeDescription(transaction.description ?? "");
@@ -1123,13 +1199,7 @@ serve(async (req) => {
         continue;
       }
 
-      // Step 5: AI gating — Cooldown skippt nur Tier 3
-      if (skipAI) {
-        // Kein AI-Call, kein neues Memo (das alte bleibt) — TX bleibt unmatched.
-        continue;
-      }
-
-      // Step 6: Tier 3 — AI-Call
+      // Step 5: Tier 3 — AI-Call (Cooldown bereits beim Claim gefiltert)
       const potentialMatches = preFiltered.map((c) => {
         // Fuer den Prompt brauchen wir _combinedScore am invoice-Objekt
         return { ...c.invoice, _combinedScore: c.combined };
@@ -1404,10 +1474,20 @@ Antworte mit dem JSON-Schema oben.`;
     );
     await releaseUnmatchedClaims(matchedTxIds);
 
+    // Final-Remaining = ECHTE Restarbeit (cooldown'd ausgeklammert), damit
+    // Frontend-Wave-Loop natuerlich terminiert sobald nur noch cooldown'd TX
+    // uebrig sind. Cooldown-Anzahl bleibt fuer Telemetrie verfuegbar.
     const { count: finalRemaining } = await supabaseClient
       .from("bank_transactions")
       .select("id", { count: "exact", head: true })
-      .eq("match_status", "unmatched");
+      .eq("match_status", "unmatched")
+      .or("match_reason.is.null,match_reason.not.like.[auto-skip:*");
+
+    const { count: finalCooldownInBacklog } = await supabaseClient
+      .from("bank_transactions")
+      .select("id", { count: "exact", head: true })
+      .eq("match_status", "unmatched")
+      .like("match_reason", "[auto-skip:%");
 
     // Latency-Aggregate
     const sortedLatencies = [...aiLatencies].sort((a, b) => a - b);
@@ -1446,7 +1526,9 @@ Antworte mit dem JSON-Schema oben.`;
           deterministicMatched: deterministicTier1 + deterministicTier2,
           deterministicTier1,
           deterministicTier2,
-          cooldownSkipped,
+          cooldownSkipped,                         // legacy, immer 0 in v2
+          cooldownInBacklog: finalCooldownInBacklog ?? cooldownInBacklog,
+          cooldownClearedFingerprint,              // wieviele Marker am Anfang geraeumt wurden
           noCandidates,
           aiReturnedNull,
           aiRejectedInvalidId,
