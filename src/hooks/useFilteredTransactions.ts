@@ -1,6 +1,5 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
-import { useBankTransactions, useUpdateTransactionMatch } from "@/hooks/useMatching";
-import { useRecurringPatterns, matchesRecurringPattern } from "@/hooks/useRecurringPatterns";
+import { useBankTransactions } from "@/hooks/useMatching";
 
 type FilterStatus = "all" | "unmatched" | "confirmed";
 
@@ -18,37 +17,6 @@ export function useFilteredTransactions() {
   const [ignoredOpen, setIgnoredOpen] = useState(false);
 
   const { data: transactions = [], isLoading, refetch } = useBankTransactions();
-  const { data: recurringPatterns = [] } = useRecurringPatterns();
-  const updateMatch = useUpdateTransactionMatch();
-
-  // Auto-mark unmatched transactions that match recurring patterns
-  useEffect(() => {
-    if (recurringPatterns.length === 0 || transactions.length === 0) return;
-
-    const unmatchedTransactions = transactions.filter(
-      (t: any) => t.matchStatus === "unmatched"
-    );
-
-    const toMark = unmatchedTransactions.filter((t: any) =>
-      matchesRecurringPattern(t.description, recurringPatterns)
-    );
-
-    if (toMark.length === 0) return;
-
-    (async () => {
-      for (const transaction of toMark) {
-        try {
-          await updateMatch.mutateAsync({
-            transactionId: transaction.id,
-            invoiceId: null,
-            matchStatus: "recurring",
-          });
-        } catch (error) {
-          console.error("Error auto-marking recurring:", error);
-        }
-      }
-    })();
-  }, [recurringPatterns, transactions.length]);
 
   // Recurring/Ignored sind aus dem Haupt-Flow raus und wandern nach unten in
   // eigene Collapsibles. Innerhalb der Hauptliste ist die Reihenfolge
