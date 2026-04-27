@@ -2,24 +2,22 @@
 // externen Landingpage.
 //
 // Flow:
-//   1. X-Api-Key gegen FORM_API_KEY aus app_config pruefen.
-//   2. Payload tolerant parsen, nur `phone` ist Pflicht.
-//   3. Phone zu E.164-ohne-Plus (Meta-Format) normalisieren.
-//   4. Upsert auf `leads` (Conflict-Key: phone), Anamnese-Felder und Tracking
+//   1. Payload tolerant parsen, nur `phone` ist Pflicht.
+//   2. Phone zu E.164-ohne-Plus (Meta-Format) normalisieren.
+//   3. Upsert auf `leads` (Conflict-Key: phone), Anamnese-Felder und Tracking
 //      landen in `meta` JSONB.
-//   5. Wenn `einverstaendnis == "ja"` und WA_ACCESS_TOKEN gesetzt: Meta
+//   4. Wenn `einverstaendnis == "ja"` und WA_ACCESS_TOKEN gesetzt: Meta
 //      Graph API Template-Send + Outbound-Log in `wa_messages`. Fehler hier
 //      brechen den Flow NICHT ab — Lead ist gespeichert, WA ist Bonus.
 //
-// Auth: public Endpoint (kein verify_jwt). Service-Role-Client umgeht RLS,
-// weil das Formular von aussen via Shared-Secret authentifiziert wird.
+// Auth: public Endpoint (kein verify_jwt, kein Shared-Secret). Service-Role-Client umgeht RLS — der Endpunkt traut dem Caller bewusst, weil Spam-Risiko bei diesem Profil niedrig ist und Meta-Templates ohnehin nur an einverstaendnis=ja gesendet werden.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { getConfig } from "../_shared/config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-api-key",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -28,19 +26,6 @@ function jsonResponse(status: number, body: Record<string, unknown>): Response {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
-}
-
-// Byte-genauer Vergleich — kein timing-safe compare, Deno hat keinen nativen
-// crypto.timingSafeEqual im Edge-Runtime. Der Key ist lang genug (zufaellig),
-// und der Endpoint ist nicht hochfrequent; der praktische Timing-Leak ist
-// vernachlaessigbar gegen den Nutzen, das auf dem Hot-Path einfach zu halten.
-function apiKeyMatches(provided: string, expected: string): boolean {
-  if (provided.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < provided.length; i++) {
-    mismatch |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return mismatch === 0;
 }
 
 // E.164 ohne fuehrendes '+' (Meta-Format).
@@ -74,17 +59,6 @@ Deno.serve(async (req) => {
     return jsonResponse(500, { ok: false, error: "server_misconfigured" });
   }
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-  // --- Auth: FORM_API_KEY ---
-  const expectedApiKey = await getConfig(supabase, "FORM_API_KEY");
-  if (!expectedApiKey) {
-    // Setup-Fehler laut machen, nicht still durchlassen.
-    return jsonResponse(503, { ok: false, error: "form_api_key_not_configured" });
-  }
-  const providedApiKey = req.headers.get("x-api-key") ?? "";
-  if (!apiKeyMatches(providedApiKey, expectedApiKey)) {
-    return jsonResponse(401, { ok: false, error: "unauthorized" });
-  }
 
   // --- Parse Body ---
   let body: Record<string, unknown>;
