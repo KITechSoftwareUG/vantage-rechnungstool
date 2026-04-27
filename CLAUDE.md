@@ -152,6 +152,54 @@ Submission = aktuelle Wahrheit).
 läuft NICHT über einen REST-Endpoint — das Frontend liest direkt via
 Supabase-Client.
 
+### E2E-Smoke-Test (nach Meta+Gmail-Setup)
+
+Reihenfolge — bei jedem Schritt anhalten und Ergebnis prüfen, bevor weiter:
+
+1. **Function-Liveness** — die fünf Zahnfunnel-Edge-Functions müssen deployed
+   sein. Pro URL einmal `curl` (404 = nicht deployed → in Lovable redeployen):
+   ```
+   curl -i https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-form-webhook
+   curl -i https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-whatsapp-webhook
+   curl -i https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-whatsapp-send
+   curl -i https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-suggest-reply
+   curl -i https://fqjptwpdihwqdfxorvqq.supabase.co/functions/v1/zahnfunnel-health-check
+   ```
+   Erwartet: 405 (method_not_allowed) oder 401 (jwt). 404 = Deploy fehlt.
+
+2. **Status-Page** — `/status` im internen Dashboard. Alle 3 Cards müssen
+   grün sein (Meta, Anthropic/OpenAI, Gmail). Rot/grau heißt: Token oder
+   `app_config`-Eintrag fehlt — dann erst weiter.
+
+3. **Funnel-Submit (echter Browser-Submit, kein curl)** — auf
+   https://zahn-versteher-portal.lovable.app das Formular einmal komplett
+   durchklicken (Telefonnummer = deine eigene Test-Nummer, Einverständnis = ja).
+   Erwartet: Innerhalb ~5s erscheint der Lead in `/funnel`. `meta` enthält
+   die Anamnese-Felder. `source = website`.
+
+4. **Auto-Template-Send** — prüfen, ob das WA-Template rausgegangen ist:
+   - `wa_messages`-Eintrag mit `direction='outbound'` und `template_name`
+     gesetzt für den frischen Lead
+   - WhatsApp auf dem Test-Handy zeigt die Template-Nachricht
+   Wenn nichts kommt: Lovable-Logs der `zahnfunnel-form-webhook` checken
+   (`whatsapp template send failed`-Zeile).
+
+5. **Inbound-Reply** — auf dem Test-Handy auf das Template antworten.
+   Erwartet: Nachricht erscheint in `/inbox` beim Lead. `lead.status` wechselt
+   auf `contacted`, `message_count` zählt hoch.
+   Wenn nichts kommt: Meta-Webhook-URL falsch eingetragen oder
+   `WA_VERIFY_TOKEN` weicht ab.
+
+6. **Outbound-Send aus Inbox** — KI-Vorschlag generieren, anpassen, senden.
+   Erwartet: `wa_messages`-Eintrag mit `direction='outbound'`, Lead bekommt
+   die Nachricht auf WhatsApp.
+
+7. **Direct-WhatsApp-Lead** (zweiter Test) — von einer anderen, im System
+   noch nicht bekannten Nummer direkt auf die Business-WhatsApp schreiben
+   (kein Funnel davor). Erwartet: neuer Lead mit `source='whatsapp'`,
+   `meta` leer. In `/funnel/<id>` zeigt LeadDetail Inbound-Thread + die
+   FirstContactCard mit englisch-locker generiertem Vorschlag.
+
 ## Regeln
 
 - **Original lesen, nicht raten**, bevor du Code änderst.
