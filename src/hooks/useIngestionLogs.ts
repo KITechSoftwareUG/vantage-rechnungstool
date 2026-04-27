@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { MONTH_NAMES } from "@/types/documents";
 import { buildStoragePaths } from "@/lib/storagePaths";
 import { resetTransactionMatches } from "@/lib/matchReset";
+import { removeStoragePathsBestEffort } from "@/lib/storageCleanup";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -242,17 +243,7 @@ export function useIngestionLogs() {
       const { error } = await supabase.from("document_ingestion_log").delete().eq("id", logId);
       if (error) throw error;
 
-      if (storagePaths.length > 0) {
-        const removeOnce = () => supabase.storage.from("documents").remove(storagePaths);
-        let { error: storageErr } = await removeOnce();
-        if (storageErr) {
-          const retry = await removeOnce();
-          storageErr = retry.error;
-        }
-        if (storageErr) {
-          console.error("[useIngestionLogs] Storage-Cleanup fehlgeschlagen", storageErr, storagePaths);
-        }
-      }
+      await removeStoragePathsBestEffort(storagePaths, "ingestionLogs.delete");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ingestion-logs"] });
@@ -322,17 +313,7 @@ export function useIngestionLogs() {
       if (error) throw error;
 
       const storagePaths = buildStoragePaths(refs);
-      if (storagePaths.length > 0) {
-        const removeOnce = () => supabase.storage.from("documents").remove(storagePaths);
-        let { error: storageErr } = await removeOnce();
-        if (storageErr) {
-          const retry = await removeOnce();
-          storageErr = retry.error;
-        }
-        if (storageErr) {
-          console.error("[useIngestionLogs] Bulk-Storage-Cleanup fehlgeschlagen", storageErr, storagePaths);
-        }
-      }
+      await removeStoragePathsBestEffort(storagePaths, "ingestionLogs.bulkDelete");
 
       return selectedIds.size;
     },

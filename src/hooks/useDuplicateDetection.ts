@@ -4,6 +4,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildStoragePaths } from "@/lib/storagePaths";
 import { resetTransactionMatches } from "@/lib/matchReset";
+import {
+  deleteIngestionLogsBestEffort,
+  removeStoragePathsBestEffort,
+} from "@/lib/storageCleanup";
 
 interface DuplicateCandidate {
   id: string;
@@ -231,20 +235,8 @@ export function useMergeDuplicate() {
         .eq("id", duplicateId);
       if (deleteError) throw deleteError;
 
-      // Fix B: Log-Delete awaiten mit 1 Retry. Kein Toast bei Failure —
-      // nicht kritisch, aber console.error fuer Debug.
-      if (logIds.length) {
-        const deleteLog = () =>
-          supabase.from("document_ingestion_log").delete().in("id", logIds);
-        let { error: logErr } = await deleteLog();
-        if (logErr) {
-          const retry = await deleteLog();
-          logErr = retry.error;
-        }
-        if (logErr) {
-          console.error("Ingestion-Log-Delete (merge) fehlgeschlagen:", logErr);
-        }
-      }
+      // Fix B: Log-Delete awaiten mit 1 Retry (best-effort).
+      await deleteIngestionLogsBestEffort(logIds, "mergeDuplicate");
 
       // Fix A: Storage-Datei der geloeschten Rechnung entfernen (1 Retry).
       if (dupRow) {
@@ -257,18 +249,7 @@ export function useMergeDuplicate() {
             fileUrl: (dupRow as any).file_url,
           },
         ]);
-        if (paths.length) {
-          const removeStorage = () =>
-            supabase.storage.from("documents").remove(paths);
-          let { error: storageErr } = await removeStorage();
-          if (storageErr) {
-            const retry = await removeStorage();
-            storageErr = retry.error;
-          }
-          if (storageErr) {
-            console.error("Storage-Delete (merge) fehlgeschlagen:", storageErr);
-          }
-        }
+        await removeStoragePathsBestEffort(paths, "mergeDuplicate");
       }
     },
     onSuccess: () => {

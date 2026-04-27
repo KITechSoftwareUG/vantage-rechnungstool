@@ -20,6 +20,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildStoragePaths } from "@/lib/storagePaths";
 import { resetTransactionMatches } from "@/lib/matchReset";
+import {
+  deleteIngestionLogsBestEffort,
+  removeStoragePathsBestEffort,
+} from "@/lib/storageCleanup";
 
 type ViewMode = "grid" | "timeline" | "list";
 
@@ -180,18 +184,9 @@ export default function InvoicesPage() {
         .eq("id", duplicateId);
       if (deleteError) throw deleteError;
 
-      if (logIds.length) {
-        const deleteLog = () =>
-          supabase.from("document_ingestion_log").delete().in("id", logIds);
-        let { error: logErr } = await deleteLog();
-        if (logErr) {
-          const retry = await deleteLog();
-          logErr = retry.error;
-        }
-        if (logErr) console.error("Ingestion-Log-Delete (bulk dedup) fehlgeschlagen:", logErr);
-      }
+      await deleteIngestionLogsBestEffort(logIds, "bulkDedup");
 
-      // Fix A: Storage-Cleanup mit 1 Retry.
+      // Fix A: Storage-Cleanup (best-effort).
       if (dupRow) {
         const paths = buildStoragePaths([
           {
@@ -202,16 +197,7 @@ export default function InvoicesPage() {
             fileUrl: (dupRow as any).file_url,
           },
         ]);
-        if (paths.length) {
-          const removeStorage = () =>
-            supabase.storage.from("documents").remove(paths);
-          let { error: storageErr } = await removeStorage();
-          if (storageErr) {
-            const retry = await removeStorage();
-            storageErr = retry.error;
-          }
-          if (storageErr) console.error("Storage-Delete (bulk dedup) fehlgeschlagen:", storageErr);
-        }
+        await removeStoragePathsBestEffort(paths, "bulkDedup");
       }
     };
 

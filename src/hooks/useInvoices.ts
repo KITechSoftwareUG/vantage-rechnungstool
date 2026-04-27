@@ -6,6 +6,10 @@ import { useToast } from "@/hooks/use-toast";
 import { resolveStorageUrl } from "@/lib/resolveStorageUrl";
 import { buildStoragePaths } from "@/lib/storagePaths";
 import { resetTransactionMatches } from "@/lib/matchReset";
+import {
+  deleteIngestionLogsBestEffort,
+  removeStoragePathsBestEffort,
+} from "@/lib/storageCleanup";
 
 interface InvoiceDeleteRef {
   id: string;
@@ -14,33 +18,6 @@ interface InvoiceDeleteRef {
   month: number | null;
   file_name: string | null;
   file_url: string | null;
-}
-
-async function deleteIngestionLogs(logIds: string[]): Promise<void> {
-  if (!logIds.length) return;
-  const run = () =>
-    supabase.from("document_ingestion_log").delete().in("id", logIds);
-  let { error } = await run();
-  if (error) {
-    const retry = await run();
-    error = retry.error;
-  }
-  if (error) {
-    console.error("[useInvoices] ingestion log cleanup failed", error);
-  }
-}
-
-async function removeStoragePaths(paths: string[]): Promise<void> {
-  if (!paths.length) return;
-  const run = () => supabase.storage.from("documents").remove(paths);
-  let { error } = await run();
-  if (error) {
-    const retry = await run();
-    error = retry.error;
-  }
-  if (error) {
-    console.error("[useInvoices] storage cleanup failed", error);
-  }
 }
 
 
@@ -217,7 +194,7 @@ export function useDeleteInvoice() {
 
       // Nach erfolgreichem Invoice-Delete: best-effort Cleanup. Fehler hier
       // kippen den User-Flow nicht — nur console.error.
-      await deleteIngestionLogs(logIds);
+      await deleteIngestionLogsBestEffort(logIds, "useInvoices.delete");
 
       if (invRow) {
         const paths = buildStoragePaths([
@@ -229,7 +206,7 @@ export function useDeleteInvoice() {
             fileUrl: invRow.file_url,
           },
         ]);
-        await removeStoragePaths(paths);
+        await removeStoragePathsBestEffort(paths, "useInvoices.delete");
       }
     },
     onSuccess: () => {
@@ -287,7 +264,7 @@ export function useBulkDeleteInvoices() {
       const successfulLogIds = logRowsTyped
         .filter((l) => successfulIds.includes(l.document_id))
         .map((l) => l.id);
-      await deleteIngestionLogs(successfulLogIds);
+      await deleteIngestionLogsBestEffort(successfulLogIds, "useInvoices.bulkDelete");
 
       const paths = buildStoragePaths(
         snapshot
@@ -300,7 +277,7 @@ export function useBulkDeleteInvoices() {
             fileUrl: inv.file_url,
           }))
       );
-      await removeStoragePaths(paths);
+      await removeStoragePathsBestEffort(paths, "useInvoices.bulkDelete");
 
       if (errors.length > 0) throw new Error(`${errors.length} Fehler beim Löschen`);
 
