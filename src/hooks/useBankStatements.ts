@@ -237,7 +237,19 @@ export interface StatementTransaction {
   description: string;
   amount: number;
   transactionType: "debit" | "credit";
-  matchStatus: "unmatched" | "confirmed" | "no_match" | "recurring";
+  // Vollstaendige Liste aller match_status-Werte, die echt in der DB
+  // landen koennen — sonst crasht das StatusBadge in
+  // StatementTransactionsList.tsx beim Lookup.
+  // - unmatched/confirmed/no_match/recurring: User-Aktionen
+  // - ignored: vom Swipe in TransactionRow gesetzt
+  // - ai_processing: gesetzt vom matching-agent waehrend KI-Lauf
+  matchStatus:
+    | "unmatched"
+    | "confirmed"
+    | "no_match"
+    | "recurring"
+    | "ignored"
+    | "ai_processing";
   matchedInvoiceId: string | null;
   originalCurrency: string | null;
 }

@@ -36,6 +36,8 @@ const statusConfig: Record<StatementTransaction["matchStatus"], { label: string;
   confirmed: { label: "Bestätigt", color: "bg-success/10 text-success border-success/20" },
   no_match: { label: "Keine Rechnung", color: "bg-muted text-muted-foreground border-muted" },
   recurring: { label: "Laufende Kosten", color: "bg-info/10 text-info border-info/20" },
+  ignored: { label: "Ignoriert", color: "bg-muted text-muted-foreground border-muted" },
+  ai_processing: { label: "KI prüft", color: "bg-info/10 text-info border-info/20" },
 };
 
 export function StatementTransactionsList({ statementId, expectedDiff, searchQuery }: Props) {
