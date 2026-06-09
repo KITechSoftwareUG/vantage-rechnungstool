@@ -10,10 +10,11 @@ export interface MetaHealth {
   verified_name?: string;
 }
 
-export interface AnthropicHealth {
+export interface AiHealth {
   status: HealthStatus;
   detail: string;
   model?: string;
+  provider?: "gemini" | "openai";
 }
 
 export interface GmailHealth {
@@ -24,7 +25,7 @@ export interface GmailHealth {
 
 export interface HealthCheckResult {
   meta: MetaHealth;
-  anthropic: AnthropicHealth;
+  ai: AiHealth;
   gmail: GmailHealth;
 }
 
