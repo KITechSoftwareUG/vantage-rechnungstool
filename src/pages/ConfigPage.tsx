@@ -36,8 +36,8 @@ const SECTIONS: Array<{ title: string; keys: string[] }> = [
     ],
   },
   {
-    title: "Anthropic (KI-Antworten)",
-    keys: ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"],
+    title: "KI-Provider (OpenAI / Gemini)",
+    keys: ["OPENAI_MODEL"],
   },
   {
     title: "Gmail (Mail-Fallback)",

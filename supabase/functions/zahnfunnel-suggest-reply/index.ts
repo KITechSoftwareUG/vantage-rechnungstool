@@ -9,9 +9,6 @@
 // Provider: gleiche Reihenfolge wie matching-agent —
 //   1) GEMINI_API_KEY (Edge-Secret, via OpenAI-kompatibles Endpoint)
 //   2) OPENAI_API_KEY (Edge-Secret)
-//   3) ANTHROPIC_API_KEY (app_config) als letzter Fallback
-// So nutzt Funnel denselben Key wie das Matching, ohne dass ein zweiter
-// konfiguriert werden muss.
 //
 // Modes:
 //   - "reply" (default): Folge-Antwort innerhalb laufender Konversation.
@@ -211,25 +208,21 @@ Deno.serve(async (req) => {
   // Provider-Resolver: identisch zu matching-agent — Gemini > OpenAI > Anthropic.
   const geminiKey = Deno.env.get("GEMINI_API_KEY");
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
-  const [anthropicKey, anthropicModelCfg, openaiModelCfg, beraterName, beraterFirma, beraterTyp] = await Promise.all([
-    getConfig(supabase, "ANTHROPIC_API_KEY"),
-    getConfig(supabase, "ANTHROPIC_MODEL"),
+  const [openaiModelCfg, beraterName, beraterFirma, beraterTyp] = await Promise.all([
     getConfig(supabase, "OPENAI_MODEL"),
     getConfig(supabase, "BERATER_NAME"),
     getConfig(supabase, "BERATER_FIRMA"),
     getConfig(supabase, "BERATER_TYP"),
   ]);
 
-  type Provider = "gemini" | "openai" | "anthropic";
+  type Provider = "gemini" | "openai";
   let provider: Provider;
   if (geminiKey) {
     provider = "gemini";
   } else if (openaiKey) {
     provider = "openai";
-  } else if (anthropicKey) {
-    provider = "anthropic";
   } else {
-    return jsonResponse(503, { ok: false, error: "ai_not_configured", detail: "Weder GEMINI_API_KEY noch OPENAI_API_KEY (Edge Function Secrets) noch ANTHROPIC_API_KEY (app_config) ist gesetzt." });
+    return jsonResponse(503, { ok: false, error: "ai_not_configured", detail: "Weder GEMINI_API_KEY noch OPENAI_API_KEY (Edge Function Secrets) ist gesetzt." });
   }
 
   const name = beraterName ?? "Ihr Berater";
@@ -319,7 +312,7 @@ Deno.serve(async (req) => {
   let endpoint: string;
   let requestInit: RequestInit;
 
-  if (provider === "openai" || provider === "gemini") {
+  {
     // Gemini ist via OpenAI-kompatibles Endpoint ansprechbar — selber
     // Request-/Response-Shape wie OpenAI Chat Completions.
     const isGemini = provider === "gemini";
@@ -358,23 +351,6 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify(openaiBody),
     };
-  } else {
-    endpoint = "https://api.anthropic.com/v1/messages";
-    requestInit = {
-      method: "POST",
-      signal: ctrl.signal,
-      headers: {
-        "x-api-key": anthropicKey as string,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: anthropicModelCfg ?? "claude-sonnet-4-5",
-        max_tokens: mode === "first_contact" ? 600 : 400,
-        system,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    };
   }
 
   try {
@@ -407,16 +383,7 @@ Deno.serve(async (req) => {
   let modelText = "";
   try {
     const parsed = JSON.parse(raw);
-    if (provider === "openai" || provider === "gemini") {
-      modelText = String(parsed?.choices?.[0]?.message?.content ?? "").trim();
-    } else {
-      const blocks: Array<{ type?: string; text?: string }> = parsed?.content ?? [];
-      modelText = blocks
-        .filter((b) => b.type === "text" && typeof b.text === "string")
-        .map((b) => b.text as string)
-        .join("")
-        .trim();
-    }
+    modelText = String(parsed?.choices?.[0]?.message?.content ?? "").trim();
   } catch {
     console.error(`${provider} response not json:`, raw.slice(0, 200));
     return jsonResponse(502, { ok: false, error: `${provider}_invalid_json` });

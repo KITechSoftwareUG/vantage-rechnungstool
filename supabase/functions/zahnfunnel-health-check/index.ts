@@ -1,6 +1,6 @@
 // Zahnfunnel Health-Check — prueft die drei externen Integrationen, die das
-// Zahnfunnel-System braucht: Meta WhatsApp Cloud API, Anthropic Claude API
-// und Gmail (OAuth-Refresh).
+// Zahnfunnel-System braucht: Meta WhatsApp Cloud API, KI-Provider
+// (Gemini bzw. OpenAI) und Gmail (OAuth-Refresh).
 //
 // Auth: verify_jwt=true (Default). Wird nur vom eingeloggten /status-
 // Dashboard aufgerufen.
@@ -32,10 +32,11 @@ interface MetaCheck {
   verified_name?: string;
 }
 
-interface AnthropicCheck {
+interface AiCheck {
   status: CheckStatus;
   detail: string;
   model?: string;
+  provider?: "gemini" | "openai";
 }
 
 interface GmailCheck {
@@ -133,34 +134,43 @@ async function checkMeta(supabase: SupabaseClient): Promise<MetaCheck> {
   }
 }
 
-async function checkAnthropic(supabase: SupabaseClient): Promise<AnthropicCheck> {
-  const [apiKey, modelCfg] = await Promise.all([
-    getConfig(supabase, "ANTHROPIC_API_KEY"),
-    getConfig(supabase, "ANTHROPIC_MODEL"),
-  ]);
+async function checkAi(supabase: SupabaseClient): Promise<AiCheck> {
+  const geminiKey = Deno.env.get("GEMINI_API_KEY");
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  const openaiModelCfg = await getConfig(supabase, "OPENAI_MODEL");
 
-  if (!apiKey) {
+  const provider: "gemini" | "openai" | null = geminiKey
+    ? "gemini"
+    : openaiKey
+      ? "openai"
+      : null;
+
+  if (!provider) {
     return {
       status: "not_configured",
-      detail: "ANTHROPIC_API_KEY fehlt.",
+      detail: "Weder GEMINI_API_KEY noch OPENAI_API_KEY ist gesetzt.",
     };
   }
 
-  const model = modelCfg ?? "claude-sonnet-4-5";
+  const isGemini = provider === "gemini";
+  const url = isGemini
+    ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    : "https://api.openai.com/v1/chat/completions";
+  const apiKey = (isGemini ? geminiKey : openaiKey) as string;
+  const model = isGemini ? "gemini-2.5-flash" : (openaiModelCfg ?? "gpt-4o-mini");
 
   try {
     const resp = await fetchWithTimeout(
-      "https://api.anthropic.com/v1/messages",
+      url,
       {
         method: "POST",
         headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
+          Authorization: `Bearer ${apiKey}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({
           model,
-          max_tokens: 10,
+          max_tokens: 5,
           messages: [{ role: "user", content: "ping" }],
         }),
       },
@@ -170,30 +180,31 @@ async function checkAnthropic(supabase: SupabaseClient): Promise<AnthropicCheck>
     if (!resp.ok) {
       let msg = text;
       try {
-        const parsed = JSON.parse(text) as {
-          error?: { message?: string };
-        };
+        const parsed = JSON.parse(text) as { error?: { message?: string } };
         msg = parsed.error?.message ?? text;
       } catch {
         // no-op
       }
       return {
         status: "error",
-        detail: `Anthropic ${resp.status}: ${msg.slice(0, 200)}`,
+        detail: `${provider} ${resp.status}: ${msg.slice(0, 200)}`,
         model,
+        provider,
       };
     }
     return {
       status: "ok",
       detail: `Modell ${model} antwortet.`,
       model,
+      provider,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
       status: "error",
-      detail: `Anthropic-Netzwerkfehler: ${msg.slice(0, 200)}`,
+      detail: `${provider}-Netzwerkfehler: ${msg.slice(0, 200)}`,
       model,
+      provider,
     };
   }
 }
@@ -337,9 +348,9 @@ Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   // Promise.allSettled — ein einzelner Check soll den Rest nicht killen.
-  const [metaRes, anthropicRes, gmailRes] = await Promise.allSettled([
+  const [metaRes, aiRes, gmailRes] = await Promise.allSettled([
     checkMeta(supabase),
-    checkAnthropic(supabase),
+    checkAi(supabase),
     checkGmail(supabase),
   ]);
 
@@ -355,15 +366,15 @@ Deno.serve(async (req) => {
           }`.slice(0, 200),
         };
 
-  const anthropic: AnthropicCheck =
-    anthropicRes.status === "fulfilled"
-      ? anthropicRes.value
+  const ai: AiCheck =
+    aiRes.status === "fulfilled"
+      ? aiRes.value
       : {
           status: "error",
           detail: `Interner Fehler: ${
-            anthropicRes.reason instanceof Error
-              ? anthropicRes.reason.message
-              : String(anthropicRes.reason)
+            aiRes.reason instanceof Error
+              ? aiRes.reason.message
+              : String(aiRes.reason)
           }`.slice(0, 200),
         };
 
@@ -379,5 +390,5 @@ Deno.serve(async (req) => {
           }`.slice(0, 200),
         };
 
-  return jsonResponse(200, { meta, anthropic, gmail });
+  return jsonResponse(200, { meta, ai, gmail });
 });
