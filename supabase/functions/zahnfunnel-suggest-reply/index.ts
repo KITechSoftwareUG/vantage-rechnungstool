@@ -6,9 +6,12 @@
 // damit RLS keine Probleme macht und wir die Anamnese aus `leads.meta`
 // zuverlaessig lesen koennen.
 //
-// Provider: nutzt OPENAI_API_KEY aus den Edge-Function-Secrets bevorzugt
-// (gleiches Pattern wie matching-agent), fallback auf ANTHROPIC_API_KEY
-// in app_config. So muss der User keinen zweiten Key konfigurieren.
+// Provider: gleiche Reihenfolge wie matching-agent —
+//   1) GEMINI_API_KEY (Edge-Secret, via OpenAI-kompatibles Endpoint)
+//   2) OPENAI_API_KEY (Edge-Secret)
+//   3) ANTHROPIC_API_KEY (app_config) als letzter Fallback
+// So nutzt Funnel denselben Key wie das Matching, ohne dass ein zweiter
+// konfiguriert werden muss.
 //
 // Modes:
 //   - "reply" (default): Folge-Antwort innerhalb laufender Konversation.
@@ -205,10 +208,8 @@ Deno.serve(async (req) => {
   const messages = (msgsData ?? []) as unknown as WaMessageRow[];
 
   // --- AI-Config laden ---
-  // Provider-Resolver: bevorzugt OPENAI_API_KEY aus Edge-Function-Secrets
-  // (gleiches Pattern wie matching-agent / auto-match-transactions), fallback
-  // auf ANTHROPIC_API_KEY aus app_config wenn OpenAI nicht da. So muss der
-  // User keinen zusaetzlichen Key konfigurieren falls OpenAI schon laeuft.
+  // Provider-Resolver: identisch zu matching-agent — Gemini > OpenAI > Anthropic.
+  const geminiKey = Deno.env.get("GEMINI_API_KEY");
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
   const [anthropicKey, anthropicModelCfg, openaiModelCfg, beraterName, beraterFirma, beraterTyp] = await Promise.all([
     getConfig(supabase, "ANTHROPIC_API_KEY"),
@@ -219,14 +220,16 @@ Deno.serve(async (req) => {
     getConfig(supabase, "BERATER_TYP"),
   ]);
 
-  type Provider = "openai" | "anthropic";
+  type Provider = "gemini" | "openai" | "anthropic";
   let provider: Provider;
-  if (openaiKey) {
+  if (geminiKey) {
+    provider = "gemini";
+  } else if (openaiKey) {
     provider = "openai";
   } else if (anthropicKey) {
     provider = "anthropic";
   } else {
-    return jsonResponse(503, { ok: false, error: "ai_not_configured", detail: "Weder OPENAI_API_KEY (Edge Function Secret) noch ANTHROPIC_API_KEY (app_config) ist gesetzt." });
+    return jsonResponse(503, { ok: false, error: "ai_not_configured", detail: "Weder GEMINI_API_KEY noch OPENAI_API_KEY (Edge Function Secrets) noch ANTHROPIC_API_KEY (app_config) ist gesetzt." });
   }
 
   const name = beraterName ?? "Ihr Berater";
@@ -316,11 +319,20 @@ Deno.serve(async (req) => {
   let endpoint: string;
   let requestInit: RequestInit;
 
-  if (provider === "openai") {
-    endpoint = "https://api.openai.com/v1/chat/completions";
+  if (provider === "openai" || provider === "gemini") {
+    // Gemini ist via OpenAI-kompatibles Endpoint ansprechbar — selber
+    // Request-/Response-Shape wie OpenAI Chat Completions.
+    const isGemini = provider === "gemini";
+    endpoint = isGemini
+      ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+      : "https://api.openai.com/v1/chat/completions";
+    const apiKey = isGemini ? (geminiKey as string) : (openaiKey as string);
+    const model = isGemini
+      ? "gemini-2.5-flash"
+      : (openaiModelCfg ?? "gpt-4o-mini");
     // first_contact braucht ~600 Tokens (analysis + suggestion), reply ~400.
     const openaiBody: Record<string, unknown> = {
-      model: openaiModelCfg ?? "gpt-4o-mini",
+      model,
       max_tokens: mode === "first_contact" ? 600 : 400,
       messages: [
         { role: "system", content: system },
@@ -335,7 +347,7 @@ Deno.serve(async (req) => {
       method: "POST",
       signal: ctrl.signal,
       headers: {
-        Authorization: `Bearer ${openaiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
       },
       body: JSON.stringify(openaiBody),
@@ -389,7 +401,7 @@ Deno.serve(async (req) => {
   let modelText = "";
   try {
     const parsed = JSON.parse(raw);
-    if (provider === "openai") {
+    if (provider === "openai" || provider === "gemini") {
       modelText = String(parsed?.choices?.[0]?.message?.content ?? "").trim();
     } else {
       const blocks: Array<{ type?: string; text?: string }> = parsed?.content ?? [];
