@@ -14,6 +14,33 @@ export type Database = {
   }
   public: {
     Tables: {
+      app_config: {
+        Row: {
+          created_at: string
+          description: string | null
+          is_secret: boolean
+          key: string
+          updated_at: string
+          value: string | null
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          is_secret?: boolean
+          key: string
+          updated_at?: string
+          value?: string | null
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          is_secret?: boolean
+          key?: string
+          updated_at?: string
+          value?: string | null
+        }
+        Relationships: []
+      }
       bank_statements: {
         Row: {
           account_number: string
@@ -30,7 +57,7 @@ export type Database = {
           source_endpoint: string | null
           status: string
           updated_at: string
-          user_id: string
+          user_id: string | null
           year: number
         }
         Insert: {
@@ -48,7 +75,7 @@ export type Database = {
           source_endpoint?: string | null
           status?: string
           updated_at?: string
-          user_id: string
+          user_id?: string | null
           year: number
         }
         Update: {
@@ -66,7 +93,7 @@ export type Database = {
           source_endpoint?: string | null
           status?: string
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
           year?: number
         }
         Relationships: []
@@ -84,6 +111,7 @@ export type Database = {
           match_status: string
           matched_invoice_id: string | null
           original_currency: string | null
+          statement_order: number | null
           transaction_type: string
           updated_at: string
           user_id: string
@@ -100,6 +128,7 @@ export type Database = {
           match_status?: string
           matched_invoice_id?: string | null
           original_currency?: string | null
+          statement_order?: number | null
           transaction_type?: string
           updated_at?: string
           user_id: string
@@ -116,6 +145,7 @@ export type Database = {
           match_status?: string
           matched_invoice_id?: string | null
           original_currency?: string | null
+          statement_order?: number | null
           transaction_type?: string
           updated_at?: string
           user_id?: string
@@ -230,7 +260,7 @@ export type Database = {
           status: string
           type: string
           updated_at: string
-          user_id: string
+          user_id: string | null
           year: number
         }
         Insert: {
@@ -250,7 +280,7 @@ export type Database = {
           status?: string
           type: string
           updated_at?: string
-          user_id: string
+          user_id?: string | null
           year: number
         }
         Update: {
@@ -270,8 +300,50 @@ export type Database = {
           status?: string
           type?: string
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
           year?: number
+        }
+        Relationships: []
+      }
+      leads: {
+        Row: {
+          created_at: string
+          email: string | null
+          id: string
+          last_message: string | null
+          message_count: number
+          meta: Json
+          name: string | null
+          phone: string
+          source: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          email?: string | null
+          id?: string
+          last_message?: string | null
+          message_count?: number
+          meta?: Json
+          name?: string | null
+          phone: string
+          source?: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          email?: string | null
+          id?: string
+          last_message?: string | null
+          message_count?: number
+          meta?: Json
+          name?: string | null
+          phone?: string
+          source?: string
+          status?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -328,6 +400,50 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      wa_messages: {
+        Row: {
+          body: string | null
+          created_at: string
+          direction: string
+          id: string
+          lead_id: string | null
+          meta: Json
+          phone: string
+          template_name: string | null
+          wa_message_id: string | null
+        }
+        Insert: {
+          body?: string | null
+          created_at?: string
+          direction: string
+          id?: string
+          lead_id?: string | null
+          meta?: Json
+          phone: string
+          template_name?: string | null
+          wa_message_id?: string | null
+        }
+        Update: {
+          body?: string | null
+          created_at?: string
+          direction?: string
+          id?: string
+          lead_id?: string | null
+          meta?: Json
+          phone?: string
+          template_name?: string | null
+          wa_message_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_messages_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
