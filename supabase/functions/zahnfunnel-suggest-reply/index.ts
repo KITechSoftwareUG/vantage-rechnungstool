@@ -343,6 +343,12 @@ Deno.serve(async (req) => {
       // OpenAI JSON-Mode garantiert geschachteltes JSON-Output.
       openaiBody.response_format = { type: "json_object" };
     }
+    if (isGemini) {
+      // Gemini 2.5 Flash verbraucht intern "thinking tokens" — max_tokens
+      // muss deutlich groesser sein, sonst kommt der JSON-Body abgeschnitten
+      // zurueck (z.B. `{\n  "analysis\n`).
+      openaiBody.max_tokens = mode === "first_contact" ? 2000 : 1200;
+    }
     requestInit = {
       method: "POST",
       signal: ctrl.signal,
