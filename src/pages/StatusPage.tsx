@@ -72,12 +72,14 @@ export default function StatusPage() {
             : null,
         },
         {
-          title: "Anthropic (KI-Antworten)",
+          title: "KI-Provider (Gemini / OpenAI)",
           icon: Sparkles,
-          status: data.anthropic.status,
-          detail: data.anthropic.detail,
-          configAnchor: "/config#anthropic",
-          extraLine: data.anthropic.model ?? null,
+          status: data.ai.status,
+          detail: data.ai.detail,
+          configAnchor: "/config#ki",
+          extraLine: data.ai.model
+            ? `${data.ai.provider ?? "ai"} · ${data.ai.model}`
+            : null,
         },
         {
           title: "Gmail (Mail-Fallback)",
@@ -113,7 +115,7 @@ export default function StatusPage() {
             Systemstatus
           </h1>
           <p className="mt-1 text-sm sm:text-base text-muted-foreground">
-            Live-Check der externen Integrationen (Meta, Anthropic, Gmail).
+            Live-Check der externen Integrationen (Meta, KI, Gmail).
           </p>
         </div>
         <div className="flex items-center gap-2">
