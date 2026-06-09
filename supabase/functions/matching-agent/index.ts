@@ -295,8 +295,8 @@ function resolveLLM(): LLMConfig | null {
       provider: "gemini",
       apiKey: geminiKey,
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      model: Deno.env.get("LLM_MODEL") ?? "gemini-2.5-flash-lite",
-      fallbackModel: Deno.env.get("LLM_MODEL_FALLBACK") ?? "gemini-flash-latest",
+      model: "gemini-2.5-flash-lite",
+      fallbackModel: "gemini-flash-latest",
     };
   }
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
@@ -305,7 +305,7 @@ function resolveLLM(): LLMConfig | null {
       provider: "openai",
       apiKey: openaiKey,
       baseUrl: "https://api.openai.com/v1",
-      model: Deno.env.get("OPENAI_MODEL") ?? Deno.env.get("LLM_MODEL") ?? "gpt-4o-mini",
+      model: Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini",
       fallbackModel: null,
     };
   }
