@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rechnungsaufnahme 2026 Runner</title>
+    <link rel="stylesheet" href="{{ base_path }}/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Workflow Runner</p>
+          <h1>Rechnungsaufnahme 2026 laeuft jetzt hier</h1>
+          <p class="lede">
+            Diese Anwendung ersetzt fuer den ersten Schritt den n8n-Workflowkern:
+            Google-Drive-Ordner pruefen, Datei herunterladen und an den Ziel-Endpoint senden.
+          </p>
+        </div>
+        <div class="stats">
+          <article class="stat-card">
+            <span>Watches</span>
+            <strong>{{ watches|length }}</strong>
+          </article>
+          <article class="stat-card">
+            <span>Poll</span>
+            <strong>{{ poll_seconds }}s</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel info-panel">
+        <p>Bestehende Dateien beim Start ueberspringen: <strong>{{ "ja" if skip_existing else "nein" }}</strong></p>
+        <p>Status JSON: <a href="{{ base_path }}/api/status">{{ base_path }}/api/status</a></p>
+      </section>
+
+      <section class="grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Watches</h2>
+          </div>
+          <div class="watch-list">
+            {% for watch in watches %}
+            <article class="watch-card">
+              <div>
+                <strong>{{ watch.name }}</strong>
+                <p>{{ watch.category }} / {{ watch.year }}{% if watch.month %} / {{ watch.month }}{% endif %}</p>
+              </div>
+              <form action="{{ base_path }}/test/process-latest/{{ watch.slug }}" method="post">
+                <button type="submit">Letzte Datei testen</button>
+              </form>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Letzte Events</h2>
+          </div>
+          <div class="event-list">
+            {% for event in events %}
+            <article class="event-card {{ event.status }}">
+              <div class="event-head">
+                <strong>{{ event.watch_name }}</strong>
+                <span>{{ event.status }}</span>
+              </div>
+              <p>{{ event.file_name }}</p>
+              <p class="muted">{{ event.timestamp[:19].replace('T', ' ') }}</p>
+              <p class="muted">{{ event.detail }}</p>
+            </article>
+            {% else %}
+            <p class="muted">Noch keine Events vorhanden.</p>
+            {% endfor %}
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

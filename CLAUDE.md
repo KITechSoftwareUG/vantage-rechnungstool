@@ -48,8 +48,8 @@ Legacy.
   mit n8n zu tun. Sie ist der Drive-Ingest-Endpoint.
 
 ### Drive-Polling
-- Separate Python-FastAPI-App in `/opt/app/app/` (Service `workflow-app`,
-  Port 8788).
+- Python-FastAPI-App im selben Repo unter [drive-sync/](drive-sync/)
+  (Service `workflow-app`, Port 8788).
 - Pollt Google Drive direkt mit einem Refresh-Token und postet Files an die
   Supabase-Edge-Function.
 
